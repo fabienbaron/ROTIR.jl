@@ -1,0 +1,5 @@
+Interferometric imaging and light curve inversion on rotating spheroids
+
+# Prerequisites
+
+To work on interferometric imaging with ROTIT, you need to have OITOOLS setup and working. It can be found at https://github.com/fabienbaron/OITOOLS.jl .
