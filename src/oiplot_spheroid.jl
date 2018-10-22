@@ -296,7 +296,6 @@ suptitle("All epochs")
 end
 
 function mollplot_temperature_healpix(image; color="gist_heat", figtitle="Mollweide")
-  clf()
   xsize = 2000
   ysize = div(xsize,2)
   theta = collect(range(pi, stop=0.0, length=ysize))
@@ -348,7 +347,6 @@ ax[:tick_params](axis='y', labelsize=15)
 end
 
 function mollplot_temperature_longlat(image, ntheta, nphi; color="gist_heat", figtitle="Mollweide")
-  clf()  
   size = 2000
   ysize = div(xsize,2)
   theta = collect(range(pi, stop=0, length=ysize))
