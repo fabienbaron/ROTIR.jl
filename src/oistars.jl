@@ -17,7 +17,7 @@ end
 mutable struct binaryparameters
   star1::starparameters
   star2::starparameters
-  
+
   # parameters for single star or binary
   orbit_incl::Float64 # degrees
   long_ascending_node::Float64 # degrees (longitude of ascending node for binaries)

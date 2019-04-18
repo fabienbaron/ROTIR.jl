@@ -127,9 +127,6 @@ t3_model, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data
 chi2_v2 = sum( ((v2_model - data.v2)./data.v2_err).^2);
 chi2_t3amp = sum( ((t3amp_model - data.t3amp)./data.t3amp_err).^2);
 chi2_t3phi = sum( (mod360(t3phi_model - data.t3phi)./data.t3phi_err).^2);
-#g_v2 = Array{Float64}(nx2);
-#g_t3amp = Array{Float64}(nx2);
-#g_t3phi = Array{Float64}(nx2);
 g_v2 = 4.0*sum(((v2_model-data.v2)./data.v2_err.^2).*real(conj(cvis_model[data.indx_v2]).*polyft[data.indx_v2,:]),1);
 g_t3amp = 2.0*sum(((t3amp_model-data.t3amp)./data.t3amp_err.^2).*
                   (   real( conj(cvis_model[data.indx_t3_1]./abs.(cvis_model[data.indx_t3_1])).*polyft[data.indx_t3_1,:]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3])       + real( conj(cvis_model[data.indx_t3_2]./abs.(cvis_model[data.indx_t3_2])).*polyft[data.indx_t3_2,:]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3])+ real( conj(cvis_model[data.indx_t3_3]./abs.(cvis_model[data.indx_t3_3])).*polyft[data.indx_t3_3,:]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2])),1);
@@ -154,9 +151,6 @@ function spheroid_chi2_fg_alt(x, g, polyflux, polyft, data; verbose::Bool = true
   chi2_v2 = sum( ((v2_model - data.v2)./data.v2_err).^2);
   chi2_t3amp = sum( ((t3amp_model - data.t3amp)./data.t3amp_err).^2);
   chi2_t3phi = sum( (mod360(t3phi_model - data.t3phi)./data.t3phi_err).^2);
-  #g_v2 = Array{Float64}(undef,nx2);
-  #g_t3amp = Array{Float64}(undef,nx2);
-  #g_t3phi = Array{Float64}(undef,nx2);
   g_v2 = real(transpose(polyft[data.indx_v2,:])*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2])));
   g_t3amp = real(transpose(polyft[data.indx_t3_1,:]) *(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(polyft[data.indx_t3_2,:])*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(polyft[data.indx_t3_3,:])*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
   g_t3phi = 360.0/pi*imag(transpose(polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
@@ -278,7 +272,8 @@ bcorr = (B-1.0)*Int.((x.-avg_x).>0).+1.0
 reg_f = sum(bcorr.*(x.-avg_x).^2)/n;
 #reg_g = 2*(n-1)/n*bcorr.*(x.-avg_x)
 reg_g = 2/n*bcorr.*(x.-avg_x)
-g[:] = reg_g .- mean(reg_g);
+g[:] = reg_g .- mean(reg_g); # necessary ?
+
 if verb == true
 println(" Bias: ", reg_f);
 end
@@ -288,7 +283,7 @@ end
 function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb=false)
     reg_f = 0.0;
     for ireg =1:length(regularizers)
-        x_sub = x[regularizers[ireg][4]] # take the subset
+        x_sub = x[regularizers[ireg][4]] # take the pixel subset if needed (example: only regularize visible pixels)
         temp_g = similar(x_sub);
         if regularizers[ireg][1] == "tv"
             reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
@@ -313,13 +308,3 @@ function spheroid_oi_reconstruct(x_start::Array{Float64,1}, data::Array{OIdata,1
   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
   return x_sol
 end
-
-
-
-#
-# function spheroid_oi_multitemporal_reconstruct(x_start::Array{Float64,1}, data::OIdata, polyflux, polyft; epochs_weights =[], printcolor= [], verb = true, maxiter = 100, regularizers =[])
-#   x_sol = [];
-#   crit_imaging = (x,g)->spheroid_crit_fg(x, g, regularizers=regularizers, epochs_weights, polyflux, polyft, data);
-#   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
-#   return x_sol
-# end

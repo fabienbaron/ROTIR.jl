@@ -1,5 +1,7 @@
-using ROTIR
-
+using Statistics
+using LinearAlgebra
+using SparseArrays
+include("../src/ROTIR.jl"); using Main.ROTIR;
 # LOAD DATA
 oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_And_prepped.oifits",
 "./data/2011Sep10.lam_And_prepped.oifits","./data/2011Sep14.lam_And_prepped.oifits",
@@ -13,10 +15,10 @@ starparams = [1.37131,  # milliarcseconds (radius at pole)
      0.,                 # unitless; fractional rotational velocity
      [3,0.22886],        # limb darkening,first coefficient is for LD law type, then LD coefficients
      0.08,               # exponent for von Zeipel law
-     -1.43075,           # 2nd constant for rotational velocity
-     71.0962,            # degrees; inclination
-     18.6033,            # degrees; position_angle
-     51.8513];           # days; rotation_period
+     0.,           # 2nd constant for rotational velocity
+     78.0962,            # degrees; inclination
+     24,            # degrees; position_angle
+     54.8];           # days; rotation_period
 
 for i=1:nepochs
     stellar_parameters[i]=starparameters(starparams[1],starparams[2],starparams[3],starparams[4],starparams[5],
@@ -24,7 +26,7 @@ for i=1:nepochs
 end
 
 # SETUP 3D GEOMETRY (HEALPIX)
-n=3; star_epoch_geom = create_geometry( healpix_round_star(n,radius=stellar_parameters[1].radius), stellar_parameters);
+n=4; star_epoch_geom = create_geometry( healpix_round_star(n,radius=stellar_parameters[1].radius), stellar_parameters);
 polyflux, polyft = setup_polygon_ft(data, star_epoch_geom);
 
 # SETUP INITIAL MAP
@@ -47,6 +49,6 @@ plot2d_intensity_allepochs(temperature_map, star_epoch_geom, tepochs = tepochs);
 
 # Mollweide plot
 temperature_map_withhiddenblack=copy(temperature_map);
-temperature_map_withhiddenblack[never_visible(star_epoch_geom)].=0; # or -1.6375e+30; # this constant is the Healpix constant for hidden vals
+temperature_map_withhiddenblack[never_visible(star_epoch_geom)].=mean(temperature_map[sometimes_visible(star_epoch_geom)]); # or -1.6375e+30; # this constant is the Healpix constant for hidden vals
 plot3d_temperature(temperature_map_withhiddenblack,star_epoch_geom[1]);
 mollplot_temperature_healpix(temperature_map_withhiddenblack); # for Healpix

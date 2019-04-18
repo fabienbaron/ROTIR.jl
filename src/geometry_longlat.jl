@@ -1,14 +1,14 @@
 
 function latlong_ellipsoid_star(ntheta,nphi,a,b,c)
   npix = ntheta*nphi;
-  vertices_spherical = zeros(Float64, npix, 3, 5); # r, theta, phi
-  vertices_xyz = zeros(Float64, npix, 3, 5); # x, y, z
+  vertices_spherical = zeros(Float64, npix, 5, 3); # r, theta, phi
+  vertices_xyz = zeros(Float64, npix, 5, 3); # x, y, z
   dphi = 2*pi/nphi;
   dtheta = pi/ntheta;
 
   # get corners
   # calculates radius
-  vertices_spherical[:,1,:] .= 1.0;
+  vertices_spherical[:,:, 1] .= 1.0;
   # calculates theta and phi
   theta = collect(range(0,stop=pi-dtheta,length=ntheta));
   phi = collect(range(0,stop=2*pi-dphi,length=nphi));
@@ -16,30 +16,30 @@ function latlong_ellipsoid_star(ntheta,nphi,a,b,c)
   # TODO: redo this more cleanly ?
   for i = 1:ntheta
     ilong_range = Int((i-1)*nphi+1):(i*nphi);
-    vertices_spherical[ilong_range,2,1] .= theta[i]
-    vertices_spherical[ilong_range,3,1] .= phi;
+    vertices_spherical[ilong_range,1,2] .= theta[i]
+    vertices_spherical[ilong_range,1,3] .= phi;
     vertices_spherical[ilong_range,2,2] .= theta[i] + dtheta
-    vertices_spherical[ilong_range,3,2] .= phi;
-    vertices_spherical[ilong_range,2,3] .= theta[i] + dtheta;
+    vertices_spherical[ilong_range,2,3] .= phi;
+    vertices_spherical[ilong_range,3,2] .= theta[i] + dtheta;
     vertices_spherical[ilong_range,3,3] .= phi .+ dphi;
-    vertices_spherical[ilong_range,2,4] .= theta[i]
-    vertices_spherical[ilong_range,3,4] .= phi .+ dphi;
-    vertices_spherical[ilong_range,2,5] .= theta[i] + dtheta*0.5
-    vertices_spherical[ilong_range,3,5] .= phi .+ dphi*0.5;
+    vertices_spherical[ilong_range,4,2] .= theta[i]
+    vertices_spherical[ilong_range,4,3] .= phi .+ dphi;
+    vertices_spherical[ilong_range,5,2] .= theta[i] + dtheta*0.5
+    vertices_spherical[ilong_range,5,3] .= phi .+ dphi*0.5;
   end
 
-  vertices_xyz[:,1,:] = a*sin.(vertices_spherical[:,2,:]).*cos.(vertices_spherical[:,3,:]); # X
-  vertices_xyz[:,2,:] = b*sin.(vertices_spherical[:,2,:]).*sin.(vertices_spherical[:,3,:]); # Y
-  vertices_xyz[:,3,:] = c*cos.(vertices_spherical[:,2,:]); # Z
-  vertices_spherical[:,1,:] = sqrt.(vertices_xyz[:,1,:].^2 + vertices_xyz[:,2,:].^2 + vertices_xyz[:,3,:].^2); # radius, TBD replace by norm()
+  vertices_xyz[:,:,1] = a*sin.(vertices_spherical[:,:,2]).*cos.(vertices_spherical[:,:,3]); # X
+  vertices_xyz[:,:,2] = b*sin.(vertices_spherical[:,:,2]).*sin.(vertices_spherical[:,:,3]); # Y
+  vertices_xyz[:,:,3] = c*cos.(vertices_spherical[:,:,2]); # Z
+  vertices_spherical[:,:,1] = sqrt.(vertices_xyz[:,:,1].^2 + vertices_xyz[:,:,2].^2 + vertices_xyz[:,:,3].^2); # radius, TBD replace by norm()
 
   star_base_geom = base_geometry(npix,vertices_xyz, vertices_spherical);
 end
 
 function latlong_rapidrot_star(ntheta,nphi,stellar_parameters)
   npix = ntheta*nphi;
-  vertices_spherical = zeros(Float64, npix, 3, 5); # r, theta, phi
-  vertices_xyz = zeros(Float64, npix, 3, 5); # x, y, z
+  vertices_spherical = zeros(Float64, npix, 5, 3); # r, theta, phi
+  vertices_xyz = zeros(Float64, npix, 5, 3); # x, y, z
   dphi = 2*pi/nphi;
   dtheta = pi/ntheta;
 
@@ -52,29 +52,29 @@ function latlong_rapidrot_star(ntheta,nphi,stellar_parameters)
   for i = 1:ntheta
     ilong_range = Int((i-1)*nphi+1):(i*nphi);
 
-    vertices_spherical[ilong_range,2,1], vertices_spherical[ilong_range,3,1] = theta[i], phi;
-    vertices_spherical[ilong_range,2,2], vertices_spherical[ilong_range,3,2] = theta[i] + dtheta, phi;
-    vertices_spherical[ilong_range,2,3], vertices_spherical[ilong_range,3,3] = theta[i] + dtheta, phi + dphi;
-    vertices_spherical[ilong_range,2,4], vertices_spherical[ilong_range,3,4] = theta[i], phi + dphi;
+    vertices_spherical[ilong_range,1,2], vertices_spherical[ilong_range,1,3] = theta[i], phi;
+    vertices_spherical[ilong_range,2,2], vertices_spherical[ilong_range,2,3] = theta[i] + dtheta, phi;
+    vertices_spherical[ilong_range,3,2], vertices_spherical[ilong_range,3,3] = theta[i] + dtheta, phi + dphi;
+    vertices_spherical[ilong_range,4,2], vertices_spherical[ilong_range,4,3] = theta[i], phi + dphi;
     theta_avg, phi_avg = theta[i] + dtheta*0.5, phi + dphi*0.5;
-    vertices_spherical[ilong_range,2,5], vertices_spherical[ilong_range,3,5] = theta_avg, phi_avg;
+    vertices_spherical[ilong_range,5,2], vertices_spherical[ilong_range,5,3] = theta_avg, phi_avg;
   end
 
   R_pole = stellar_parameters.radius;
   ω = stellar_parameters.frac_escapevel;
-  vertices_spherical[:,1,:] = 3.0*R_pole.*cos.((pi + acos.(ω*sin.(vertices_spherical[:,2,:])))/3.0)./(ω*sin.(vertices_spherical[:,2,:]));
+  vertices_spherical[:,:,1] = 3.0*R_pole.*cos.((pi + acos.(ω*sin.(vertices_spherical[:,:,2])))/3.0)./(ω*sin.(vertices_spherical[:,:,2]));
   # Rewrite pole radius values
   # top of star
   vertices_spherical[1:nphi,1,1] = R_pole;
-  vertices_spherical[1:nphi,1,4] = R_pole;
+  vertices_spherical[1:nphi,4, 1] = R_pole;
   # bottom of star
-  vertices_spherical[(end-nphi+1):end,1,2] = R_pole;
-  vertices_spherical[(end-nphi+1):end,1,3] = R_pole;
+  vertices_spherical[(end-nphi+1):end,2,1] = R_pole;
+  vertices_spherical[(end-nphi+1):end,3,2] = R_pole;
   #vertices_spherical[find(vertices_spherical .== Inf)] = R_pole;
 
-  vertices_xyz[:,1,:] = vertices_spherical[:,1,:].*sin.(vertices_spherical[:,2,:]).*cos.(vertices_spherical[:,3,:]); # X
-  vertices_xyz[:,2,:] = vertices_spherical[:,1,:].*sin.(vertices_spherical[:,2,:]).*sin.(vertices_spherical[:,3,:]); # Y
-  vertices_xyz[:,3,:] = vertices_spherical[:,1,:].*cos.(vertices_spherical[:,2,:]); # Z
+  vertices_xyz[:,:,1] = vertices_spherical[:,:,1].*sin.(vertices_spherical[:,:,2]).*cos.(vertices_spherical[:,:,3]); # X
+  vertices_xyz[:,:,2] = vertices_spherical[:,:,1].*sin.(vertices_spherical[:,:,2]).*sin.(vertices_spherical[:,:,3]); # Y
+  vertices_xyz[:,:,3] = vertices_spherical[:,:,1].*cos.(vertices_spherical[:,:,2]); # Z
 
   star_base_geom = base_geometry(npix,vertices_xyz, vertices_spherical);
 end
@@ -129,9 +129,9 @@ for i = 2:ntheta
 end
 indx_long = Int.(ceil.(nphi*cos.(pi/2 - arr_long)))
 npix = sum(indx_long);
-vertices_spherical = zeros(Float64, npix, 3, 5); # r, theta, phi
-vertices_xyz = zeros(Float64, npix, 3, 5); # x, y, z
-vertices_spherical[:,1,:] = 1.;
+vertices_spherical = zeros(Float64, npix, 5, 3); # r, theta, phi
+vertices_xyz = zeros(Float64, npix, 5, 3); # x, y, z
+vertices_spherical[:,:,1] = 1.;
 
 first=0
 last=1
@@ -141,19 +141,19 @@ last=1
     ilong_range=first+1:last
     dphi= 2*pi/nphi;
     phi = collect(linspace(0,2*pi-dphi,nphi));
-    vertices_spherical[ilong_range,2,1], vertices_spherical[ilong_range,3,1] = theta[i], phi;
-    vertices_spherical[ilong_range,2,2], vertices_spherical[ilong_range,3,2] = theta[i] + dtheta, phi;
-    vertices_spherical[ilong_range,2,3], vertices_spherical[ilong_range,3,3] = theta[i] + dtheta, phi + dphi;
-    vertices_spherical[ilong_range,2,4], vertices_spherical[ilong_range,3,4] = theta[i], phi + dphi;
+    vertices_spherical[ilong_range,1,2], vertices_spherical[ilong_range,1,3] = theta[i], phi;
+    vertices_spherical[ilong_range,2,2], vertices_spherical[ilong_range,2,3] = theta[i] + dtheta, phi;
+    vertices_spherical[ilong_range,3,2], vertices_spherical[ilong_range,3,3] = theta[i] + dtheta, phi + dphi;
+    vertices_spherical[ilong_range,4,2], vertices_spherical[ilong_range,4,3] = theta[i], phi + dphi;
     theta_avg, phi_avg = theta[i] + dtheta*0.5, phi + dphi*0.5;
-    vertices_spherical[ilong_range,2,5], vertices_spherical[ilong_range,3,5] = theta_avg, phi_avg;
+    vertices_spherical[ilong_range,5,2], vertices_spherical[ilong_range,5,3] = theta_avg, phi_avg;
     first=deepcopy(last);
   end
 
-  vertices_xyz[:,1,:] = a*sin.(vertices_spherical[:,2,:]).*cos.(vertices_spherical[:,3,:]); # X
-  vertices_xyz[:,2,:] = b*sin.(vertices_spherical[:,2,:]).*sin.(vertices_spherical[:,3,:]); # Y
-  vertices_xyz[:,3,:] = c*cos.(vertices_spherical[:,2,:]); # Z
-  vertices_spherical[:,1,:] = sqrt.(vertices_xyz[:,1,:].^2 + vertices_xyz[:,2,:].^2 + vertices_xyz[:,3,:].^2); # radius, TBD replace by norm()
+  vertices_xyz[:,:,1] = a*sin.(vertices_spherical[:,:,2]).*cos.(vertices_spherical[:,:,3]); # X
+  vertices_xyz[:,:,2] = b*sin.(vertices_spherical[:,:,2]).*sin.(vertices_spherical[:,:,3]); # Y
+  vertices_xyz[:,:,3] = c*cos.(vertices_spherical[:,:,2]); # Z
+  vertices_spherical[:,:,1] = sqrt.(vertices_xyz[:,:,1].^2 + vertices_xyz[:,:,2].^2 + vertices_xyz[:,:,3].^2); # radius, TBD replace by norm()
 
 star_base_geom = base_geometry(npix,vertices_xyz, vertices_spherical);
 end
@@ -198,7 +198,6 @@ end
 
 function tv_neighbors_longlat(ntheta,nphi)
     # Complete Neighbor setup (longlat)
-
     neighbors = neighbors_longlat(ntheta,nphi); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
     south_neighbors = Array{Int64}(undef,length(neighbors));
     west_neighbors = Array{Int64}(undef,length(neighbors));

@@ -47,8 +47,12 @@ temperature_map =  spheroid_oi_reconstruct(temperature_map_start, data, polyflux
 plot2d_temperature_allepochs(temperature_map, star_epoch_geom, tepochs = tepochs);
 plot2d_intensity_allepochs(temperature_map, star_epoch_geom, tepochs = tepochs);
 
-# Mollweide plot
+# 3D plot
 temperature_map_withhiddenblack=copy(temperature_map);
 temperature_map_withhiddenblack[never_visible(star_epoch_geom)].=0;
 plot3d_temperature(temperature_map_withhiddenblack,star_epoch_geom[1]);
-mollplot_temperature_longlat(temperature_map_withhiddenblack, ntheta, nphi); # long/lat pix scheme
+
+
+# Mollweide plot
+temperature_map[never_visible(star_epoch_geom)].=mean(temperature_map[sometimes_visible(star_epoch_geom)]);
+mollplot_temperature_longlat(temperature_map, ntheta, nphi); # long/lat pix scheme

@@ -48,12 +48,15 @@ for B in 10.0.^range(0,stop=10,length=10)
     for λ in 10.0.^range(-8,stop=4,length=15)
         regularizers = [["bias", λ, B,visible_pixels]];
         temperature_map = lci_reconstruct(temperature_map_start, lcidata, polyflux, visible_pixels, maxiter = 500, regularizers = regularizers, relative = true, verb = false);
-        T_ratio=minimum(temperature_map[visible_pixels])/mean(temperature_map[visible_pixels]);
         chi2_r = chi2_lci_f(temperature_map, polyflux, lcidata)/length(lcidata.flux)
+
+        temperature_map .*= Tphot_target/mean(temperature_map[visible_pixels]) # rescale
+        ΔT =  maximum(temperature_map[visible_pixels])-minimum(temperature_map[visible_pixels]) # temperature contrast
+          
         #if abs(chi2_r - 1)<3./sqrt(length(lcidata.flux)) # this test may not be reliable when flux uncertainty is missing
             if abs(T_ratio-(Tphot_target-ΔT_target)/Tphot_target)<.1
                     temperature_map[hidden_pixels] .= mean(temperature_map[visible_pixels]);
-                    mollplot_temperature_healpix(temperature_map, title = "B=$(B) - λ=$(λ)");
+                    mollplot_temperature_healpix(temperature_map, figtitle = "B=$(B) - λ=$(λ)");
                     printstyled("B=$(B) \t λ=$(λ) \t chi2_r =$(chi2_r)  \t Tratio=$(T_ratio) Tratiotarget=$((Tphot_target-ΔT_target)/Tphot_target)\n", color=:red)
             else
                 print("B=$(B) \t λ=$(λ) \t chi2_r =$(chi2_r)  \t Tratio=$(T_ratio) Tratiotarget=$((Tphot_target-ΔT_target)/Tphot_target)\n");

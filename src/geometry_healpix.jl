@@ -10,6 +10,10 @@ function npix2nside(npix::Integer)
     return Int(round(square_root))
 end
 
+function npix2n(npix::Integer)
+return Int(log(npix2nside(npix))/log(2))
+end
+
 function sub_compute_vertices(z, z_nv, z_sv, phi, phi_nv, phi_sv, hdelta_phi)
 # function called by pix2vec_nest to compute the
 # 3D vectors pointing toward the vertices of a pixel from their angles
@@ -19,12 +23,19 @@ phi_wv = phi - hdelta_phi
 sth_sv = sqrt.((1.0.-z_sv).*(1.0.+z_sv))
 phi_ev = phi + hdelta_phi
 
-vertex = Array{Float64}(undef, length(z), 3, 4);
-vertex[:,:,1] = hcat(sth_nv.*cos.(phi_nv),sth_nv.*sin.(phi_nv),z_nv); # north vertex
-vertex[:,:,2] = hcat(sth.*cos.(phi_wv),sth.*sin.(phi_wv),z); # west vertex
-vertex[:,:,3] = hcat(sth_sv.*cos.(phi_sv),sth_sv.*sin.(phi_sv),z_sv); # south vertex
-vertex[:,:,4] = hcat(sth.*cos.(phi_ev),sth.*sin.(phi_ev),z); # east vertex
-#
+# B-SWAP
+#vertex = Array{Float64}(undef, length(z), 3, 4);
+#vertex[:,:,1] = hcat(sth_nv.*cos.(phi_nv),sth_nv.*sin.(phi_nv),z_nv); # north vertex
+#vertex[:,:,2] = hcat(sth.*cos.(phi_wv),sth.*sin.(phi_wv),z); # west vertex
+#vertex[:,:,3] = hcat(sth_sv.*cos.(phi_sv),sth_sv.*sin.(phi_sv),z_sv); # south vertex
+#vertex[:,:,4] = hcat(sth.*cos.(phi_ev),sth.*sin.(phi_ev),z); # east vertex
+
+
+vertex = Array{Float64}(undef, length(z), 4, 3);
+vertex[:,1, :] = hcat(sth_nv.*cos.(phi_nv),sth_nv.*sin.(phi_nv),z_nv); # north vertex
+vertex[:,2, :] = hcat(sth.*cos.(phi_wv),sth.*sin.(phi_wv),z); # west vertex
+vertex[:,3, :] = hcat(sth_sv.*cos.(phi_sv),sth_sv.*sin.(phi_sv),z_sv); # south vertex
+vertex[:,4, :] = hcat(sth.*cos.(phi_ev),sth.*sin.(phi_ev),z); # east vertex
 return vertex
 end
 
@@ -387,7 +398,7 @@ function pix2vec_nest(nside::Int64, ipix::Array{Int64,1})
   phi_up = pi / 2.0 * (iphi_rat +  iphi_mod   ./(max.(nr.-1,1.0)))
   phi_dn = pi / 2.0 * (iphi_rat + (iphi_mod.+1)./(nr.+1))
 
-  vertex = Array{Float64}(undef, np, 3, 4);
+  vertex = Array{Float64}(undef, np, 4, 3);
   vec_out = Array{Float64}(undef, np, 3);
 
   if (n_eqt > 0)
@@ -886,26 +897,26 @@ function healpix_round_star(n::Int64;radius=1.0) # round, radius = 1
 # instantiate the base geometry
 nside = 2^n # note: this is correct, n is the map resolution parameter
 npix = nside2npix(nside)
-vertices_xyz = Array{Float64}(undef, npix, 3, 5);
-vertices_spherical = Array{Float64}(undef , npix, 3, 5);
+vertices_xyz = Array{Float64}(undef, npix, 5, 3);
+vertices_spherical = Array{Float64}(undef , npix, 5, 3);
 
 # Explanation:
 # * we need to use angles to compute the vertices of centers and corners
 # * right now we get the xyz of centers and corners, convert to angles, then scale by radius and convert back to xyz
 
 #cartesian coordinates for center & corners
-vertices_xyz[:,:,5],vertices_xyz[:,:,1:4]=pix2vec_nest(nside,collect(1:npix));
-vertices_spherical[:,1,:] .= radius;
+vertices_xyz[:,5, :],vertices_xyz[:,1:4,:]=pix2vec_nest(nside,collect(1:npix));
+vertices_spherical[:,:,1] .= radius;
 # setup spherical (theta,phi) for center
-vertices_spherical[:,2,5],vertices_spherical[:,3,5] = pix2ang_nest(nside, collect(1:npix));
+vertices_spherical[:,5,2],vertices_spherical[:,5,3] = pix2ang_nest(nside, collect(1:npix));
 # and now for corners
 for j = 1:4
-	vertices_spherical[:,2,j], vertices_spherical[:,3,j] = vec2ang(vertices_xyz[:,:,j]);
+	vertices_spherical[:,j,2], vertices_spherical[:,j,3] = vec2ang(vertices_xyz[:,j,:]);
 end
 
-vertices_xyz[:,1,:] = radius*sin.(vertices_spherical[:,2,:]).*cos.(vertices_spherical[:,3,:]); # X
-vertices_xyz[:,2,:] = radius*sin.(vertices_spherical[:,2,:]).*sin.(vertices_spherical[:,3,:]); # Y
-vertices_xyz[:,3,:] = radius*cos.(vertices_spherical[:,2,:]); # Z
+vertices_xyz[:,:,1] = radius*sin.(vertices_spherical[:,:,2]).*cos.(vertices_spherical[:,:,3]); # X
+vertices_xyz[:,:,2] = radius*sin.(vertices_spherical[:,:,2]).*sin.(vertices_spherical[:,:,3]); # Y
+vertices_xyz[:,:,3] = radius*cos.(vertices_spherical[:,:,2]); # Z
 
 star_base_geom = base_geometry(npix, vertices_xyz, vertices_spherical);
 end
@@ -916,24 +927,24 @@ function healpix_ellipsoid_star(n, a, b, c) # ellipsoid
 # instantiate the base geometry
 nside = 2^n
 npix = nside2npix(nside)
-vertices_xyz = Array{Float64}(undef, npix, 3, 5);
-vertices_spherical = Array{Float64}(undef , npix, 3, 5);
+vertices_xyz = Array{Float64}(undef, npix, 5, 3);
+vertices_spherical = Array{Float64}(undef , npix, 5, 3);
 #cartesian coordinates for center & corners
-vertices_xyz[:,:,5],vertices_xyz[:,:,1:4]=pix2vec_nest(nside,collect(1:npix));
-vertices_spherical[:,1,:] .= radius;
+vertices_xyz[:,5,:],vertices_xyz[:,1:4,:]=pix2vec_nest(nside,collect(1:npix));
+vertices_spherical[:,:,1] .= radius;
 # setup spherical (theta,phi) for center
-vertices_spherical[:,2,5],vertices_spherical[:,3,5] = pix2ang_nest(nside, collect(1:npix));
+vertices_spherical[:,5,2],vertices_spherical[:,5,3] = pix2ang_nest(nside, collect(1:npix));
 # and now for corners
 for j = 1:4
-	vertices_spherical[:,2,j], vertices_spherical[:,3,j] = vec2ang(vertices_xyz[:,:,j]);
+	vertices_spherical[:,j,2], vertices_spherical[:,j,3] = vec2ang(vertices_xyz[:,j,:]);
 end
 
 # but now we change the radius
-vertices_xyz[:,1,:] = a*sin.(vertices_spherical[:,2,:]).*cos.(vertices_spherical[:,3,:]); # X
-vertices_xyz[:,2,:] = b*sin.(vertices_spherical[:,2,:]).*sin.(vertices_spherical[:,3,:]); # Y
-vertices_xyz[:,3,:] = c*cos.(vertices_spherical[:,2,:]); # Z
+vertices_xyz[:,:,1] = a*sin.(vertices_spherical[:,:,2]).*cos.(vertices_spherical[:,:,3]); # X
+vertices_xyz[:,:,2] = b*sin.(vertices_spherical[:,:,2]).*sin.(vertices_spherical[:,:,3]); # Y
+vertices_xyz[:,:,3] = c*cos.(vertices_spherical[:,:,2]); # Z
 
-vertices_spherical[:,1,:] = sqrt.(vertices_xyz[:,1,:].^2 + vertices_xyz[:,2,:].^2 + vertices_xyz[:,3,:].^2); # radius, TBD replace by norm()
+vertices_spherical[:,:,1] = sqrt.(vertices_xyz[:,:,1].^2 + vertices_xyz[:,:,2].^2 + vertices_xyz[:,:,3].^2); # radius, TBD replace by norm()
 
 star_base_geom = base_geometry(npix, vertices_xyz, vertices_spherical);
 end
@@ -942,30 +953,30 @@ end
 function healpix_rapidrot_star(n, stellar_parameters) # ellipsoid
 nside = 2^n
 npix = nside2npix(nside)
-vertices_xyz = Array{Float64}(undef, npix, 3, 5);
-vertices_spherical = Array{Float64}(undef , npix, 3, 5);
+vertices_xyz = Array{Float64}(undef, npix, 5, 3);
+vertices_spherical = Array{Float64}(undef , npix, 5,3);
 #cartesian coordinates for center & corners
-vertices_xyz[:,:,5],vertices_xyz[:,:,1:4]=pix2vec_nest(nside,collect(1:npix));
-vertices_spherical[:,1,:] .= radius;
+vertices_xyz[:,5,:],vertices_xyz[:,1:4,:]=pix2vec_nest(nside,collect(1:npix));
+vertices_spherical[:,:,1] .= radius;
 # setup spherical (theta,phi) for center
-vertices_spherical[:,2,5],vertices_spherical[:,3,5] = pix2ang_nest(nside, collect(1:npix));
+vertices_spherical[:,5,2],vertices_spherical[:,5,3] = pix2ang_nest(nside, collect(1:npix));
 # and now for corners
 for j = 1:4
-	vertices_spherical[:,2,j], vertices_spherical[:,3,j] = vec2ang(vertices_xyz[:,:,j]);
+	vertices_spherical[:,j,2], vertices_spherical[:,j,3] = vec2ang(vertices_xyz[:,j,:]);
 end
 
 R_pole = stellar_parameters.radius;
 ω = stellar_parameters.frac_escapevel;
-vertices_spherical[:,1,:] = 3.0*R_pole.*cos.((pi + acos.(ω*sin.(vertices_spherical[:,2,:])))/3.)./(ω*sin.(vertices_spherical[:,2,:]));
+vertices_spherical[:,:,1] = 3.0*R_pole.*cos.((pi + acos.(ω*sin.(vertices_spherical[:,:,2])))/3.)./(ω*sin.(vertices_spherical[:,:,2]));
 
 # Rewrite pole radius values
-vertices_spherical[:,1,:][find(vertices_spherical[:,1,:] .== Inf)] = R_pole;
+vertices_spherical[:,:,1][find(vertices_spherical[:,:,1] .== Inf)] = R_pole;
 
 # but now we change the radius
 for i=1:npix
-  vertices_xyz[i,1,:] = vertices_spherical[i,1,:]*sin.(vertices_spherical[i,2,:]).*cos.(vertices_spherical[i,3,:]); # X
-  vertices_xyz[i,2,:] = vertices_spherical[i,1,:]*sin.(vertices_spherical[i,2,:]).*sin.(vertices_spherical[i,3,:]); # Y
-  vertices_xyz[i,3,:] = vertices_spherical[i,1,:]*cos.(vertices_spherical[i,2,:]); # Z
+  vertices_xyz[i,:,1] = vertices_spherical[i,:,1]*sin.(vertices_spherical[i,:,2]).*cos.(vertices_spherical[i,:,3]); # X
+  vertices_xyz[i,:,2] = vertices_spherical[i,:,1]*sin.(vertices_spherical[i,:,2]).*sin.(vertices_spherical[i,:,3]); # Y
+  vertices_xyz[i,:,3] = vertices_spherical[i,:,1]*cos.(vertices_spherical[i,:,2]); # Z
 end
 
 star_base_geom = base_geometry(npix, vertices_xyz, vertices_spherical);
@@ -977,6 +988,9 @@ neighbors = [neighbours_nest(nside, i) for i=1:nside2npix(nside)];
 return neighbors
 end
 
+
+using SparseArrays
+
 function tv_neighbours_healpix(n)
 # Complete Neighbor setup (healpix)
 neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
@@ -984,5 +998,11 @@ south_neighbors=[(neighbors[i])[1] for i=1:length(neighbors)]
 west_neighbors=[(neighbors[i])[3] for i=1:length(neighbors)]
 south_neighbors_reverse=[findall(south_neighbors.==i) for i=1:length(neighbors)]
 west_neighbors_reverse=[findall(west_neighbors.==i) for i=1:length(neighbors)]
+
+# Matrix form
+npix = nside2npix(2^n)
+∇s = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, south_neighbors, -1.0)
+∇w = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, west_neighbors, -1.0)
+
 return neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse
 end
