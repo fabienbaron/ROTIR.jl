@@ -2,6 +2,8 @@
 # Light curve inversion from phase data with absolute flux - Movie version
 #
 using ROTIR
+using Statistics
+using PyPlot
 lcifile = "./data/kplr005110407_LC_CBV_Q02.txt"
 lcidata = read_lci_absolute(lcifile);
 
@@ -38,7 +40,7 @@ polyflux, visible_pixels, hidden_pixels = setup_lci(epochs_geometry);
 nframes, Y, E, W, H = split_lcidata_by_period(lcidata,polyflux, 0.5*period); # we use half period, but any reasonable number should work
 
 # Setup Harmon & Total Variation regularization
-C, ∇s, ∇w = setup_regularization_matrices(epochs_geometry);
+#C, ∇s, ∇w = setup_regularization_matrices(epochs_geometry);
 
 # Reconstruction
 Tphot_wanted = 5200;
@@ -56,8 +58,8 @@ B=5000.; λ=0.001; μ=0.00001;
 regularizers = [repeat([[["bias", λ, B,visible_pixels], ["tv",μ, tv_neighbours_healpix(n), 1:npix]]], nframes);[[["temporal_tvsq",1e-3]]]];
 
 # Reconstruction: x is the reconstructed temperature movie
-x = lci_reconstruct_mutitemporal(x_start, Y, E, H, visible_pixels, verb = true, maxiter = 200, regularizers = regularizers);
-x = rescale_temperature(x, Tphot_wanted, visible_pixels);
+xopt = lci_reconstruct_mutitemporal(x_start, Y, E, H, visible_pixels, verb = true, maxiter = 200, regularizers = regularizers);
+x = rescale_temperature(xopt, Tphot_wanted, visible_pixels);
 
 # Export movie as mollweide plot then mp4
 vmin = minimum(x[visible_pixels,:]);
@@ -68,6 +70,7 @@ for i=1:nframes
     #readline(stdin)
     savefig("lci$i");
 end
+
 run(`ffmpeg -f image2 -pattern_type glob -framerate 5 -i 'lci%d.png' lci_all.mp4`)
 run(`ls -1v *.png | xargs -I {} echo "file '{}'" > list.txt')
 run(`ffmpeg -r 1/5 -f concat -i list.txt  lcimovie.mp4`)

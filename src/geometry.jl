@@ -187,7 +187,7 @@ function update_star(star_base_geom, sparameters; diff_rot=false, ntheta=36, nph
   ldmap = zeros(Float64,npix);
   μ = abs.(normals[index_quads_visible,3])
   if (sparameters.ld[1] == 1) # 1: quadratic
-    ldmap[index_quads_visible] = 1.0 .- sparameters.ld[2]*(1.0 .-μ) - sparameters.ld[3](1.0.-μ.^2)
+    ldmap[index_quads_visible] = 1.0 .- sparameters.ld[2]*(1.0 .-μ) - sparameters.ld[3]*(1.0.-μ.^2)
   elseif (sparameters.ld[1] == 2) # 2: logarithmic
     ldmap[index_quads_visible] = 1.0 .- sparameters.ld[2]*(1.0 .-μ) - sparameters.ld[3]*μ.*log.(μ)
   elseif (sparameters.ld[1] == 3)  # 3; Hestroffer
