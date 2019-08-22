@@ -182,7 +182,7 @@ function lci_multitemporal_absolute_fg(x::Array{Float64,1}, g::Array{Float64,1},
      if verb == true
      printstyled("Frame $i ",color=:black);
     end
-    f+= lci_absolute_crit_fg(x[tslice], subg,  F[i], E[i], H[i], visible_pixels, regularizers=regularizers[i], verb = true )
+    f+= lci_absolute_crit_fg(x[tslice], subg,  F[i], E[i], H[i], visible_pixels, regularizers=regularizers[i], verb = verb )
     g[tslice] = subg
   end
 
@@ -223,10 +223,23 @@ function lci_reconstruct(x_start::Array{Float64,1}, lcidata::LCI, polyflux::Arra
   return x_sol
 end
 
-function lci_reconstruct_mutitemporal(x_start::Array{Float64,1}, F, E, H, visible_pixels; lowtemp = 0, relative = false, printcolor= [], verb = true, maxiter = 100, regularizers =[])
-  crit_imaging = (x,g)->lci_multitemporal_absolute_fg(x, g, F, E, H, visible_pixels, verb = true, regularizers = regularizers);
+function lci_reconstruct(x_start::Array{Float64,1}, flux::Array{Float64,1}, fluxerr:: Array{Float64,1}, polyflux::Array{Float64,2}, visible_pixels; lowtemp = 0, relative = false, printcolor= [], verb = true, maxiter = 100, regularizers =[])
+  x_sol = [];
+  crit_imaging=x->x; #TODO: proper dummy init
+  if relative == true
+  crit_imaging = (x,g)->lci_relative_crit_fg(x, g, flux, fluxerr, polyflux, visible_pixels, regularizers=regularizers, verb = verb);
+  else
+    crit_imaging = (x,g)->lci_absolute_crit_fg(x, g, flux, fluxerr, polyflux, visible_pixels, regularizers=regularizers, verb = verb);
+  end
   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=false, lower=lowtemp, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
-  return reshape(x_sol, (size(H[1],2), length(F)))
+  return x_sol
+end
+
+function lci_reconstruct_mutitemporal(x_start::Array{Float64,1}, F, E, H, visible_pixels; lowtemp = 0, relative = false, printcolor= [], verb = true, maxiter = 100, regularizers =[])
+  crit_imaging = (x,g)->lci_multitemporal_absolute_fg(x, g, F, E, H, visible_pixels, verb = verb, regularizers = regularizers);
+  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=lowtemp, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
+  g_dummy = zeros(size(x_start));
+  return reshape(x_sol, (size(H[1],2), length(F))), crit_imaging(x_sol,g_dummy)
 end
 
 function lci_linear_inversion_frame(xstart, H, W, Y, C, ∇s, ∇w, B, λ , μ; tol = 1e-4, maxiter = 50, verbose = true)

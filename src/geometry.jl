@@ -230,7 +230,7 @@ return star_epoch_geom
 end
 
 
-# experimental stuff
+#= experimental stuff
 using QHull
 function hull(star_epoch_geom)
 println("Computing convex hull");
@@ -240,10 +240,8 @@ scatter(ch.points[:,1], ch.points[:,2])
 plot(ch.points[hull,1], ch.points[hull,2])
 
 bounding_box = [minimum(star_epoch_geom.projx), minimum(star_epoch_geom.projy), maximum(star_epoch_geom.projx), maximum(star_epoch_geom.projy)]
-
-
 end
-
+=#
 
 
 

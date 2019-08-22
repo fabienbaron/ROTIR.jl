@@ -104,6 +104,13 @@ function cvis_to_t3(cvis, indx1, indx2, indx3)
   return t3, t3amp, t3phi
 end
 
+function cvis_to_t4(cvis, indx1, indx2, indx3, indx4)
+  t4 = cvis[indx1].*cvis[indx2]./(cvis[indx3]*conj(cvis[indx4]));
+  t4amp = abs.(t4);
+  t4phi = angle.(t4)*180.0/pi;
+  return t4, t4amp, t4phi
+end
+
 function spheroid_chi2_f(x, polyflux, polyft, data, verbose = true)
 cvis_model = poly_to_cvis(x, polyflux, polyft);
 # compute observables from all cvis

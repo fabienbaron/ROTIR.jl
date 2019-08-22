@@ -30,11 +30,9 @@ function plot3d_temperature(star_temperature_map,star_geometry) # this plots the
   #patches = pyimport("matplotlib.mplot3d")
   corners_xyz = star_geometry.vertices_xyz[:,1:4,:];
   Art3D = pyimport("mpl_toolkits.mplot3d.art3d")
-  Poly3DCollection = Art3D[:Poly3DCollection]
-  fig2 = figure("Spheroid plot",figsize=(10,10),facecolor="White");
-  ax = Axes3D(fig2)
-  xlabel("x"); ylabel("y"); zlabel("z");
-  grid("on");
+  Poly3DCollection = Art3D.Poly3DCollection
+  fig2 = figure("Spheroid plot",figsize=(10,10),facecolor="White", projection="3d");
+  ax = gca(); xlabel("x"); ylabel("y"); zlabel("z"); grid("on");
   axis_max = maximum(sqrt.(star_geometry.vertices_xyz[:,1:4,1].^2 +
     star_geometry.vertices_xyz[:,1:4,2].^2 +
     star_geometry.vertices_xyz[:,1:4,3].^2));
@@ -42,11 +40,9 @@ function plot3d_temperature(star_temperature_map,star_geometry) # this plots the
   ax.set_ylim([-axis_max,axis_max]);
   ax.set_zlim([-axis_max,axis_max]);
   for i=1:star_geometry.npix
-#    if (quads_visible[i] > 0)
       verts = (collect(zip(corners_xyz[i, :, 1], corners_xyz[i, :, 2], corners_xyz[i, :, 3])),);
       color = get_cmap("gist_heat")(star_temperature_map[i]/maximum(star_temperature_map));
       ax.add_collection3d(Poly3DCollection(verts, edgecolor="none", facecolor=color));
-#    end
   end
   # maybe repeat the same here with another color for hidden polygons
   PyPlot.draw()
@@ -59,8 +55,8 @@ function plot3d_temperature_binary(star_temperature_map1,star_temperature_map2,s
   corners_xyz2 = star_geometry2.vertices_xyz[:,1:4,:];
   Art3D = pyimport("mpl_toolkits.mplot3d.art3d")
   Poly3DCollection = Art3D[:Poly3DCollection]
-  fig2 = figure("Spheroid plot",figsize=(10,10),facecolor="White");
-  ax = Axes3D(fig2)
+  fig2 = figure("Spheroid plot",figsize=(10,10),facecolor="White", projection="3d");
+  ax = gca();
   xlabel("x"); ylabel("y"); zlabel("z");
   grid("on");
   axis_max = maximum(sqrt.(star_geometry2.vertices_xyz[:,1:4,1].^2 +
