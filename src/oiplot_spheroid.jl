@@ -28,7 +28,7 @@ end
 function plot3d_temperature(star_temperature_map,star_geometry) # this plots the temperature map
 #  quads_visible = star_geometry.quads_visible;
   #patches = pyimport("matplotlib.mplot3d")
-  corners_xyz = star_geometry.vertices_xyz[:,1:4,:];BX80646I
+  corners_xyz = star_geometry.vertices_xyz[:,1:4,:];
   Art3D = pyimport("mpl_toolkits.mplot3d.art3d")
   Poly3DCollection = Art3D.Poly3DCollection
   fig2 = figure("Spheroid plot",figsize=(10,10),facecolor="White");
