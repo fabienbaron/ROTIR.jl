@@ -921,6 +921,13 @@ vertices_xyz[:,:,3] = radius*cos.(vertices_spherical[:,:,2]); # Z
 star_base_geom = base_geometry(npix, vertices_xyz, vertices_spherical);
 end
 
+function healpix_round_star_fast(n::Int64) # round, radius = 1
+# precomputed arrays for n=3 or n=4 (most used in interferometry/light curve inversion)
+
+
+
+end
+
 
 
 function healpix_ellipsoid_star(n, a, b, c) # ellipsoid

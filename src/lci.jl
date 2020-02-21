@@ -253,7 +253,7 @@ left = H'*W*H+μ*(∇s'∇s + ∇w'∇w)
 right = H'*W*Y
 while (ϵ>tol)&(iter<=maxiter)
     #V = Diagonal(((B-1.0)*Int.(C*x.>0).+1.0)/nx)
-    V = spdiagm(0=>((B-1.0)*Int.(C*x.>0).+1.0)/npix)
+    V = Diagonal(((B-1.0)*Int.(C*x.>0).+1.0)/npix)
     x = (left+λ*C'*(V*C))\right;
     x .*= (x.>0)
     if iter>1

@@ -26,7 +26,7 @@ end
 # this assumes the (x,y) coordinates of the quads are in milliarcseconds
 polyft = zeros(Complex{Float64}, data.nuv, star_epoch_geom.npix); #note: size = npix, but we will fill only the nquads_visible ones
 for uu=1:data.nuv
-  kx = data.uv[1,uu] * (pi / 180.0) / 3600000.0;
+  kx = -data.uv[1,uu] * (pi / 180.0) / 3600000.0;
   ky = data.uv[2,uu] * (pi / 180.0) / 3600000.0;
   for i=1:4 # note: danger, check definition sinc(x) = sin(pi*x)/(pi*x)
     polyft[uu,star_epoch_geom.index_quads_visible] += sinc.( (star_epoch_geom.projx[:,mod(i,4)+1]-star_epoch_geom.projx[:,i]).*kx + (star_epoch_geom.projy[:,mod(i,4)+1]-star_epoch_geom.projy[:,i]).*ky ).*cis.(-pi*( (star_epoch_geom.projx[:,mod(i,4)+1]+star_epoch_geom.projx[:,i]).*kx +  (star_epoch_geom.projy[:,mod(i,4)+1]+star_epoch_geom.projy[:,i]).*ky )).* ( (star_epoch_geom.projx[:,mod(i,4)+1]-star_epoch_geom.projx[:,i]).*ky  - (star_epoch_geom.projy[:,mod(i,4)+1]-star_epoch_geom.projy[:,i]).*kx )
@@ -63,7 +63,7 @@ function setupft_single_alt(data, star_epoch_geom, ld = true)
   # this assumes the (x,y) coordinates of the quads are in milliarcseconds
   polyft = zeros(Complex{Float64}, data.nuv, star_epoch_geom.npix); #note: size = npix, but we will fill only the nquads_visible ones
   #polyft = SharedMatrix{Complex{Float64}}(data.nuv, star_epoch_geom.npix);
-  kx = data.uv[1,:] * (pi / 180.0) / 3600000.0;
+  kx = -data.uv[1,:] * (pi / 180.0) / 3600000.0;
   ky = data.uv[2,:] * (pi / 180.0) / 3600000.0;
   # note: danger, check definition sinc(x) = sin(pi*x)/(pi*x)
   polyft[:,star_epoch_geom.index_quads_visible] = (sinc.( (kx*transpose(star_epoch_geom.projx[:,2]-star_epoch_geom.projx[:,1])) + (ky*transpose(star_epoch_geom.projy[:,2]-star_epoch_geom.projy[:,1])) ).*cis.(-pi*( (kx*transpose(star_epoch_geom.projx[:,2]+star_epoch_geom.projx[:,1])) +  (ky*transpose(star_epoch_geom.projy[:,2]+star_epoch_geom.projy[:,1])) )).* ( (ky*transpose(star_epoch_geom.projx[:,2]-star_epoch_geom.projx[:,1]))  - (kx*transpose(star_epoch_geom.projy[:,2]-star_epoch_geom.projy[:,1])) )
