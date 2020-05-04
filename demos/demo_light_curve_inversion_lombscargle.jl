@@ -1,7 +1,8 @@
 #
 # Finding a period in a light curve using Lomb Scargle
-#
-include("../src/ROTIR.jl"); using Main.ROTIR;
+# this requires the LombScargle package
+
+using ROTIR
 # Import light curve
 lcifile = "./data/kplr005110407_LC_CBV_Q02.txt"
 lcidata = read_lci_absolute(lcifile);
