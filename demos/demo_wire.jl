@@ -1,5 +1,6 @@
 include("../src/ROTIR.jl"); using Main.ROTIR
 # make vectors
+using PyPlot
 file_loc = "./rapid";
 nepochs = 100;
 inclination = collect(range(-90.0,90.0,length=nepochs)); # no limb darkening, no rapid rotation
