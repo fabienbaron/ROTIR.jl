@@ -112,8 +112,9 @@ else
 end
 xlabel("x");
 ylabel("y");
-ax.set_xlim([2,-2])
-ax.set_ylim([-2,2])
+axis("equal")
+ax.set_xlim([maximum(star_geometry.projx),minimum(star_geometry.projx)])
+ax.set_ylim([minimum(star_geometry.projy),maximum(star_geometry.projy)])
 projmap = star_map[star_geometry.index_quads_visible];
 for i=1:star_geometry.nquads_visible
   p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),
@@ -126,6 +127,33 @@ end
 ax.plot();
 PyPlot.draw()
 end
+
+
+function plot2d_intensity(star_map, star_geometry, plotmesh=true; colormap="gist_heat") # this plots the temperature map onto the projected 2D image plane (= observer view)
+# still missing the actual intensity (includes LD)
+patches = pyimport("matplotlib.patches")
+fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+ax = fig.add_axes([0.05,0.05,0.85,0.85])
+if plotmesh == true
+  meshcolor = "grey"
+else
+  meshcolor = "none"
+end
+xlabel("x");
+ylabel("y");
+axis("equal");
+ax.set_xlim([maximum(star_geometry.projx),minimum(star_geometry.projx)])
+ax.set_ylim([minimum(star_geometry.projy),maximum(star_geometry.projy)])
+projmap = (star_map.*star_geometry.ldmap)[star_geometry.index_quads_visible]
+for i=1:star_geometry.nquads_visible
+  p = patches.Polygon(hcat(-star_geometry.projx[i,:],star_geometry.projy[i,:]),
+  closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap[i]),fill="true",rasterized=false)
+  ax.add_patch(p);
+end
+ax.plot();
+PyPlot.draw()
+end
+
 
 function plot2d_temperature_savefig(star_map,star_geometry;file_loc="./image",
     labels=false,iteration="0",omega="?",rotational_vel="?",LD="?",rotation_period="?",
@@ -150,7 +178,7 @@ end
 end
 # calculate number of latitudes/longitudes & make grid lines
 if ((longlat==true) & (plotmesh == true))
-    meshcolor_arr = repmat(["none"],star_geometry.npix,1);
+    meshcolor_arr = repeat(["none"],star_geometry.npix,1);
     #=nlongitude = length(star_geometry.vertices_spherical[:,2,5][find(star_geometry.vertices_spherical[:,2,5] .== star_geometry.vertices_spherical[1,2,5])]);
     nlatitude = Int(star_geometry.npix/nlongitude);
     indx = 0;
@@ -224,6 +252,7 @@ ax = fig.add_axes([0.05,0.05,0.85,0.85])
 xlabel("x");
 ylabel("y");
 axis_max = maximum(sqrt(star_geometry.vertices_xyz[:,1:4,1].^2 +star_geometry.vertices_xyz[:,1:4,2].^2 + star_geometry.vertices_xyz[:,1:4,3].^2));
+axis("equal")
 ax.set_xlim([-axis_max,axis_max]);
 ax.set_ylim([-axis_max,axis_max]);
 for i=1:star_geometry.nquads_visible
@@ -242,11 +271,16 @@ if plotmesh == true
 else
   meshcolor = "none"
 end
+subplots_adjust(hspace=0.0)
+rows = ceil(Int64,sqrt(length(star_geometry)))
+cols = rows
 for t=1:length(star_geometry)
-  ax= subplot(230+t) # Create the 1st axis of a 2x2 arrax of axes
+  fig.add_subplot(rows,cols,t)
   if tepochs !=[]
     title("Epoch $t $(tepochs[t])") # Give the most recent axis a title
   end
+  ax = gca();
+  axis("equal")
   ax.set_xlim([2,-2])
   ax.set_ylim([-2,2])
   visible_pixels = sometimes_visible(star_geometry);
@@ -279,6 +313,7 @@ for t=1:length(star_geometry)
   if tepochs !=[]
     title("Epoch $t $(tepochs[t])") # Give the most recent axis a title
   end
+  axis("equal")
   ax.set_xlim([2,-2])
   ax.set_ylim([-2,2])
   visible_pixels = sometimes_visible(star_geometry);
