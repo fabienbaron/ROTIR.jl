@@ -29,14 +29,14 @@ temperature_map = 8000*ones(star_epoch_geom[1].npix);
 plot2d_temperature(temperature_map, star_epoch_geom[1])
 for i=1:nepochs
     plot2d_temperature(temperature_map, star_epoch_geom[i])
-    savefig("wire_longlat_$i.png")
+    savefig(string("wire_longlat_",string(i,pad=3),".png"))
 end
-run(`ffmpeg -f image2 -pattern_type glob -framerate 2 -i 'wire_longlat*.png' longlat.avi`)
+run(`ffmpeg -f image2 -pattern_type glob -framerate 2 -i "ls - wire_longlat*.png" longlat.avi`)
 
 star_epoch_geom = create_geometry( healpix_round_star(4,radius=1.0), stellar_parameters);
 temperature_map = 8000*ones(star_epoch_geom[1].npix);
 for i=1:nepochs
     plot2d_temperature(temperature_map, star_epoch_geom[i])
-    savefig("wire_healpix_$i.png")
+    savefig(string("wire_healpix_",string(i,pad=3),".png"))
 end
 run(`ffmpeg -f image2 -pattern_type glob -framerate 2 -i 'wire_healpix*.png' healpix.avi`)
