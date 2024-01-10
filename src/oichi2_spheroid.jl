@@ -260,7 +260,15 @@ end
   return tv_f
 end
 
-
+function spheroid_total_variation2_fg(x, tv_g, tvinfo; ϵ = 1e-13, verb = true)
+  npix = length(x)
+  tv_f = norm(tvinfo[6]*x)^2
+  tv_g[:] = 2*tvinfo[7]*x
+  if verb == true
+      println("TV2: ", tv_f);
+  end
+  return tv_f
+end
 
 function spheroid_l2_fg(x, g; verb = true)
 l2f = sum(abs.(x-sum(x)/length(x)))
@@ -293,6 +301,8 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
         x_sub = x[regularizers[ireg][4]] # take the pixel subset if needed (example: only regularize visible pixels)
         temp_g = similar(x_sub);
         if regularizers[ireg][1] == "tv"
+            reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
+        elseif regularizers[ireg][1] == "tv2"
             reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
         elseif regularizers[ireg][1] == "l2"
             reg_f += regularizers[ireg][2]*spheroid_l2_fg(x_sub, temp_g, verb = verb);

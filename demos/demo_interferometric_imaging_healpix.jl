@@ -1,8 +1,7 @@
 using Statistics
 using LinearAlgebra
 using SparseArrays
-using ROTIR
-#include("../src/ROTIR.jl"); using Main.ROTIR;
+include("../src/ROTIR.jl"); using Main.ROTIR;
 # LOAD DATA
 oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_And_prepped.oifits",
 "./data/2011Sep10.lam_And_prepped.oifits","./data/2011Sep14.lam_And_prepped.oifits",

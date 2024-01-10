@@ -100,36 +100,39 @@ end
 PyPlot.draw()
 end
 
-function plot2d_temperature(star_map, star_geometry, plotmesh=true; colormap="gist_heat") # this plots the temperature map onto the projected 2D image plane (= observer view)
-# still missing the actual intensity (includes LD)
+function plot2d_temperature(star_map, star_geometry; plotmesh=true, colormap="gist_heat", xlim=Float64[], ylim=Float64[]) # this plots the temperature map onto the projected 2D image plane (= observer view)
+set_oiplot_defaults()
 patches = pyimport("matplotlib.patches")
-fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+fig = figure("Epoch image",figsize=(10,10),facecolor="Black")
 ax = fig.add_axes([0.05,0.05,0.85,0.85])
 if plotmesh == true
   meshcolor = "grey"
 else
   meshcolor = "none"
 end
-xlabel("x");
-ylabel("y");
 axis("equal")
-ax.set_xlim([maximum(star_geometry.projx),minimum(star_geometry.projx)])
-ax.set_ylim([minimum(star_geometry.projy),maximum(star_geometry.projy)])
+if xlim == []
+  xlim = [minimum(star_geometry.projx),maximum(star_geometry.projx)]
+end
+if ylim == []
+  ylim = [minimum(star_geometry.projy),maximum(star_geometry.projy)]
+end
+ax.set_xlim(xlim)
+ax.set_ylim(ylim)
 projmap = star_map[star_geometry.index_quads_visible];
 for i=1:star_geometry.nquads_visible
   p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),
   closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)),fill=true,rasterized=false)
   ax.add_patch(p);
-#  println(i);
-#  readline()
-#  PyPlot.draw()
 end
+xlabel("x ← E (mas)")
+ylabel("y → N (mas)")
 ax.plot();
 PyPlot.draw()
 end
 
 
-function plot2d_intensity(star_map, star_geometry, plotmesh=true; colormap="gist_heat") # this plots the temperature map onto the projected 2D image plane (= observer view)
+function plot2d_intensity(star_map, star_geometry; plotmesh=true, colormap="gist_heat") # this plots the temperature map onto the projected 2D image plane (= observer view)
 # still missing the actual intensity (includes LD)
 patches = pyimport("matplotlib.patches")
 fig = figure("Epoch image",figsize=(10,10),facecolor="White")
@@ -265,7 +268,7 @@ end
 
 function plot2d_temperature_allepochs(star_map, star_geometry; plotmesh=false, tepochs = [], colormap="gist_heat")
 patches = pyimport("matplotlib.patches")
-fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
+fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="Black")
 if plotmesh == true
   meshcolor = "grey"
 else

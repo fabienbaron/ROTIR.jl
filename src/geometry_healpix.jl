@@ -1006,10 +1006,15 @@ west_neighbors=[(neighbors[i])[3] for i=1:length(neighbors)]
 south_neighbors_reverse=[findall(south_neighbors.==i) for i=1:length(neighbors)]
 west_neighbors_reverse=[findall(west_neighbors.==i) for i=1:length(neighbors)]
 
-# Matrix form
+# Matrix form, only S/W tessels
 npix = nside2npix(2^n)
-∇s = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, south_neighbors, -1.0)
-∇w = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, west_neighbors, -1.0)
-
-return neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse
+# ∇s = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, south_neighbors, -1.0)
+# ∇w = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, west_neighbors, -1.0)
+# Matrix form, all tessels
+∇ = sparse(1:npix, 1:npix, 1.0) 
+for k=1:npix
+  ∇[k*ones(Int, length(neighbors[k])), neighbors[k]] .= -1/length(neighbors[k])
+end
+H=∇'*∇
+return neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse, ∇, H
 end
