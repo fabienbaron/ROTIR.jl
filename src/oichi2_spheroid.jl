@@ -180,7 +180,7 @@ for i=1:nepochs # weighted sum -- should probably do the computation in parallel
   f += epochs_weights[i]*spheroid_chi2_fg_alt(x, singleepoch_g, polyflux[i], polyft[i], data[i], verbose=true);
   g[:] += epochs_weights[i]*singleepoch_g;
 end
-println("All epochs, weighted chi2: ", f, "\n");
+println("Weighted unreduced chi2: ", f, "\n");
 return f;
 end
 

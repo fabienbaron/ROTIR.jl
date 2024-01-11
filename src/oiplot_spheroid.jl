@@ -128,6 +128,7 @@ end
 xlabel("x ← E (mas)")
 ylabel("y → N (mas)")
 tight_layout()
+#colorbar() # this will need contours to be defined -> need some work
 end
 
 

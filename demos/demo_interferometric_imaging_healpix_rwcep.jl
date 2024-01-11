@@ -1,6 +1,8 @@
 include("../src/ROTIR.jl"); using Main.ROTIR;
 using OITOOLS
 oifitsfile = "./data/RWCep_Dec2022.oifits"
+oifitsfile = "./data/RWCep_Jul2023.oifits"
+
 nepochs = 1
 tepochs = [0.0]
 data = [readoifits(oifitsfile, filter_bad_data=true, use_vis=false )[1,1]];
@@ -42,7 +44,8 @@ polyflux, polyft = setup_polygon_ft(data, star_epoch_geom);
 x_start = 4200*ones(star_epoch_geom[1].npix);
 tvinfo = tv_neighbours_healpix(n);
 regularizers = [["tv", 0.05, tvinfo,1:length(x_start)]];
-#regularizers = [["l2", 0.03, tvinfo, 1:length(x_start)]];
+regularizers = [["l2", 0.01, tvinfo, 1:length(x_start)]];
 #regularizers = [["tv2", 5e-4, tvinfo,1:length(x_start)]];
-x =  spheroid_oi_reconstruct(x_start, data, polyflux, polyft, lower=3000, upper=7000, regularizers = regularizers, verb = true, maxiter=500);
+#x =  spheroid_oi_reconstruct(x_start, data, polyflux, polyft, lower=3000, upper=7000, regularizers = regularizers, verb = true, maxiter=500);
+x =  spheroid_oi_reconstruct(x_start, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=500);
 plot2d_temperature(x, star_epoch_geom[1], plotmesh=false); # Note: Temp = intensity since no LDD
