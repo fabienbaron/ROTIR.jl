@@ -1,4 +1,3 @@
-# using Distances
 include("../src/ROTIR.jl"); using Main.ROTIR;
 using OITOOLS
 # LOAD DATA
@@ -31,4 +30,4 @@ x_start = 7200*ones(star_epoch_geom[1].npix);
 tvinfo = tv_neighbours_healpix(n);
 regularizers = [["tv", 0.01, tvinfo,1:length(x_start)]];
 x =  spheroid_oi_reconstruct(x_start, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=250);
-plot2d_temperature(x, star_epoch_geom[1], plotmesh=false); # Note: Temp = intensity since no LDD
+plot2d_temperature(x, star_epoch_geom[1], plotmesh=false, xlim=[-3, 3], ylim=[-3, 3]); # Note: Temp = intensity since no LDD

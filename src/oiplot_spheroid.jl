@@ -103,8 +103,8 @@ end
 function plot2d_temperature(star_map, star_geometry; plotmesh=true, colormap="gist_heat", xlim=Float64[], ylim=Float64[]) # this plots the temperature map onto the projected 2D image plane (= observer view)
 set_oiplot_defaults()
 patches = pyimport("matplotlib.patches")
-fig = figure("Epoch image",figsize=(10,10),facecolor="Black")
-ax = fig.add_axes([0.05,0.05,0.85,0.85])
+fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+ax = gca(); #fig.add_axes([0.05,0.05,0.85,0.85])
 if plotmesh == true
   meshcolor = "grey"
 else
@@ -127,8 +127,7 @@ for i=1:star_geometry.nquads_visible
 end
 xlabel("x ← E (mas)")
 ylabel("y → N (mas)")
-ax.plot();
-PyPlot.draw()
+tight_layout()
 end
 
 
@@ -268,7 +267,7 @@ end
 
 function plot2d_temperature_allepochs(star_map, star_geometry; plotmesh=false, tepochs = [], colormap="gist_heat")
 patches = pyimport("matplotlib.patches")
-fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="Black")
+fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
 if plotmesh == true
   meshcolor = "grey"
 else

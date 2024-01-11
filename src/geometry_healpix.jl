@@ -1013,7 +1013,8 @@ npix = nside2npix(2^n)
 # Matrix form, all tessels
 ∇ = sparse(1:npix, 1:npix, 1.0) 
 for k=1:npix
-  ∇[k*ones(Int, length(neighbors[k])), neighbors[k]] .= -1/length(neighbors[k])
+ # ∇[k*ones(Int, length(neighbors[k])), neighbors[k]] .= -1/length(neighbors[k])
+ ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= -1/length(neighbors[k])
 end
 H=∇'*∇
 return neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse, ∇, H

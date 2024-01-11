@@ -263,7 +263,7 @@ end
 function spheroid_total_variation2_fg(x, tv_g, tvinfo; ϵ = 1e-13, verb = true)
   npix = length(x)
   tv_f = norm(tvinfo[6]*x)^2
-  tv_g[:] = 2*tvinfo[7]*x
+  tv_g[:] = 2*(tvinfo[7]*x)
   if verb == true
       println("TV2: ", tv_f);
   end
@@ -271,8 +271,8 @@ function spheroid_total_variation2_fg(x, tv_g, tvinfo; ϵ = 1e-13, verb = true)
 end
 
 function spheroid_l2_fg(x, g; verb = true)
-l2f = sum(abs.(x-sum(x)/length(x)))
-g[:] = sign.(x-sum(x)/length(x))
+l2f = sum(abs.(x .-sum(x)/length(x)))
+g[:] = sign.(x .-sum(x)/length(x))
 if verb == true
 println(" L2: ", l2f);
 end
@@ -303,7 +303,7 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
         if regularizers[ireg][1] == "tv"
             reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
         elseif regularizers[ireg][1] == "tv2"
-            reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
+            reg_f += regularizers[ireg][2]*spheroid_total_variation2_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
         elseif regularizers[ireg][1] == "l2"
             reg_f += regularizers[ireg][2]*spheroid_l2_fg(x_sub, temp_g, verb = verb);
         elseif regularizers[ireg][1] == "bias"
@@ -319,9 +319,9 @@ end
 
 
 using OptimPackNextGen
-function spheroid_oi_reconstruct(x_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; epochs_weights =[], printcolor= [], verb = true, maxiter = 100, regularizers =[])
+function spheroid_oi_reconstruct(x_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; lower=0.0, upper=1e99 , epochs_weights =[], printcolor= [], verb = true, maxiter = 100, regularizers =[])
   x_sol = [];
   crit_imaging = (x,g)->spheroid_crit_multiepochs_fg(x, g, polyflux, polyft, data, regularizers=regularizers, epochs_weights=  epochs_weights);
-  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
+  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=lower, upper=upper,  maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
   return x_sol
 end
