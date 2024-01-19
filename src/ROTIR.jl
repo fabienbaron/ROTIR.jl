@@ -24,7 +24,7 @@ export calc_tempmap_vZ
 export compute_teff_vonzeipel
 
 export setup_polygon_ft
-export observables, chi2s, optimize_unresolved_flux
+export observables, chi2s, optimize_bg_flux
 export spheroid_chi2_f,spheroid_chi2_fg,spheroid_chi2_fg_alt,spheroid_chi2_allepochs_fg,spheroid_chi2_allepochs_f,spheroid_total_variation,spheroid_crit_multiepochs_fg,spheroid_l2_fg,spheroid_harmon_bias_fg,spheroid_regularization,spheroid_oi_reconstruct
 export plot2d_temperature,plot2d_temperature_allepochs
 export plot2d_intensity,plot2d_intensity_allepochs
