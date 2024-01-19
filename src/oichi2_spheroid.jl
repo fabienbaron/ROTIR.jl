@@ -299,7 +299,7 @@ function optimize_bg_flux(xx,polyflux, polyft, data)
   x=xx[2:end]
   f0_start = xx[1]
   f = (f0,dummy)->spheroid_chi2_f(vcat(f0,x), polyflux[1], polyft[1], data[1], verbose = true);
-  optimizer = Opt(:LN_NELDERMEAD, 1, xtol_rel=1e-3);
+  optimizer = Opt(:LN_NELDERMEAD, 1);
   min_objective!(optimizer, f);
   lower_bounds!(optimizer, [0.0]);
   upper_bounds!(optimizer, [0.2]);
