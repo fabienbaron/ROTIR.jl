@@ -33,6 +33,12 @@ regularizers = [["tv", 0.01, tvinfo,1:length(temperature_start)]];
 xx_start = vcat(f0_start,temperature_start) # All parameters to be optimized
 xx_sol = optimize_bg_flux(xx_start, polyflux, polyft, data);
 xx_sol =  spheroid_oi_reconstruct(xx_sol, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=10);
+xx_sol = optimize_bg_flux(xx_sol, polyflux, polyft, data);
+xx_sol =  spheroid_oi_reconstruct(xx_sol, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=10);
+xx_sol = optimize_bg_flux(xx_sol, polyflux, polyft, data);
+xx_sol =  spheroid_oi_reconstruct(xx_sol, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=10);
+xx_sol = optimize_bg_flux(xx_sol, polyflux, polyft, data);
+xx_sol =  spheroid_oi_reconstruct(xx_sol, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=10);
 
 
 # Get observables and chi2s from temperature map + background flux
