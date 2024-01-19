@@ -4,7 +4,7 @@ using OptimPackNextGen
 # f0 = unresolved flux
 function poly_to_cvis(x, polyflux, polyft; f0=0.0)
   flux = sum(polyflux.*x); # star flux
-  return (1.0-f0)* (polyft * x / flux);
+  return (1.0-f0)*(polyft * x / flux);
 end
 
 function setupft_single(data, star_epoch_geom, ld = true)
@@ -111,13 +111,13 @@ chi2_v2 = sum( ((v2_model - data.v2)./data.v2_err).^2);
 chi2_t3amp = sum( ((t3amp_model - data.t3amp)./data.t3amp_err).^2);
 chi2_t3phi = sum( (mod360(t3phi_model - data.t3phi)./data.t3phi_err).^2);
 if verbose == true
-  flux = sum(polyflux .*x) + f0;
-  println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi," Flux: ", flux)
+  flux_star = sum(polyflux .*x);
+  println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi," Raw Star Flux: ", flux_star, " Unresolved flux fraction: ", f0)
 end
 return chi2_v2 + chi2_t3amp + chi2_t3phi
 end
 
-function spheroid_chi2_fg(xx, g, polyflux, polyft, data; verbose::Bool = true) 
+@views function spheroid_chi2_fg(xx, g, polyflux, polyft, data; verbose::Bool = true) 
   x  = xx[2:end]; #temperature map
   f0 = xx[1];   # unresolved flux
   cvis_model = poly_to_cvis(x, polyflux, polyft, f0=f0); # cplx vis including unresolved flux
@@ -126,37 +126,48 @@ function spheroid_chi2_fg(xx, g, polyflux, polyft, data; verbose::Bool = true)
   chi2_v2 = sum( ((v2_model - data.v2)./data.v2_err).^2);
   chi2_t3amp = sum( ((t3amp_model - data.t3amp)./data.t3amp_err).^2);
   chi2_t3phi = sum( (mod360(t3phi_model - data.t3phi)./data.t3phi_err).^2);
-  # Grad chi2 w/r temperatute map x
-  g_v2 = real(transpose(polyft[data.indx_v2,:])*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2])));
-  g_t3amp = real(transpose(polyft[data.indx_t3_1,:]) *(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(polyft[data.indx_t3_2,:])*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(polyft[data.indx_t3_3,:])*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
-  g_t3phi = 360.0/pi*imag(transpose(polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
-  g_temp = g_v2 + g_t3amp + g_t3phi;
-  flux = sum(polyflux .*x); # star flux
-  g[2:end] = (g_temp .- sum(x.*g_temp)*polyflux / flux ) / flux; # gradient correction to take into account the non-normalization
-  
+  # # # Grad chi2 w/r temperatute map x
+  #  g_v2 = real(transpose(polyft[data.indx_v2,:])*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2])));
+  #  g_t3amp = real(transpose(polyft[data.indx_t3_1,:]) *(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(polyft[data.indx_t3_2,:])*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(polyft[data.indx_t3_3,:])*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
+  #  g_t3phi = 360.0/pi*imag(transpose(polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
+  #  g_temp = g_v2 + g_t3amp + g_t3phi;
+  #  flux = sum(polyflux .*x); # star flux
+  #  g1 = (g_temp .- sum(x.*g_temp)*polyflux / flux ) / flux; # gradient correction to take into account the non-normalization
+
   # S = polyflux'
-  # V = Hx ./ S x 
+  # V = Hx./ S x 
   # dV/dx =  ( Sx .* H' - Hx .* S' ) ./ (S x)^2
   #       =  H' / Sx - Hx S' / flux^2 
- 
-  # # Grad chi2 w/r temperatute map x
-  # flux = sum(polyflux .*x); # star flux
-  # dV = -(polyft * x / flux)
-  # g_v2 = sum(real(dV[data.indx_v2,:].*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2]))));
-  # g_t3amp = sum(real(dV[data.indx_t3_1,:].*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]))
-  # +dV[data.indx_t3_2,:].*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]))
-  # +dV[data.indx_t3_3,:].*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]))));
-  # g_t3phi = sum(360.0/pi*imag(dV[data.indx_t3_1,:].*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))
-  #                        +dV[data.indx_t3_2,:].*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))
-  #                        +dV[data.indx_t3_3,:].*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model))));
-  # g_temp = g_v2 + g_t3amp + g_t3phi;
-  # # Advanced Imaging Methods for Long-Baseline Optical Interferometry Le Besnerais eq 31
-  g[1] = 0.0; # gradient w/r unresolved flux 
+  #       = transpose(polyft)/flux - (polyft*x)*polyflux/flux^2
+  # Could use V 
+  flux_star = sum(polyflux .*x); # star flux
+  dV = transpose((polyft - (polyft*x/flux_star).*transpose(polyflux))/flux_star)
+  g_v2 = real(dV[:,data.indx_v2]*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2])));
+  g_t3amp = real(  dV[:,data.indx_t3_1] *(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real( dV[:,data.indx_t3_2]*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real( dV[:,data.indx_t3_3]*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
+  g_t3phi = 360.0/pi*imag(dV[:,data.indx_t3_1] *(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))
+                         +dV[:,data.indx_t3_2]*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))
+                         +dV[:,data.indx_t3_3]*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
+  g[2:end] = (1-f0)*(g_v2 + g_t3amp + g_t3phi);
+  g[1] = 0;
   if verbose == true
-    println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi," Flux: ", flux)
+    println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi," Raw Star Flux: ", flux_star, " Unresolved flux fraction: ", f0)
   end
   return chi2_v2 + chi2_t3amp + chi2_t3phi
 end
+
+
+  
+# dV = cvis_model/(f0-1)
+# g_v2 = sum(real(dV[data.indx_v2].*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2]))));
+# g_t3amp = sum(real(dV[data.indx_t3_1].*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(dV[data.indx_t3_2].*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(dV[data.indx_t3_3].*(2.0*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]))));
+# g_t3phi = sum(360.0/pi*imag(dV[data.indx_t3_1].*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))
+#                        +dV[data.indx_t3_2].*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))
+#                        +dV[data.indx_t3_3].*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model))));
+# g[1] = g_v2 + g_t3amp + g_t3phi; # gradient w/r unresolved flux
+
+
+
+
 
 
 function proj_positivity(ztilde)
@@ -283,11 +294,26 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
   return reg_f
 end
 
+using NLopt
+function optimize_bg_flux(xx,polyflux, polyft, data)
+  x=xx[2:end]
+  f0_start = xx[1]
+  f = (f0,dummy)->spheroid_chi2_f(vcat(f0,x), polyflux[1], polyft[1], data[1], verbose = true);
+  optimizer = Opt(:LN_NELDERMEAD, 1, xtol_rel=1e-3);
+  min_objective!(optimizer, f);
+  lower_bounds!(optimizer, [0.0]);
+  upper_bounds!(optimizer, [0.2]);
+  minchi2,params_opt,ret = optimize(optimizer, [f0_start]);
+  println("Unresolved flux -- start=", f0_start, " optimized= ", params_opt[1])
+  return vcat(params_opt[1], x)
+end
+
+
 
 using OptimPackNextGen
-function spheroid_oi_reconstruct(xx_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; lower=0.0, upper=1e99 , epochs_weights =[], printcolor= [], verb = true, maxiter = 100, regularizers =[] )
+function spheroid_oi_reconstruct(xx_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; lower=0.0, upper=1e99 , epochs_weights =[], printcolor= [], verb = true, maxiter = 100, regularizers =[], bgflux=false )
   xx_sol = [];
   crit_imaging = (x,g)->spheroid_crit_multiepochs_fg(x, g, polyflux, polyft, data, regularizers=regularizers, epochs_weights=  epochs_weights);
-  xx_sol = OptimPackNextGen.vmlmb(crit_imaging, xx_start, verb=verb, lower=lower, upper=upper,  maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
-  return xx_sol
+  xx_sol = OptimPackNextGen.vmlmb(crit_imaging, xx_start, verb=verb, lower=lower, upper=upper,  maxiter=maxiter, blmvm=false, gtol=(0,1e-8));  
+    return xx_sol
 end
