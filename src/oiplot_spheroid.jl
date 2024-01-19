@@ -112,7 +112,7 @@ else
 end
 axis("equal")
 if xlim == []
-  xlim = [minimum(star_geometry.projx),maximum(star_geometry.projx)]
+  xlim = [maximum(star_geometry.projx), minimum(star_geometry.projx)]
 end
 if ylim == []
   ylim = [minimum(star_geometry.projy),maximum(star_geometry.projy)]
@@ -155,97 +155,6 @@ for i=1:star_geometry.nquads_visible
 end
 ax.plot();
 PyPlot.draw()
-end
-
-
-function plot2d_temperature_savefig(star_map,star_geometry;file_loc="./image",
-    labels=false,iteration="0",omega="?",rotational_vel="?",LD="?",rotation_period="?",
-    plotmesh=true,plot_lim=[-3,3],colormap="Blues_r",longlat=true,color_perc=0.75,starname="")
-patches = pyimport("matplotlib.patches")
-ioff()
-fig = figure(figsize=(10,10),facecolor="White")
-ax = fig.add_axes([0.1,0.1,0.85,0.85]);
-gca().set_axis_on();
-xlabel("East (mas)", fontweight="bold", fontsize=15);
-ylabel("North (mas)", fontweight="bold", fontsize=15);
-plot_lim_r = -1*plot_lim;
-ax.set_xlim(plot_lim_r);
-ax.set_ylim(plot_lim);
-projmap = (star_map.*star_geometry.ldmap)[star_geometry.index_quads_visible];
-if (plotmesh == false)
-for i=1:star_geometry.nquads_visible
-    p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),closed=true,
-        edgecolor="none",facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)*color_perc),fill=true,rasterized=false);
-    ax.add_patch(p);
-end
-end
-# calculate number of latitudes/longitudes & make grid lines
-if ((longlat==true) & (plotmesh == true))
-    meshcolor_arr = repeat(["none"],star_geometry.npix,1);
-    #=nlongitude = length(star_geometry.vertices_spherical[:,2,5][find(star_geometry.vertices_spherical[:,2,5] .== star_geometry.vertices_spherical[1,2,5])]);
-    nlatitude = Int(star_geometry.npix/nlongitude);
-    indx = 0;
-    for i = 1:nlatitude
-        for j = 1:nlongitude
-            indx += 1;
-            if (j%10 == 0)
-                meshcolor_arr[indx] = "grey";
-            end
-        end
-    end=#
-    meshcolor_arr[Int.(collect(linspace(1,star_geometry.npix,star_geometry.npix))) %10 .== 0] = "grey";
-    meshcolor_proj = meshcolor_arr[star_geometry.index_quads_visible];
-    for i=1:star_geometry.nquads_visible
-        p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),closed=true,
-            edgecolor="none",facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)*color_perc),fill=true,rasterized=false);
-        ax.add_patch(p);
-        p = patches.Polygon(hcat(star_geometry.projx[i,1:2],star_geometry.projy[i,1:2]),closed=true,
-            edgecolor=meshcolor_proj[i],facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)*color_perc),fill=true,rasterized=false);
-        ax.add_patch(p);
-    end
-end
-
-# adds labels to graph
-if (labels == true)
-    if (length(string(omega)) > 5)
-        ax.text(plot_lim[2]-plot_lim[2]/6.,plot_lim[1]+plot_lim[2]/6.,L"$\omega$ = "*string(omega)[1:6],fontsize=20);
-    else
-        ax.text(plot_lim[2]-plot_lim[2]/6.,plot_lim[1]+plot_lim[2]/6.,L"$\omega$ = "*string(omega),fontsize=20);
-    end
-    ax.text(plot_lim[2]-plot_lim[2]/6.,plot_lim[2]-plot_lim[2]/6.,string(rotational_vel)[1:6]*" revolutions/day",fontsize=20);
-    ax.text(plot_lim[2]-plot_lim[2]/6.,plot_lim[2]-plot_lim[2]/4.,"Rotation period = "*string(rotation_period)[1:6]*" days",fontsize=20);
-    ax.text(plot_lim[1]+plot_lim[2]/2.,plot_lim[1]+plot_lim[2]/6.,string(starname),fontsize=20);
-    if (length(string(LD)) > 3)
-        ax.text(plot_lim[2]-plot_lim[2]/6.,plot_lim[1]+plot_lim[2]/3.,"LD = "*string(LD)[1:4],fontsize=20);
-    else
-        ax.text(plot_lim[2]-plot_lim[2]/6.,plot_lim[1]+plot_lim[2]/3.,"LD = "*string(LD),fontsize=20);
-    end
-end
-
-ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(1));
-ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(1));
-ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(0.2));
-ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(0.2));
-ax.tick_params(axis="both", which="minor", width=2, length=5);
-# make axes thicker
-ax.spines["top"].set_linewidth(2);
-ax.spines["bottom"].set_linewidth(2);
-ax.spines["left"].set_linewidth(2);
-ax.spines["right"].set_linewidth(2);
-
-ax[:plot]();
-PyPlot.draw()
-if (length(string(iteration)) == 1)
-    savefig(file_loc*"000"*string(iteration)*".png");
-elseif (length(string(iteration)) == 2)
-    savefig(file_loc*"00"*string(iteration)*".png");
-elseif (length(string(iteration)) == 3)
-    savefig(file_loc*"0"*string(iteration)*".png");
-else
-    savefig(file_loc*string(iteration)*".png");
-end
-close()
 end
 
 function plot2d_wire(star_geometry) # this plots the temperature map onto the projected 2D image plane (= observer view)

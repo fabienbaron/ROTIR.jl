@@ -1,5 +1,5 @@
-include("../src/ROTIR.jl"); using Main.ROTIR;
 using OITOOLS
+include("../src/ROTIR.jl"); using Main.ROTIR;
 # LOAD DATA
 oifitsfile = "../../OITOOLS.jl/demos/data/vscale_oiprep_2021Apr02_03_04_MIRCX_HD_8890_AVG15m_all.fits"
 nepochs = 1
@@ -26,8 +26,18 @@ end
 # SETUP 3D GEOMETRY (HEALPIX)
 n=4; star_epoch_geom = create_geometry( healpix_round_star(n,radius=stellar_parameters[1].radius), stellar_parameters);
 polyflux, polyft = setup_polygon_ft(data, star_epoch_geom);
-x_start = 7200*ones(star_epoch_geom[1].npix);
+temperature_start = 7200*ones(star_epoch_geom[1].npix); # temperature map -- initial guess
+f0_start = 0.0 # unresolved flux -- initial guess
 tvinfo = tv_neighbours_healpix(n);
-regularizers = [["tv", 0.01, tvinfo,1:length(x_start)]];
-x =  spheroid_oi_reconstruct(x_start, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=250);
-plot2d_temperature(x, star_epoch_geom[1], plotmesh=false, xlim=[-3, 3], ylim=[-3, 3]); # Note: Temp = intensity since no LDD
+regularizers = [["tv", 0.01, tvinfo,1:length(temperature_start)]];
+xx_start = vcat(f0_start,temperature_start) # All parameters to be optimized
+xx_sol =  spheroid_oi_reconstruct(xx_start, data, polyflux, polyft, regularizers = regularizers, verb = true, maxiter=250);
+f0 = xx_sol[1];
+temperature = xx_sol[2:end];
+plot2d_temperature(temperature, star_epoch_geom[1], plotmesh=false, xlim=[-3, 3], ylim=[-3, 3]); # Note: Temp = intensity since no LDD
+
+# Get observables and chi2s from temperature map + unresolved flux
+v2_model, t3amp_model, t3phi_model = observables(xx_sol, polyflux[1], polyft[1], data[1]);
+chi2_v2, chi2_t3amp, chi2_t3phi = chi2s(xx_sol, polyflux[1], polyft[1], data[1], verbose = true)
+
+
