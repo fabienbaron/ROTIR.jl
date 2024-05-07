@@ -1002,9 +1002,9 @@ function tv_neighbours_healpix(n)
 # Complete Neighbor setup (healpix)
 neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
 south_neighbors=[(neighbors[i])[1] for i=1:length(neighbors)]
-west_neighbors=[(neighbors[i])[3] for i=1:length(neighbors)]
+east_neighbors=[(neighbors[i])[3] for i=1:length(neighbors)]
 south_neighbors_reverse=[findall(south_neighbors.==i) for i=1:length(neighbors)]
-west_neighbors_reverse=[findall(west_neighbors.==i) for i=1:length(neighbors)]
+east_neighbors_reverse=[findall(east_neighbors.==i) for i=1:length(neighbors)]
 
 # Matrix form, only S/W tessels
 npix = nside2npix(2^n)
@@ -1013,9 +1013,9 @@ npix = nside2npix(2^n)
 # Matrix form, all tessels
 ∇ = sparse(1:npix, 1:npix, 1.0) 
 for k=1:npix
- # ∇[k*ones(Int, length(neighbors[k])), neighbors[k]] .= -1/length(neighbors[k])
- ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= -1/length(neighbors[k])
+   ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= -1.0#/length(neighbors[k])
+   ∇[k, k]=length(neighbors[k])
 end
 H=∇'*∇
-return neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse, ∇, H
+return neighbors,south_neighbors,east_neighbors,south_neighbors_reverse,east_neighbors_reverse, ∇, H
 end

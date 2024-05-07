@@ -7,7 +7,7 @@ function poly_to_cvis(x, polyflux, polyft; f0=0.0)
   return (1.0-f0)*(polyft * x / flux);
 end
 
-function setupft_single(data, star_epoch_geom, ld = true)
+function setupft_single(data, star_epoch_geom; ld = true)
   # Polyflux is the weight of each pixel, proportional to the surface
   polyflux = zeros(Float64, star_epoch_geom.npix);
   polyflux[star_epoch_geom.index_quads_visible] =0.5*(star_epoch_geom.projx[:,1].*star_epoch_geom.projy[:,2]
@@ -44,12 +44,12 @@ function setupft_single(data, star_epoch_geom, ld = true)
 end
 
 
-function setup_polygon_ft(data, star_epoch_geom, ld = true)
+function setup_polygon_ft(data, star_epoch_geom; ld = true)
 nepochs = size(data,1);
 polyflux = Array{Array{Float64,1}}(undef,nepochs);
 polyft = Array{Array{Complex{Float64},2}}(undef,nepochs);
 for i=1:nepochs
-    polyflux[i], polyft[i] = setupft_single(data[i], star_epoch_geom[i], ld);
+    polyflux[i], polyft[i] = setupft_single(data[i], star_epoch_geom[i], ld=ld);
 end
 return polyflux, polyft
 end
@@ -166,10 +166,6 @@ end
 # g[1] = g_v2 + g_t3amp + g_t3phi; # gradient w/r unresolved flux
 
 
-
-
-
-
 function proj_positivity(ztilde)
   z = copy(ztilde)
   z[ztilde.>0]=0
@@ -177,7 +173,7 @@ return z
 end
 
 
-function spheroid_crit_multiepochs_fg(xx, gg, polyflux, polyft, data; regularizers=[], epochs_weights = [] )
+function spheroid_crit_multiepochs_fg(xx, gg, polyflux, polyft, data; regularizers=[], epochs_weights = [], verb=true )
 chi2_f = 0.0;
 gg[:] .= 0.0;
 singleepoch_g = zeros(Float64, length(xx));
@@ -186,13 +182,13 @@ if epochs_weights == []
     epochs_weights = ones(Float64, nepochs)/nepochs
 end
 for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-  chi2_f += epochs_weights[i]*spheroid_chi2_fg(xx, singleepoch_g, polyflux[i], polyft[i], data[i], verbose=true);
+  chi2_f += epochs_weights[i]*spheroid_chi2_fg(xx, singleepoch_g, polyflux[i], polyft[i], data[i], verbose=verb);
   gg[:] += epochs_weights[i]*singleepoch_g;
 end
-println("All epochs, weighted chi2: ", chi2_f);
+  println("All epochs, weighted chi2: ", chi2_f);
 # Map regularization
 reg_g = zeros(Float64, length(xx)-1);
-reg_f = spheroid_regularization(xx[2:end], reg_g, regularizers=regularizers, verb = true); #note: adds to reg_g
+reg_f = spheroid_regularization(xx[2:end], reg_g, regularizers=regularizers, verb = verb); #note: adds to reg_g
 gg[2:end] += reg_g
 return chi2_f + reg_f;
 end
@@ -313,7 +309,7 @@ end
 using OptimPackNextGen
 function spheroid_oi_reconstruct(xx_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; lower=0.0, upper=1e99 , epochs_weights =[], printcolor= [], verb = true, maxiter = 100, regularizers =[], bgflux=false )
   xx_sol = [];
-  crit_imaging = (x,g)->spheroid_crit_multiepochs_fg(x, g, polyflux, polyft, data, regularizers=regularizers, epochs_weights=  epochs_weights);
+  crit_imaging = (x,g)->spheroid_crit_multiepochs_fg(x, g, polyflux, polyft, data, regularizers=regularizers, epochs_weights=  epochs_weights, verb=verb);
   xx_sol = OptimPackNextGen.vmlmb(crit_imaging, xx_start, verb=verb, lower=lower, upper=upper,  maxiter=maxiter, blmvm=false, gtol=(0,1e-8));  
     return xx_sol
 end

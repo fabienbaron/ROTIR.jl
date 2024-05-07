@@ -122,14 +122,58 @@ ax.set_ylim(ylim)
 projmap = star_map[star_geometry.index_quads_visible];
 for i=1:star_geometry.nquads_visible
   p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),
-  closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)),fill=true,rasterized=false)
-  ax.add_patch(p);
+  #closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)),fill=true,rasterized=false)
+ closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(round(Int, (projmap[i] - maximum(projmap))/10 + 256)),fill=true,rasterized=false)
+ax.add_patch(p);
 end
-xlabel("x ← E (mas)")
-ylabel("y → N (mas)")
+xlabel("x ← E (mas)", fontsize=20)
+ylabel("y → N (mas)", fontsize=20)
 tight_layout()
 #colorbar() # this will need contours to be defined -> need some work
 end
+
+# function plot2d_temperature(star_map, star_geometry; plotmesh=true, colormap="gist_heat", xlim=Float64[], ylim=Float64[]) # this plots the temperature map onto the projected 2D image plane (= observer view)
+#   patches = pyimport("matplotlib.patches")
+#   set_oiplot_defaults()
+#   fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+#   fig.add_axes([0.15,0.15,0.80,0.80])
+#   ax = gca(); #fig.add_axes([0.05,0.05,0.85,0.85])
+#   ax.locator_params(axis ="y", nbins=5)
+#   ax.locator_params(axis ="x", nbins=5)
+#   ax.set_aspect(1.0)
+#   ax.set_autoscale_on(0)
+#   if plotmesh == true
+#     meshcolor = "grey"
+#   else
+#     meshcolor = "none"
+#   end
+#   axis("equal")
+#   if xlim == []
+#     xlim = [minimum(star_geometry.projx),maximum(star_geometry.projx)]
+#   end
+#   if ylim == []
+#     ylim = [minimum(star_geometry.projy),maximum(star_geometry.projy)]
+#   end
+#   ax.set_xlim(xlim)
+#   ax.set_ylim(ylim)
+#   ax.tick_params(axis="x", labelsize=20)
+#   ax.tick_params(axis="y", labelsize=20)
+#   locs, labels = plt.xticks()
+#   labels = [-float(item) for item in locs]
+#   labels[4] = 0.0
+#   ilabels = map(Int, labels)
+#   plt.xticks(locs, ilabels)
+#   projmap = star_map[star_geometry.index_quads_visible];
+#   for i=1:star_geometry.nquads_visible
+#     p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),
+#     closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)),fill=true,rasterized=false)
+#     #closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(round(Int, 20.0*(projmap[i] - maximum(projmap))/250.0 + 256)),fill=true,rasterized=false)
+#     ax.add_patch(p);
+#   end
+#   xlabel("x ← E (mas)", fontsize=20)
+#   ylabel("y → N (mas)", fontsize=20)
+#   ax.set_aspect("equal")
+#   end
 
 
 function plot2d_intensity(star_map, star_geometry; plotmesh=true, colormap="gist_heat") # this plots the temperature map onto the projected 2D image plane (= observer view)
