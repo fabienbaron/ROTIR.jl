@@ -138,7 +138,7 @@ end
 xlabel("East Left (mas)", fontsize=20)
 ylabel("North Up (mas)", fontsize=20)
 cmap=ColorMap(colormap)
-projmap ./= maximum(projmap)
+projmap ./= maximum(projmap)  # TODO: this for intensity in fact, so we will have to rewrite it properly for temperature
 norm = matplotlib.colors.Normalize(vmin=minimum(projmap), vmax=maximum(projmap)) 
 divider = axdiv.make_axes_locatable(ax)
 cax = divider.append_axes("right", size="5%", pad=0.07)
