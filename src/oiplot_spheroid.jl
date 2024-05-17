@@ -100,15 +100,22 @@ end
 PyPlot.draw()
 end
 
-function plot2d_temperature(star_map, star_geometry; plotmesh=true, colormap="gist_heat", xlim=Float64[], ylim=Float64[]) # this plots the temperature map onto the projected 2D image plane (= observer view)
+function plot2d_temperature(star_map, star_geometry; figtitle ="", plotmesh=false, colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="black") # this plots the temperature map onto the projected 2D image plane (= observer view)
 set_oiplot_defaults()
 patches = pyimport("matplotlib.patches")
+axdiv= pyimport("mpl_toolkits.axes_grid1.axes_divider")
+facecolor="White"
+if background=="black"
+  facecolor="Black"
+end
 fig = figure("Epoch image",figsize=(10,10),facecolor="White")
-ax = gca(); #fig.add_axes([0.05,0.05,0.85,0.85])
+clf();
+ax = gca();
+title(figtitle)
+ax.set_facecolor(facecolor)
+meshcolor = "none"
 if plotmesh == true
   meshcolor = "grey"
-else
-  meshcolor = "none"
 end
 axis("equal")
 if xlim == []
@@ -122,14 +129,22 @@ ax.set_ylim(ylim)
 projmap = star_map[star_geometry.index_quads_visible];
 for i=1:star_geometry.nquads_visible
   p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),
-  #closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)),fill=true,rasterized=false)
- closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(round(Int, (projmap[i] - maximum(projmap))/10 + 256)),fill=true,rasterized=false)
+  closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)),fill=true,rasterized=false)
+ #closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(round(Int, (projmap[i] - maximum(projmap))/10 + 256)),fill=true,rasterized=false)
 ax.add_patch(p);
 end
-xlabel("x ← E (mas)", fontsize=20)
-ylabel("y → N (mas)", fontsize=20)
-tight_layout()
-#colorbar() # this will need contours to be defined -> need some work
+#ax.tick_params(axis="x", colors=axiscolor)
+#ax.tick_params(axis="y", colors=axiscolor)
+xlabel("East Left (mas)", fontsize=20)
+ylabel("North Up (mas)", fontsize=20)
+cmap=ColorMap(colormap)
+projmap ./= maximum(projmap)
+norm = matplotlib.colors.Normalize(vmin=minimum(projmap), vmax=maximum(projmap)) 
+divider = axdiv.make_axes_locatable(ax)
+cax = divider.append_axes("right", size="5%", pad=0.07)
+cb=colorbar(matplotlib.cm.ScalarMappable(norm=norm,cmap=cmap), cax=cax)
+
+#tight_layout()
 end
 
 # function plot2d_temperature(star_map, star_geometry; plotmesh=true, colormap="gist_heat", xlim=Float64[], ylim=Float64[]) # this plots the temperature map onto the projected 2D image plane (= observer view)
