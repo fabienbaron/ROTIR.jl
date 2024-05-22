@@ -101,7 +101,8 @@ PyPlot.draw()
 end
 
 function plot2d_temperature(star_map, star_geometry; figtitle ="", plotmesh=false, colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="black") # this plots the temperature map onto the projected 2D image plane (= observer view)
-set_oiplot_defaults()
+# star_map = temperature; star_geometry=star_epoch_geom[1]; figtitle =""; plotmesh=false; colormap="gist_heat"; xlim=Float64[]; ylim=Float64[]; background="black";
+  set_oiplot_defaults()
 patches = pyimport("matplotlib.patches")
 axdiv= pyimport("mpl_toolkits.axes_grid1.axes_divider")
 facecolor="White"
@@ -113,10 +114,6 @@ clf();
 ax = gca();
 title(figtitle)
 ax.set_facecolor(facecolor)
-meshcolor = "none"
-if plotmesh == true
-  meshcolor = "grey"
-end
 axis("equal")
 if xlim == []
   xlim = [maximum(star_geometry.projx), minimum(star_geometry.projx)]
@@ -127,10 +124,10 @@ end
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 projmap = star_map[star_geometry.index_quads_visible];
+colours = get_cmap(colormap).(projmap/maximum(projmap))
+
 for i=1:star_geometry.nquads_visible
-  p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),
-  closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]/maximum(projmap)),fill=true,rasterized=false)
- #closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(round(Int, (projmap[i] - maximum(projmap))/10 + 256)),fill=true,rasterized=false)
+p = patches.Polygon(hcat(star_geometry.projx[i,:],star_geometry.projy[i,:]),closed=true,edgecolor= (plotmesh == true) ? "lightgrey" : colours[i],facecolor=colours[i],fill=true,rasterized=false)
 ax.add_patch(p);
 end
 #ax.tick_params(axis="x", colors=axiscolor)
