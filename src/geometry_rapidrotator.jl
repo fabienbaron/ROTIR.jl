@@ -1,8 +1,13 @@
+function f_rapid_rot(x)
+   return 3*cos.((pi .+ acos.(x))/3)./x;
+end
+
+
 @views function update_radii_rapidrot(tessels::tessellation, star_parameters)
   # Return radius
   rpole = star_parameters.radius;
   ω = star_parameters.frac_escapevel;
-  r = 3rpole*cos.((pi .+ acos.(ω*sin.(tessels.unit_spherical[:,:,2])))/3)./(ω*sin.(tessels.unit_spherical[:,:,2]));
+  r = rpole * f_rapid_rot(ω*sin.(tessels.unit_spherical[:,:,2])); 
   # Fix for ω sin \theta  -->0
   r[r .== Inf] .= rpole;
   # Rewrite pole radius values
@@ -72,7 +77,7 @@ end
 # end
 
 # von Zeipel law
-function calc_tempmap_vZ(stellar_parameters,star_epoch_geom; offsets = [0.0,0.0,0.0], GM = 1.0)
+@views function calc_tempmap_vZ(stellar_parameters,star_epoch_geom; offsets = [0.0,0.0,0.0], GM = 1.0)
   delx = offsets[1]; 
   dely = offsets[2]; 
   delz = offsets[3];
@@ -90,9 +95,7 @@ function calc_tempmap_vZ(stellar_parameters,star_epoch_geom; offsets = [0.0,0.0,
   g_rpole = -GM/(rpole.^2); # second term is zero
   g_theta_pole = 0.0;
   g_pole = sqrt.(g_rpole.^2 + g_theta_pole.^2);
-
-  # Teff(theta) = T_pole*(g(theta)/g_pole)^(beta_vZ)
-  star_map = teff_pole*((g_theta/g_pole).^stellar_parameters.beta_vZ)
+  star_map = teff_pole*((g_theta/g_pole).^stellar_parameters.beta)
   return star_map
 end
 

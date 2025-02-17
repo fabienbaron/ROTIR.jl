@@ -8,7 +8,7 @@ using DelimitedFiles
 # using LsqFit
 
 rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
-rcParams["font.family"] = "serif"
+#rcParams["font.family"] = "serif"
 #rcParams["font.serif"] = "Times New Roman"
 rcParams["xtick.top"] = true
 rcParams["xtick.direction"] = "in"

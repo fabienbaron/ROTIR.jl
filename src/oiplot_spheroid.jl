@@ -1408,19 +1408,19 @@ function plot2d_temperature_binary_poleline(star_map1, star_map2, star_geometry1
 end
 
 
-#note: this requires healpy
-function healpyplot(x; vmin = -1e9, vmax = 1e9)
-  if vmin==-1e9
-    vmin = minimum(x)
-  end
-  if vmax==1e9
-    vmax = maximum(x)
-  end
-hp=pyimport("healpy.visufunc")
-hp.mollview(x, nest=true, fig=1, min=vmin, max=vmax, rot=0, flip="geo", cbar=false, cmap="gist_heat", title="")
-hp.graticule(dpar=10, dmer=10,  force=true, verbose=false, lw=0.25)
-hp.cartview(x, nest=true, fig=2, min=vmin, max=vmax, rot=0, flip="geo", cbar=false, cmap="gist_heat", title="")
-hp.graticule(dpar=10, dmer=10,  force=true, verbose=false, lw=0.25)
-hp.orthview(x, nest=true, fig=3, min=vmin, max=vmax, rot=0, flip="geo", cbar=false, cmap="gist_heat", title="")
-hp.graticule(dpar=10, dmer=10,  force=true, verbose=false, lw=0.25)
-end
+# #note: this requires healpy
+# function healpyplot(x; vmin = -1e9, vmax = 1e9)
+#   if vmin==-1e9
+#     vmin = minimum(x)
+#   end
+#   if vmax==1e9
+#     vmax = maximum(x)
+#   end
+# hp=pyimport("healpy.visufunc")
+# hp.mollview(x, nest=true, fig=1, min=vmin, max=vmax, rot=0, flip="geo", cbar=false, cmap="gist_heat", title="")
+# hp.graticule(dpar=10, dmer=10,  force=true, verbose=false, lw=0.25)
+# hp.cartview(x, nest=true, fig=2, min=vmin, max=vmax, rot=0, flip="geo", cbar=false, cmap="gist_heat", title="")
+# hp.graticule(dpar=10, dmer=10,  force=true, verbose=false, lw=0.25)
+# hp.orthview(x, nest=true, fig=3, min=vmin, max=vmax, rot=0, flip="geo", cbar=false, cmap="gist_heat", title="")
+# hp.graticule(dpar=10, dmer=10,  force=true, verbose=false, lw=0.25)
+# end

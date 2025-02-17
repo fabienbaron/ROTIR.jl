@@ -28,12 +28,12 @@ star_params = (
               position_angle =      24,  # degrees; position_angle
               rotation_period=    54.8,  # rotation period in days
               beta           =    0.08,  # exponent for von Zeipel law
-              frac_escapevel =      0.4, # unitless; fractional rotational velocity
+              frac_escapevel =      0.9, # unitless; fractional rotational velocity
               B_rot =               0.  # 2nd constant for rotational velocity              
               )
 
 n=3; 
 tessels = tessellation_healpix(n)
-# To create the epoch corresponding to t = tepochs[2]
-t = tepochs[2];
-stars = create_star_multiepochs(tessels, star_params, tepochs)
+stars = create_star_multiepochs(tessels, star_params, tepochs);
+star_map = calc_tempmap_vZ(star_params,stars[1]);
+plot2d_temperature_allepochs(star_map, stars)

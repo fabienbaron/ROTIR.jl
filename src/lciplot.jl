@@ -3,8 +3,8 @@ using PyPlot
 
 ENV["MPLBACKEND"] = "qt5agg"
 rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
-rcParams["font.family"] = "serif"
-rcParams["font.serif"] = "Times New Roman"
+#rcParams["font.family"] = "serif"
+#rcParams["font.serif"] = "Times New Roman"
 # rcParams["font.size"] = 15
 rcParams["xtick.top"] = true
 rcParams["xtick.direction"] = "in"
