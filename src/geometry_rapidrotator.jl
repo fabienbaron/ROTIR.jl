@@ -5,7 +5,7 @@ end
 
 @views function update_radii_rapidrot(tessels::tessellation, star_parameters)
   # Return radius
-  rpole = star_parameters.radius;
+  rpole = star_parameters.rpole;
   ω = star_parameters.frac_escapevel;
   r = rpole * f_rapid_rot(ω*sin.(tessels.unit_spherical[:,:,2])); 
   # Fix for ω sin \theta  -->0
@@ -84,7 +84,7 @@ end
   rpole = stellar_parameters.radius;
   r_theta = sqrt.((star_epoch_geom.vertices_xyz[:,5,1] .- delx).^2 + (star_epoch_geom.vertices_xyz[:,5,2] .- dely).^2 + (star_epoch_geom.vertices_xyz[:,5,3] .- delz).^2);
   theta = star_epoch_geom.vertices_spherical[:,5,2];
-  teff_pole = stellar_parameters.temperature;
+  teff_pole = stellar_parameters.tpole;
 
   omega_crit = sqrt.(8.0*GM/(27.0*rpole^3));
   omega = stellar_parameters.frac_escapevel*omega_crit;

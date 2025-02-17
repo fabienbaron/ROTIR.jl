@@ -1,31 +1,47 @@
 include("orbits.jl")
 import Base: Math as math
 
-function update_roche_radii_single(star1_geom::tessellation, bparameters, D, use_fillout_factor = false, secondary = false) 
-    # if wanting to call this for secondary=true, invert bparameters.q;
-    fillout_factor1 = bparameters.fillout_factor[1];
-    async_ratio1 = bparameters.star1.rotation_period/bparameters.P
-    a = bparameters.a;
-    q = bparameters.q;
+function update_roche_radii(tessels::tessellation, binary_parameters, D; use_fillout_factor = false, secondary = false, T=Float64) 
+    # if wanting to call this for secondary=true, invert binary_parameters.q;
+    potential_function = compute_potential_primary
+    if secondary == true
+        potential_function = compute_potential_secondary
+    end
+    fillout_factor = binary_parameters.fillout_factor_primary;
+    if secondary == true
+        fillout_factor = binary_parameters.fillout_factor_secondary;
+    end
+    async_ratio = binary_parameters.star1.rotation_period/binary_parameters.P
+    a = binary_parameters.a;
+    q = binary_parameters.q;
+    rpole = binary_parameters.star1.rpole
     # Compute surface potentials and good init 
-    potS1, r_init1 = get_surface_potential(bparameters.star1.rpole/a, D, q, async_ratio1, fillout_factor1, use_fillout_factor = use_fillout_factor, secondary=secondary);
-     # Update the radii r at each (θ,ϕ) to match the surface potential
-    star1_roche_geom = update_roche_geom(star1_geom, r_init1, potS1, a, D, q, async_ratio1);
-    return star1_roche_geom
+    pot_surface, r_init = get_surface_potential(rpole/a, D, q, async_ratio, fillout_factor, use_fillout_factor = use_fillout_factor, secondary=secondary);
+    # Update the radii r(θ,ϕ) to match the surface potential
+    npix = tessels.npix
+    r = zeros(T, npix, 5);
+    for ii = 1:npix
+        for jj = 1:5
+            r[ii,jj] = a*solve_radius(r_init, pot_surface, D, tessels.unit_spherical[ii,jj,2], tessels.unit_spherical[ii,jj,3], q, async_ratio, potential_function);
+        end
+    end    
+    return r
 end
- 
-function update_roche_radii(star1_geom::tessellation, star2_geom::tessellation, bparameters, D, use_fillout_factor = false) # updates both primary and secondary
+
+
+# TODO: update with the new scheme
+function update_roche_radii_binary(star1_geom::tessellation, star2_geom::tessellation, binary_parameters, D, use_fillout_factor = false) # updates both primary and secondary
 ## TEST star1_geom = star1; star2_geom =  star2; use_fillout_factor = false; 
-    fillout_factor1 = bparameters.fillout_factor[1];
-    fillout_factor2 = bparameters.fillout_factor[1];
-    async_ratio1 = bparameters.star1.rotation_period/bparameters.P
-    async_ratio2 = bparameters.star2.rotation_period/bparameters.P
-    a = bparameters.a
-    q = bparameters.q;
+    fillout_factor1 = binary_parameters.fillout_factor[1];
+    fillout_factor2 = binary_parameters.fillout_factor[1];
+    async_ratio1 = binary_parameters.star1.rotation_period/binary_parameters.P
+    async_ratio2 = binary_parameters.star2.rotation_period/binary_parameters.P
+    a = binary_parameters.a
+    q = binary_parameters.q;
     
     # Compute surface potentials and good init 
-    potS1, r_init1 = get_surface_potential(bparameters.star1.rpole/a, D, q, async_ratio1, fillout_factor1, use_fillout_factor = use_fillout_factor);
-    potS2, r_init2 = get_surface_potential(bparameters.star2.rpole/a, D, 1/q, async_ratio2, fillout_factor2, use_fillout_factor = use_fillout_factor, secondary = true);
+    potS1, r_init1 = get_surface_potential(binary_parameters.star1.rpole/a, D, q, async_ratio1, fillout_factor1, use_fillout_factor = use_fillout_factor);
+    potS2, r_init2 = get_surface_potential(binary_parameters.star2.rpole/a, D, 1/q, async_ratio2, fillout_factor2, use_fillout_factor = use_fillout_factor, secondary = true);
    
     # Update the radii r at each (θ,ϕ) to match the surface potential
     star1_roche_geom = update_roche_geom(star1_geom, r_init1, potS1, a, D, q, async_ratio1);
@@ -34,10 +50,10 @@ function update_roche_radii(star1_geom::tessellation, star2_geom::tessellation, 
 end
 
 function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false)
-## TEST rpole_a =bparameters.star1.rpole/a; async_ratio=async_ratio1; fillout_factor = fillout_factor1; potential_f=compute_potential_primary
-  potential_f = compute_potential_primary
+## TEST rpole_a =binary_parameters.star1.rpole/a; async_ratio=async_ratio1; fillout_factor = fillout_factor1; potential_function=compute_potential_primary
+  potential_function = compute_potential_primary
   if secondary == true
-      potential_f = compute_potential_secondary
+      potential_function = compute_potential_secondary
   end
 
   if (use_fillout_factor == true)
@@ -48,13 +64,13 @@ function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secon
     # if secondary == true  # This function already takes 1/q
     #     rtry = radius_leahy(1/q)
     # end
-    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_f, secondary = secondary)
-    pot_L1, ~ = potential_f(R_L1, D, Int(-2*(secondary == true)+1)*pi/2, 0.0, q, async_ratio) # Primary -> π/2, Secondary -> -π/2
+    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary = secondary)
+    pot_L1, ~ = potential_function(R_L1, D, Int(-2*(secondary == true)+1)*pi/2, 0.0, q, async_ratio) # Primary -> π/2, Secondary -> -π/2
     potS = (pot_L1 + 0.5 * q * q / (1.0 + q)) / fillout_factor - 0.5 * q * q / (1.0 + q)
     return potS, rtry
   else
     #  Radius at the North pole defines the potential
-    potS, ~ = potential_f(rpole_a, D, 0.0, 0.0, q, async_ratio)    
+    potS, ~ = potential_function(rpole_a, D, 0.0, 0.0, q, async_ratio)    
     return potS, rpole_a
 end
 end
@@ -128,18 +144,18 @@ function compute_potential_secondary(r, D, θ, ϕ, q, async_ratio)
 end
 
 
-function solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_f)
+function solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function)
     # r0 = r_init; θ = star.vertices_spherical[ii,jj,2]; ϕ = star.vertices_spherical[ii,jj,3]
-    # r0 = 0.5923035715675565; θ = 0.0; ϕ = 0.0; pot_surface = 4.45647759841041; potential_f = compute_potential_primary
-    fgh = r->potential_f(r, D, θ, ϕ, q, async_ratio);
+    # r0 = 0.5923035715675565; θ = 0.0; ϕ = 0.0; pot_surface = 4.45647759841041; potential_function = compute_potential_primary
+    fgh = r->potential_function(r, D, θ, ϕ, q, async_ratio);
     # close(); plot([fg(r)[1] for r in range(0.0001, D, length=1000)])
     r = halley(r0, pot_surface, fgh);
     return r
 end
 
 
-function solve_R_L1(r0, D, q, async_ratio, potential_f; secondary = false, verbose = false)
-    fg = r->potential_f(r, D, Int(-2*(secondary == true)+1)*pi/2, 0.0, q, async_ratio); 
+function solve_R_L1(r0, D, q, async_ratio, potential_function; secondary = false, verbose = false)
+    fg = r->potential_function(r, D, Int(-2*(secondary == true)+1)*pi/2, 0.0, q, async_ratio); 
     r = halley(r0, 0.0, fg, verbose = verbose);
     return r
 end
@@ -165,23 +181,6 @@ function halley(x0, f0, fgh; ϵ = 1e-5, verbose=false)
    return x
 end
 
-function update_roche_geom(star::tessellation, r_init, pot_surface, a, D, q, async_ratio; secondary=false)
-    #TEST star = star1; r_init = radius_leahy(q); pot_surface=potS1; async_ratio = async_ratio1; secondary=false
-    potential_f = compute_potential_primary
-    if secondary == true
-        potential_f = compute_potential_secondary
-    end
-    npix = star.npix
-    for ii = 1:npix
-        for jj = 1:5
-            star.vertices_spherical[ii,jj,1] = a*solve_radius(r_init, pot_surface, D, star.vertices_spherical[ii,jj,2], star.vertices_spherical[ii,jj,3], q, async_ratio, potential_f);
-        end
-    end
-    star.vertices_xyz[:,:,1] = star.vertices_spherical[:,:,1].*sin.(star.vertices_spherical[:,:,2]).*cos.(star.vertices_spherical[:,:,3]); # X -> -Y
-    star.vertices_xyz[:,:,2] = star.vertices_spherical[:,:,1].*sin.(star.vertices_spherical[:,:,2]).*sin.(star.vertices_spherical[:,:,3]); # Y -> -X
-    star.vertices_xyz[:,:,3] = star.vertices_spherical[:,:,1].*cos.(star.vertices_spherical[:,:,2]); # Z
-    return tessellation(npix, star.vertices_xyz, star.vertices_spherical); # Should we just return star and make this update_roche_geom!
-end
 
 function compute_gravity_primary(r,θ,ϕ,D,q,async_ratio)
     # r = dimensionless radius
@@ -217,20 +216,20 @@ function compute_gravity_secondary(r,θ,ϕ,D,q,async_ratio)
     return sqrt.(gx.*gx + gy.*gy + gz.*gz);
 end
 
-function compute_teff_vonzeipel(bparameters::binaryparameters, star_geom, tepoch; secondary = false)
-    # TEST bparameters=  binary_parameters; secondary = false; star_geom = primary_geom; tepoch = tepochs[1]
-    stellar_parameters = bparameters.star1
+function compute_teff_vonzeipel(binary_parameters::binaryparameters, star_geom, tepoch; secondary = false)
+    # TEST binary_parameters=  binary_parameters; secondary = false; star_geom = primary_geom; tepoch = tepochs[1]
+    stellar_parameters = binary_parameters.star1
     if secondary == true
-        stellar_parameters = bparameters.star2;
+        stellar_parameters = binary_parameters.star2;
     end
-    rpole = stellar_parameters.rpole/bparameters.a
+    rpole = stellar_parameters.rpole/binary_parameters.a
     tpole = stellar_parameters.tpole
-    r = star_geom.vertices_spherical[:, 5 ,1]/bparameters.a
+    r = star_geom.vertices_spherical[:, 5 ,1]/binary_parameters.a
     θ = star_geom.vertices_spherical[:, 5, 2]
     ϕ = star_geom.vertices_spherical[:, 5, 3]
-    D = compute_separation(bparameters, tepoch)
-    async_ratio = stellar_parameters.rotation_period/bparameters.P
-    q = bparameters.q
+    D = compute_separation(binary_parameters, tepoch)
+    async_ratio = stellar_parameters.rotation_period/binary_parameters.P
+    q = binary_parameters.q
     β = stellar_parameters.beta_vZ
     # Compute gravity
     compute_gravity = compute_gravity_primary;
@@ -258,11 +257,11 @@ function radius_leahy(q) # Leahy & Leahy 2015 "A calculator for Roche lobe prope
     return a1*q^a4/(a2*q^a5+log(1+a3*q^(a4+1/3)))
 end
 
-# function solve_radius_newton_raphson(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_f)
+# function solve_radius_newton_raphson(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function)
 #     # Prone to convergence issues unless initialized at good location
-#     # Example r0 = 0.5923035715675565; θ = 0.0; ϕ = 0.0; pot_surface = 4.45647759841041; potential_f = compute_potential_primary
+#     # Example r0 = 0.5923035715675565; θ = 0.0; ϕ = 0.0; pot_surface = 4.45647759841041; potential_function = compute_potential_primary
 #     # ---> will give NaN. Alternative is Interval Newton or Halley's method
-#     fg = r->potential_f(r, D, θ, ϕ, q, async_ratio);
+#     fg = r->potential_function(r, D, θ, ϕ, q, async_ratio);
 #     # close(); plot([fg(r)[1] for r in range(0.0001, D, length=1000)])
 #     r = newton_raphson(r0, pot_surface, fg, verbose = true);
 #     return r

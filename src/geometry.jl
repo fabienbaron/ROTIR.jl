@@ -133,7 +133,12 @@ function compute_radii(tessels::tessellation, star_params)
     r = update_radii_rapidrot(tessels, star_params);
     xyz = r.*tessels.unit_xyz;
   elseif star_params.surface_type == 3
-    println("Roche lobe")
+    # Star params will actually be binary params
+    # Compute D here?
+    # TODO: fix this
+    D = ...
+    r = update_roche_radii(tessels, binary_parameters, D) 
+    xyz = r.*tessels.unit_xyz;
   end
   return r, xyz
 end
@@ -182,7 +187,7 @@ function create_star(tessels::tessellation, star_params, t; secondary=false, bin
   # Limb-darkening map
   μ = abs.(normals[:,3].*max.(normals[:,3], 0))
   ldmap = compute_ldmap(μ,star_params)
-  spherical=copy(tessels.unit_spherical);
+  spherical = copy(tessels.unit_spherical);
   spherical[:,:,1] = r
   # Single star
   center = T.([0.0,0.0,0.0]);
