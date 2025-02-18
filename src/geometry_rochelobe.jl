@@ -1,20 +1,16 @@
 include("orbits.jl")
 import Base: Math as math
 
+# The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
+#
 function update_roche_radii(tessels::tessellation, binary_parameters, D; use_fillout_factor = false, secondary = false, T=Float64) 
     # if wanting to call this for secondary=true, invert binary_parameters.q;
-    potential_function = compute_potential_primary
-    if secondary == true
-        potential_function = compute_potential_secondary
-    end
-    fillout_factor = binary_parameters.fillout_factor_primary;
-    if secondary == true
-        fillout_factor = binary_parameters.fillout_factor_secondary;
-    end
-    async_ratio = binary_parameters.star1.rotation_period/binary_parameters.P
+    secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
+    secondary == false ? fillout_factor = binary_parameters.fillout_factor_primary : fillout_factor = binary_parameters.fillout_factor_secondary;
+    async_ratio = binary_parameters.rotation_period/binary_parameters.P
     a = binary_parameters.a;
     q = binary_parameters.q;
-    rpole = binary_parameters.star1.rpole
+    rpole = binary_parameters.rpole
     # Compute surface potentials and good init 
     pot_surface, r_init = get_surface_potential(rpole/a, D, q, async_ratio, fillout_factor, use_fillout_factor = use_fillout_factor, secondary=secondary);
     # Update the radii r(θ,ϕ) to match the surface potential
@@ -216,8 +212,29 @@ function compute_gravity_secondary(r,θ,ϕ,D,q,async_ratio)
     return sqrt.(gx.*gx + gy.*gy + gz.*gz);
 end
 
-function compute_teff_vonzeipel(binary_parameters::binaryparameters, star_geom, tepoch; secondary = false)
-    # TEST binary_parameters=  binary_parameters; secondary = false; star_geom = primary_geom; tepoch = tepochs[1]
+function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false)
+    rpole = parameters.rpole/parameters.a
+    tpole = parameters.tpole
+    r = star_geom.vertices_spherical[:, 5 ,1]/parameters.a
+    θ = star_geom.vertices_spherical[:, 5, 2]
+    ϕ = star_geom.vertices_spherical[:, 5, 3]
+    D = compute_separation(parameters, t)
+    async_ratio = parameters.rotation_period/parameters.P
+    q = parameters.q
+    β = parameters.beta
+    # Compute gravity
+    compute_gravity = compute_gravity_primary;
+    if secondary == true
+        compute_gravity = compute_gravity_secondary;
+    end
+    g_pole = compute_gravity(rpole,0.0,0.0,D,q,async_ratio);
+    gravity_map = compute_gravity(r,θ,ϕ,D,q,async_ratio);
+     # Computes von Zeipel temperature map directly from the gravity map
+    Teff = tpole*(gravity_map./g_pole).^β;
+    return Teff
+end
+
+function temperature_map_vonZeipel_roche(binary_parameters, star_geom, t; secondary = false)
     stellar_parameters = binary_parameters.star1
     if secondary == true
         stellar_parameters = binary_parameters.star2;
@@ -227,10 +244,10 @@ function compute_teff_vonzeipel(binary_parameters::binaryparameters, star_geom, 
     r = star_geom.vertices_spherical[:, 5 ,1]/binary_parameters.a
     θ = star_geom.vertices_spherical[:, 5, 2]
     ϕ = star_geom.vertices_spherical[:, 5, 3]
-    D = compute_separation(binary_parameters, tepoch)
+    D = compute_separation(binary_parameters, t)
     async_ratio = stellar_parameters.rotation_period/binary_parameters.P
     q = binary_parameters.q
-    β = stellar_parameters.beta_vZ
+    β = stellar_parameters.beta
     # Compute gravity
     compute_gravity = compute_gravity_primary;
     if secondary == true

@@ -19,9 +19,9 @@ tessels = tessellation_healpix(n)
 
 ## Rapid rotator
 star_params = (
-              surface_type  = 2      ,   # Round:0, Ellipsoid: 1, Rapid Rotator:2, Roche: 3
-              radius        = 1.37131,   # milliarcseconds (radius at pole)
-              temperature    =   4800.0, #  # Kelvin (at pole)
+              surface_type   = 2      ,   # Round:0, Ellipsoid: 1, Rapid Rotator:2, Roche: 3
+              rpole          = 1.37131,   # milliarcseconds (radius at pole)
+              tpole          =   4800.0, #  # Kelvin (at pole)
               ldtype         =      3,   # LD type  1: Linear 2: quadratic 3: power (Hestroffer)
               ld1            =  0.22886, # limb darkening,first coefficient is for LD law type, then LD coefficients
               ld2            =    0.0,   # second ld coeff, used if needed
@@ -34,5 +34,5 @@ star_params = (
               )
 
 stars = create_star_multiepochs(tessels, star_params, tepochs);
-star_map = calc_tempmap_vZ(star_params,stars[1]);
+star_map = temperature_map_vonZeipel_rapid_rotator(star_params,stars[1]);
 plot2d_temperature_allepochs(star_map, stars)

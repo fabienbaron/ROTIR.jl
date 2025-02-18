@@ -38,7 +38,7 @@ function compute_coeff(Omega, inclination, omega)
 end
 
 # Solve relative binary orbit
-function binary_orbit_rel(bparameters::binaryparameters,tepoch::Float64)
+function binary_orbit_rel(bparameters,tepoch::Float64)
     Ω = bparameters.Ω*pi/180.; # longitude of ascending node
     i = bparameters.i*pi/180.;
     ω = bparameters.ω*pi/180.; # argument of periapsis
@@ -52,7 +52,7 @@ function binary_orbit_rel(bparameters::binaryparameters,tepoch::Float64)
     return 0.0, 0.0, 0.0, x, y, z
 end
 
-function binary_orbit_rel_alt(bparameters::binaryparameters,tepoch::Float64)
+function binary_orbit_rel_alt(bparameters,tepoch::Float64)
     Ω = bparameters.Ω*pi/180.; # longitude of ascending node
     i = bparameters.i*pi/180.;
     ω = bparameters.ω*pi/180.; # argument of periapsis
@@ -64,7 +64,7 @@ function binary_orbit_rel_alt(bparameters::binaryparameters,tepoch::Float64)
 end
 
 # Solve absolute binary orbit
-function binary_orbit_abs(bparameters::binaryparameters,tepoch::Float64)
+function binary_orbit_abs(bparameters,tepoch::Float64)
     Ω = bparameters.Ω*pi/180.0; # longitude of ascending node
     i = bparameters.i*pi/180.0;
     ω = bparameters.ω*pi/180.0; # argument of periapsis
@@ -111,7 +111,7 @@ end
 
 
 
-function compute_separation_alt(bparameters::binaryparameters, tepoch) # uses true anomaly
+function compute_separation_alt(bparameters, tepoch) # uses true anomaly
   # dimentionless instantaneous separation of the centers of mass of the two stars
   # Multiply by a to find the real separation
   ν = compute_true_anomaly(bparameters, tepoch);
@@ -120,7 +120,7 @@ function compute_separation_alt(bparameters::binaryparameters, tepoch) # uses tr
   return D
 end
 
-function compute_separation(bparameters::binaryparameters, tepoch) 
+function compute_separation(bparameters, tepoch) 
     # dimentionless instantaneous separation of the centers of mass of the two stars
     # Multiply by a to find the real separation
     E = compute_eccentric_anomaly(bparameters, tepoch);
@@ -172,7 +172,7 @@ end
 # [norm((E .+ 2*atan.((e/(1+sqrt(1-e^2))*sin.(E)) ./ (1 .-  e/(1+sqrt(1-e^2))*cos.(E))))-(2*atan.(sqrt((1+e)/(1-e))*tan.(E/2)))) for e in epool]
 # [norm((E .+ 2*atan.((e/(1+sqrt(1-e^2))*sin.(E)) ./ (1 .-  e/(1+sqrt(1-e^2))*cos.(E))))-(2*atan.(sqrt((1+e)/(1-e))*tan.(E/2)))) for e in epool]
 
-# function binary_orbit_vel(bparameters::binaryparameters,tepoch::Vector{Float64})
+# function binary_orbit_vel(bparameters,tepoch::Vector{Float64})
 #     Omega = bparameters.long_ascending_node*pi/180.; # longitude of ascending node
 #     inclination = bparameters.orbit_incl*pi/180.;
 #     omega = bparameters.arg_pariapsis*pi/180.; # argument of periapsis
@@ -195,7 +195,7 @@ end
 #     return velx, vely, velz
 # end
 
-function compute_masses(bparameters::binaryparameters)
+function compute_masses(bparameters)
     G = 6.67408e-11; # m^3/kg/s^2
     M_sun = 1.98847e30; # kg
     rad_mas = 180/pi*3600*1000
@@ -209,7 +209,7 @@ function compute_masses(bparameters::binaryparameters)
     return m1, m2
 end
 
-function binary_RV(bparameters::binaryparameters, tepoch::Union{Float64, Vector{Float64}}; K1::Float64, K2::Float64, γ::Float64)
+function binary_RV(bparameters, tepoch::Union{Float64, Vector{Float64}}; K1::Float64, K2::Float64, γ::Float64)
     ω = bparameters.ω*pi/180.0; # argument of periapsis
     e = bparameters.e;
     ν = compute_true_anomaly(bparameters, tepoch)

@@ -26,11 +26,11 @@ end
 function oblate_const(stellar_parameters) # Approximate a rapid rotator by an oblate spheroid
     # Get oblate part using Gerard's approximation
     if (stellar_parameters.frac_escapevel >= 1.e-10)
-      a = b = 3.0*stellar_parameters.radius.*cos((pi + acos(stellar_parameters.frac_escapevel*sin(pi/2.0)))/3.0)./
+      a = b = 3.0*stellar_parameters.rpole.*cos((pi + acos(stellar_parameters.frac_escapevel*sin(pi/2.0)))/3.0)./
         (stellar_parameters.frac_escapevel*sin(pi/2.));
-      c = stellar_parameters.radius;
+      c = stellar_parameters.rpole;
    elseif (stellar_parameters.frac_escapevel <= 1.e-10)
-     a = b = c = stellar_parameters.radius;
+     a = b = c = stellar_parameters.rpole;
    end
    return a,b,c
 end
@@ -58,10 +58,10 @@ end
 
 # function calc_grelmap_vZ(stellar_parameters,star_epoch_geom; offsets = [0.0,0.0,0.0], GM = 1.0)
 #     delx = offsets[1]; dely = offsets[2]; delz = offsets[3];
-#     rpole = stellar_parameters.radius;
+#     rpole = stellar_parameters.rpole;
 #     r_theta = sqrt.((star_epoch_geom.vertices_xyz[:,5,1] .- delx).^2 + (star_epoch_geom.vertices_xyz[:,5,2] .- dely).^2 + (star_epoch_geom.vertices_xyz[:,5,3] .- delz).^2);
 #     theta = star_epoch_geom.vertices_spherical[:,5,2];
-#     teff_pole = stellar_parameters.temperature;
+#     teff_pole = stellar_parameters.tpole;
 
 #     omega_crit = sqrt.(8.0*GM/(27.0*rpole^3));
 #     omega = stellar_parameters.frac_escapevel*omega_crit;
@@ -77,11 +77,11 @@ end
 # end
 
 # von Zeipel law
-@views function calc_tempmap_vZ(stellar_parameters,star_epoch_geom; offsets = [0.0,0.0,0.0], GM = 1.0)
+@views function temperature_map_vonZeipel_rapid_rotator(stellar_parameters,star_epoch_geom; offsets = [0.0,0.0,0.0], GM = 1.0)
   delx = offsets[1]; 
   dely = offsets[2]; 
   delz = offsets[3];
-  rpole = stellar_parameters.radius;
+  rpole = stellar_parameters.rpole;
   r_theta = sqrt.((star_epoch_geom.vertices_xyz[:,5,1] .- delx).^2 + (star_epoch_geom.vertices_xyz[:,5,2] .- dely).^2 + (star_epoch_geom.vertices_xyz[:,5,3] .- delz).^2);
   theta = star_epoch_geom.vertices_spherical[:,5,2];
   teff_pole = stellar_parameters.tpole;
@@ -104,11 +104,11 @@ end
 # TBD!!
 #=function calc_tempmap_ELR(stellar_parameters,star_epoch_geom)
     # rpole/R(theta)
-    star_radius_ratio = stellar_parameters.radius./(sqrt.(star_epoch_geom.vertices_xyz[:,1,5].^2 +
+    star_radius_ratio = stellar_parameters.rpole./(sqrt.(star_epoch_geom.vertices_xyz[:,1,5].^2 +
         star_epoch_geom.vertices_xyz[:,2,5].^2 + star_epoch_geom.vertices_xyz[:,3,5].^2));
 
     # teff(theta) = t_pole*(g(theta)/g_pole)^(beta_vZ)
-    star_map = stellar_parameters.temperature.*((star_radius_ratio.^4) -
+    star_map = stellar_parameters.tpole.*((star_radius_ratio.^4) -
         2.*8./27.*star_radius_ratio.*stellar_parameters.frac_escapevel.*(sin.(star_epoch_geom.vertices_spherical[:,2,5])).^2 +
         ((8.*star_radius_ratio/27.).^2).*((stellar_parameters.frac_escapevel.*sin.(star_epoch_geom.vertices_spherical[:,2,5])).^4) +
         ((8.*star_radius_ratio.*sin.(star_epoch_geom.vertices_spherical[:,2,5]).*cos.(star_epoch_geom.vertices_spherical[:,2,5])/27.).^2).*
@@ -119,15 +119,15 @@ end=#
 
 #=function calc_tempmap_ELR(stellar_parameters,star_epoch_geom)
     # r_tilde = R/R_equator; unitless
-    r_tilde = stellar_parameters.radius./maximum(stellar_parameters.radius);
+    r_tilde = stellar_parameters.rpole./maximum(stellar_parameters.rpole);
 
 
 
-    star_radius_ratio = stellar_parameters.radius./(sqrt.(star_epoch_geom.vertices_xyz[:,1,5].^2 +
+    star_radius_ratio = stellar_parameters.rpole./(sqrt.(star_epoch_geom.vertices_xyz[:,1,5].^2 +
         star_epoch_geom.vertices_xyz[:,2,5].^2 + star_epoch_geom.vertices_xyz[:,3,5].^2));
 
     # teff(theta) = t_pole*(g(theta)/g_pole)^(beta_vZ)
-    star_map = stellar_parameters.temperature.*((star_radius_ratio.^4) -
+    star_map = stellar_parameters.tpole.*((star_radius_ratio.^4) -
         2.0*8.0/27.*star_radius_ratio.*stellar_parameters.frac_escapevel.*(sin.(star_epoch_geom.vertices_spherical[:,2,5])).^2 +
         ((8.*star_radius_ratio/27.).^2).*((stellar_parameters.frac_escapevel.*sin.(star_epoch_geom.vertices_spherical[:,2,5])).^4) +
         ((8.*star_radius_ratio.*sin.(star_epoch_geom.vertices_spherical[:,2,5]).*cos.(star_epoch_geom.vertices_spherical[:,2,5])/27.).^2).*

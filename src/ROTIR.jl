@@ -18,7 +18,7 @@ export radius_eggleton, radius_leahy
 export compute_true_anomaly, compute_E_NR,compute_coeff, compute_xyz_rel # debug 
 export compute_dpotential_primary_L1,  solve_R_L1, newton_raphson
 export rotate_single_star, compute_separation
-export compute_teff_vonzeipel, compute_gravity_primary, compute_gravity_secondary
+export temperature_map_vonZeipel_roche_single, compute_gravity_primary, compute_gravity_secondary
 
 # Export stellar/binary parameters for initializing and updating
 export starparameters, binaryparameters
@@ -34,7 +34,7 @@ export latlong_round_star, latlong_ellipsoid_star, tv_neighbors_longlat, latlong
 export create_star, create_star_multiepochs, create_binary
 
 # Export for rapid rotators
-export calc_tempmap_vZ, calc_grelmap_vZ
+export temperature_map_vonZeipel_rapid_rotator, calc_grelmap_vZ
 export compute_teff_vonzeipel
 export calc_rotspin, calc_omega
 

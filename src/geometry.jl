@@ -117,7 +117,7 @@ function omega_rotation(A_rot, B_rot, latitude)
   return omega
 end
 
-function compute_radii(tessels::tessellation, star_params) 
+function compute_radii(tessels::tessellation, star_params, t) 
   npix = tessels.npix
   xyz = [];
   r = [];
@@ -133,11 +133,9 @@ function compute_radii(tessels::tessellation, star_params)
     r = update_radii_rapidrot(tessels, star_params);
     xyz = r.*tessels.unit_xyz;
   elseif star_params.surface_type == 3
-    # Star params will actually be binary params
-    # Compute D here?
-    # TODO: fix this
-    D = ...
-    r = update_roche_radii(tessels, binary_parameters, D) 
+    # Star params are actually binary parameters
+    D = compute_separation(star_params, t)
+    r = update_roche_radii(tessels, star_params, D) 
     xyz = r.*tessels.unit_xyz;
   end
   return r, xyz
@@ -166,7 +164,7 @@ end
 function create_star(tessels::tessellation, star_params, t; secondary=false, binary_params=Array{Any}, T=Float64)
   npix = tessels.npix;
   # Compute radii 
-  r, xyz = compute_radii(tessels, star_params);
+  r, xyz = compute_radii(tessels, star_params, t);
   
   # Compute rotation
   xyz = rotate_star(xyz, star_params, t); 
