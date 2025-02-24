@@ -53,7 +53,7 @@ stars = create_star_multiepochs(tessels, roche_parameters, tepochs);
 # Create a single map based on the first epoch
 star_maps = temperature_map_vonZeipel_roche_single(roche_parameters,stars[1], tepochs[1]);
 
-# Or create as many maps as epochs (useful if interactions)
+# In the future, maybe create as many maps as epochs (useful if interactions)
 #star_maps = temperature_map_vonZeipel_roche_single(roche_parameters,stars, tepochs);
 
 # Setup the temperature-to-flux vector and the temperature-to-visility matrix

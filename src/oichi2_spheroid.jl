@@ -69,27 +69,26 @@ end
 
 
 function mod360(x)
-  mod.(mod.(x.+180.0,360.0).+360.0, 360.0) .- 180.0
+  return mod.(mod.(x.+180,360).+360, 360) .- 180
 end
 
 function cvis_to_v2(cvis, indx)
   v2_model = abs2.(cvis[indx]);
 end
 
-function cvis_to_t3(cvis, indx1, indx2, indx3)
+function cvis_to_t3(cvis, indx1, indx2, indx3; T=Float32)
   t3 = cvis[indx1].*cvis[indx2].*cvis[indx3];
   t3amp = abs.(t3);
-  t3phi = angle.(t3)*180.0/pi;
+  t3phi = angle.(t3)*T(180/pi);
   return t3, t3amp, t3phi
 end
 
-function cvis_to_t4(cvis, indx1, indx2, indx3, indx4)
-  t4 = cvis[indx1].*cvis[indx2]./(cvis[indx3]*conj(cvis[indx4]));
-  t4amp = abs.(t4);
-  t4phi = angle.(t4)*180.0/pi;
-  return t4, t4amp, t4phi
-end
-
+# function cvis_to_t4(cvis, indx1, indx2, indx3, indx4)
+#   t4 = cvis[indx1].*cvis[indx2]./(cvis[indx3]*conj(cvis[indx4]));
+#   t4amp = abs.(t4);
+#   t4phi = angle.(t4)*180.0/pi;
+#   return t4, t4amp, t4phi
+# end
 
 function observables(x, star, data)
   cvis_model = poly_to_cvis(x, star);
@@ -98,19 +97,17 @@ function observables(x, star, data)
   ~, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);
   return v2_model, t3amp_model, t3phi_model
 end
-  
 
 function chi2s(x, star, data; verbose = true)
   v2_model, t3amp_model, t3phi_model = observables(x, star, data);
-  chi2_v2 = sum( ((v2_model - data.v2)./data.v2_err).^2);
-  chi2_t3amp = sum( ((t3amp_model - data.t3amp)./data.t3amp_err).^2);
-  chi2_t3phi = sum( (mod360(t3phi_model - data.t3phi)./data.t3phi_err).^2);
+  chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
+  chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
+  chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);
   if verbose == true
     println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi)
   end
   return chi2_v2, chi2_t3amp, chi2_t3phi
 end
-
 
 function spheroid_chi2_allepochs_fg(x, g, epochs_weights, polyflux, polyft, data)
 f = 0;
