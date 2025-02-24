@@ -1,10 +1,10 @@
 # Solve Kepler's equation using Newton-Raphson
-function compute_E_NR(M::Union{Vector{Float64},Float64},e)
+function compute_E_NR(M,e; T=Float32) # Union{Vector{Float},Float}
     # initial guess (from Smith (1979))
-    E = M + e*sin.(M)./(1.0 .- sin.(M .+ e) + sin.(M));
+    E = M + e*sin.(M)./(1 .- sin.(M .+ e) + sin.(M));
     E_old = M*0
     # Thresholds
-    orbit_thresh = 1.0e-8;
+    orbit_thresh = T(1f-6);
     orbit_max_iter = 50;
 
     # Newton-Raphson method
@@ -13,7 +13,7 @@ function compute_E_NR(M::Union{Vector{Float64},Float64},e)
         while((i < orbit_max_iter) & (norm(E - E_old) > orbit_thresh))
             i += 1;
             E_old = deepcopy(E);
-            E = E_old + (M + e*sin.(E_old) - E_old)./(1.0 .- e*cos.(E_old));
+            E = E_old + (M + e*sin.(E_old) - E_old)./(1 .- e*cos.(E_old));
 
         end
     else
@@ -108,15 +108,12 @@ function compute_xyz_rel(a, β, e, L1, M1, N1, L2, M2, N2, cos_E, sin_E)
     return x, y, z
 end
 
-
-
-
 function compute_separation_alt(bparameters, tepoch) # uses true anomaly
   # dimentionless instantaneous separation of the centers of mass of the two stars
   # Multiply by a to find the real separation
   ν = compute_true_anomaly(bparameters, tepoch);
   e = bparameters.e;
-  D = (1.0 - e^2)/(1.0 + e* cos(ν)); 
+  D = (1 - e^2)./(1 .+ e*cos.(ν)); 
   return D
 end
 
@@ -125,24 +122,24 @@ function compute_separation(bparameters, tepoch)
     # Multiply by a to find the real separation
     E = compute_eccentric_anomaly(bparameters, tepoch);
     e = bparameters.e;
-    D = (1.0 - e*cos(E))
+    D = 1 .- e*cos.(E)
     return D
 end
 
 # Calculate eccentric anomaly
-function compute_eccentric_anomaly(bparameters,tepoch)
+function compute_eccentric_anomaly(bparameters,tepoch; T=Float32) # Note: this can be called with tepochs = vector
     P = bparameters.P;
     dP = bparameters.dP;
     e = bparameters.e;
     T0 = bparameters.T0;
     # mean angular velocity (mean motion)
-    n = 2.0 *pi / P;
+    n = T(2pi)/P;
     # Mean anomaly
-    if (dP > 1.0e-12)
+    if (dP > 1e-12)
         # if orbit is decaying
-        M = 4.0 .* pi .* (tepoch .- T0) .* (1.0 ./ (1.0 .+ sqrt.(1.0 .+ 2.0 .* dP .* (tepoch .- T0) ./ P))) ./ P;
+        M = T(4pi)*(tepoch .- T0) .* (1 ./ (1 .+ sqrt.(1 .+ 2dP*(tepoch .- T0)/P)))/P;
     else
-        M = n.*(tepoch .- T0);
+        M = n*(tepoch .- T0);
     end
     # Eccentric anomaly using Newton-Raphson method
     E = mod2pi.(compute_E_NR(M,e));

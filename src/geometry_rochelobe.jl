@@ -187,7 +187,7 @@ function compute_gravity_primary(r,θ,ϕ,D,q,async_ratio)
     y = r.*μ
     z = r.*ν
     # This means r^2 = x^2 + y^2 + z^2 
-    ρ = ((D.-x).^2+y.^2+z.^2).^(-1.5)
+    ρ = sqrt.(((D.-x).^2+y.^2+z.^2).^(-3)) # faster than .^(-1.5)
     μ = r.^(-3)
     gx = -x.*μ + q*(D.-x).*ρ + async_ratio^2*(1+q)*x.-q*D
     gy = -y.*μ - q*y.*ρ +async_ratio^2*(1+q)*y
@@ -204,7 +204,7 @@ function compute_gravity_secondary(r,θ,ϕ,D,q,async_ratio)
     y = r.*μ
     z = r.*ν
     # This means r^2 = (D-x)^2 + y^2 + z^2 
-    ρ = (x.^2+y.^2+z.^2).^(-1.5)
+    ρ = sqrt.((x.^2+y.^2+z.^2).^(-3))
     μ = r.^(-3)
     gx = -x.*ρ + q*(D.-x).*μ + (1-async_ratio^2)*(1+q)*(D.-x)+ x*(1+q).-q*D
     gy = -y.*ρ - q*y.*μ + async_ratio^2*(1+q)*y
@@ -212,7 +212,7 @@ function compute_gravity_secondary(r,θ,ϕ,D,q,async_ratio)
     return sqrt.(gx.*gx + gy.*gy + gz.*gz);
 end
 
-function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false)
+function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=Float32)
     rpole = parameters.rpole/parameters.a
     tpole = parameters.tpole
     r = star_geom.vertices_spherical[:, 5 ,1]/parameters.a
@@ -227,9 +227,9 @@ function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; second
     if secondary == true
         compute_gravity = compute_gravity_secondary;
     end
-    g_pole = compute_gravity(rpole,0.0,0.0,D,q,async_ratio);
+    g_pole = compute_gravity(rpole,T(0),T(0),D,q,async_ratio);
     gravity_map = compute_gravity(r,θ,ϕ,D,q,async_ratio);
-     # Computes von Zeipel temperature map directly from the gravity map
+    # Computes von Zeipel temperature map directly from the gravity map
     Teff = tpole*(gravity_map./g_pole).^β;
     return Teff
 end
