@@ -1,7 +1,7 @@
 using GeoMakie, Makie.GeometryBasics
 using Healpix
 
-function plot2d_temperature_allepochs_makie(tmap, star)
+function mollweide_makie(tmap, star)
     T = eltype(star.vertices_xyz)
     nside = 2^npix2n(star.npix)
     m = HealpixMap{T, NestedOrder}(nside)
