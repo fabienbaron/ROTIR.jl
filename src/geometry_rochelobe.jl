@@ -65,7 +65,7 @@ function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secon
     potS = (pot_L1 + 0.5 * q * q / (1.0 + q)) / fillout_factor - 0.5 * q * q / (1.0 + q)
     return potS, rtry
   else
-    #  Radius at the North pole defines the potential
+    #  The radius at the North pole defines the potential
     potS, ~ = potential_function(rpole_a, D, 0.0, 0.0, q, async_ratio)    
     return potS, rpole_a
 end
@@ -123,9 +123,9 @@ function compute_potential_primary(r, D, θ, ϕ, q, async_ratio) # r and D are d
     # Note: async_ratio = ω1rot/ωorb
     λ = sin(θ)*cos(ϕ);
     ν = cos(θ) # WARNING, POTENTIAL SYMBOL CLASH WITH TRUE ANOMALY
-    Ω1 = 1/r + q/sqrt( D^2 + r^2 - 2*r*λ*D) - q*r*λ*D + 0.5*async_ratio^2*(1+q)*r^2*(1-ν^2)
-    dΩ1 = -1/r^2 - q*(r-λ*D)/( D^2 + r^2 - 2*r*λ*D)^1.5 - q*λ*D + async_ratio^2*(1+q)*r*(1-ν^2)
-    ddΩ1 =  2/r^3  + 3*(D*λ - r)^2*q/(D^2 + r^2 - 2*r*λ*D)^(5/2) - q/(D^2 + r^2 - 2*r*λ*D)^(3/2) + async_ratio^2*(q + 1)*(1 - ν^2)
+    Ω1 = 1/r + q/sqrt( D^2 + r^2 - 2*r*λ*D) - q*r*λ*D + async_ratio^2*(1+q)*r^2*(1-ν^2)/2
+    dΩ1 = -1/r^2 - q*(r-λ*D)/sqrt(( D^2 + r^2 - 2*r*λ*D)^3) - q*λ*D + async_ratio^2*(1+q)*r*(1-ν^2)
+    ddΩ1 =  2/r^3  + 3*(D*λ - r)^2*q/sqrt((D^2 + r^2 - 2*r*λ*D)^5) - q/sqrt((D^2 + r^2 - 2*r*λ*D)^3) + async_ratio^2*(q + 1)*(1 - ν^2)
     return Ω1, dΩ1, ddΩ1
 end
 
@@ -133,9 +133,9 @@ function compute_potential_secondary(r, D, θ, ϕ, q, async_ratio)
     # Note: async_ratio = ω2rot/ωorb
     λ = cos(ϕ)*sin(θ)
     ν = cos(θ)
-    Ω2 = 1/sqrt(D^2+r^2+2*r*λ*D) + q/r + 0.5*(1+q)*(D^2+2*D*r*λ) - q*(D^2+r*λ*D) + 0.5*async_ratio^2*(1+q)*r^2*(1-ν^2)
-    dΩ2 = - (D*λ + r)/(D^2+r^2+2*r*λ*D)^1.5 - q/r^2 + λ*D + async_ratio^2*(1+q)*r*(1-ν^2)
-    ddΩ2 =  2*q/r^3 + 3*(D*λ + r)^2/(2*D*r*λ + D^2 + r^2)^(5/2) - 1/(2*D*r*λ + D^2 + r^2)^(3/2) + async_ratio^2*(1+q)*(1-ν^2)
+    Ω2 = 1/sqrt(D^2+r^2+2*r*λ*D) + q/r + (1+q)/2*(D^2+2*D*r*λ) - q*(D^2+r*λ*D) + async_ratio^2*(1+q)*r^2*(1-ν^2)/2
+    dΩ2 = - (D*λ + r)/sqrt((D^2+r^2+2*r*λ*D)^3) - q/r^2 + λ*D + async_ratio^2*(1+q)*r*(1-ν^2)
+    ddΩ2 =  2*q/r^3 + 3*(D*λ + r)^2/sqrt((2*D*r*λ + D^2 + r^2)^5) - 1/sqrt((2*D*r*λ + D^2 + r^2)^3) + async_ratio^2*(1+q)*(1-ν^2)
     return Ω2, dΩ2, ddΩ2
 end
 
@@ -277,11 +277,11 @@ function radius_eggleton(q)
 end
 
 function radius_leahy(q) # Leahy & Leahy 2015 "A calculator for Roche lobe properties" eq. 7
-    a1=0.64334;
-    a2=0.86907;
-    a3=1.2809;
-    a4=−0.74303;
-    a5=0.73103;
+    a1 = 0.64334;
+    a2 = 0.86907;
+    a3 = 1.2809;
+    a4 = −0.74303;
+    a5 = 0.73103;
     return a1*q^a4/(a2*q^a5+log(1+a3*q^(a4+1/3)))
 end
 

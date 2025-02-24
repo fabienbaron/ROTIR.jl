@@ -4,12 +4,15 @@ function tessellation_healpix(n::Int64; T=Float32)
   npix = nside2npix(nside)
   unit_xyz = zeros(T, npix, 5, 3);
   unit_spherical = zeros(T , npix, 5, 3);
-  #cartesian coordinates for center & corners
-  unit_xyz[:,5,:], unit_xyz[:,1:4,:] = pix2vec_nest(nside,collect(1:npix));
+  
+  # All radii are ones
   unit_spherical[:,:,1] .= T(1.0);
-  # setup spherical (theta,phi) for center
+  
+  # Setup (theta,phi) for the centers of the tessels
   unit_spherical[:,5,2],unit_spherical[:,5,3] = pix2ang_nest(nside, collect(1:npix));
-  # and now for corners
+  
+  # Setup (theta,phi) for for the vertices of the tessels
+  unit_xyz[:,5,:], unit_xyz[:,1:4,:] = pix2vec_nest(nside,collect(1:npix));
   for j = 1:4
     unit_spherical[:,j,2], unit_spherical[:,j,3] = vec2ang(unit_xyz[:,j,:]);
   end
@@ -31,18 +34,18 @@ end
 # Basic Healpix functions, painstakingly adapted from IDL
 function nside2npix(nside)
   return 12 * nside^2
-  end
+end
   
-  function npix2nside(npix::Integer)
+function npix2nside(npix::Integer)
       (npix % 12 == 0) || throw("Invalid number of pixels")
       square_root = sqrt(npix / 12)
       (square_root^2 == npix / 12) || throw("Invalid number of pixels")
       return Int(round(square_root))
-  end
+end
   
-  function npix2n(npix::Integer)
+function npix2n(npix::Integer)
   return Int(log(npix2nside(npix))/log(2))
-  end
+end
   
   function sub_compute_vertices(z, z_nv, z_sv, phi, phi_nv, phi_sv, hdelta_phi)
   # function called by pix2vec_nest to compute the

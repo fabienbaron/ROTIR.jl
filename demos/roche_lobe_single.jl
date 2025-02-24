@@ -51,7 +51,7 @@ roche_parameters = (  surface_type  = 3,  # Round:0, Ellipsoid: 1, Rapid Rotator
 stars = create_star_multiepochs(tessels, roche_parameters, tepochs);
 
 # Create a single map based on the first epoch
-star_maps = temperature_map_vonZeipel_roche_single(roche_parameters,stars[1], tepochs[1]);
+temperature_map = temperature_map_vonZeipel_roche_single(roche_parameters,stars[1], tepochs[1]);
 
 # In the future, maybe create as many maps as epochs (useful if interactions)
 #star_maps = temperature_map_vonZeipel_roche_single(roche_parameters,stars, tepochs);

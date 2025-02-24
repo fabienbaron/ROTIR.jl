@@ -138,7 +138,7 @@ function compute_radii(tessels::tessellation, star_params, t; T=Float32)
   elseif star_params.surface_type == 3
     # Star params are actually binary parameters
     D = T(compute_separation(star_params, t))
-    r = update_roche_radii(tessels, star_params, D) 
+    r = update_roche_radii(tessels, star_params, D, use_fillout_factor = star_params.fillout_factor_primary>-1) 
     xyz = r.*tessels.unit_xyz;
   end
   return r, xyz
@@ -164,7 +164,7 @@ function compute_ldmap(μ,star_params; T=Float32)
 end
 
 # Generate geometry and ld map from tesselation and stellar parameters
-@views function create_star(tessels::tessellation, star_params, t; secondary=false, binary_params=Array{Any}, T=Float32)
+@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float32)
   npix = tessels.npix;
   # Compute radii 
   r, xyz = compute_radii(tessels, star_params, t);
