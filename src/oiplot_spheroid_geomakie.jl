@@ -1,4 +1,4 @@
-using GLMakie, GeoMakie, Makie.GeometryBasics
+using GeoMakie, Makie.GeometryBasics
 using Healpix
 
 function plot2d_temperature_allepochs_makie(tmap, star)
@@ -10,6 +10,7 @@ function plot2d_temperature_allepochs_makie(tmap, star)
     meshimage(-180..180, -90..90, transpose(img); npoints = 200, axis = (; type = GeoAxis, dest = "+proj=moll"), )
 end
 
+using GLMakie
 function plot3d_temperature_makie(tmap, star)
 npix = star.npix
 x= star.vertices_xyz[:,1:4,1]'
@@ -24,15 +25,16 @@ m = GeometryBasics.mesh(ps, fs, normal=ns, color=cs)
 mesh(m, shading=NoShading)
 end
 
-
+using CairoMakie
 function plot2d_temperature_makie(tmap, star)
     npix = star.npix
     x = star.projx
     y = star.projy
+    f = Figure();
+    Axis(f[1, 1])
     ps = [ Polygon(Point2f.(x, y)[i,:]) for i=1:size(x,1)]
- #   ns = face_normals(ps, fs)
- #   map = (tmap.-minimum(tmap))/(maximum(tmap)-minimum(tmap))
-#    cs = FaceView(RGBf(1.0,1.0,1.0).*map, [FT(i) for i in 1:npix])
-f = Figure()
-    poly!(ps, color = rand(RGBf, length(ps)))
+    map = (tmap.-minimum(tmap))/(maximum(tmap)-minimum(tmap))
+    map = map[star.index_quads_visible]
+    poly!(ps, color = RGBf(1.0).*map)
+    return f
 end
