@@ -5,15 +5,27 @@ function poly_to_cvis(x, polyflux, polyft)
   cvis_model = polyft * x / flux;
 end
 
-# function poly_to_cvis(x, star)
-#   flux = dot(star.polyflux,x); # get the total flux
-#   return star.polyft * x / flux;
-# end
+function poly_to_cvis(x, star)
+   flux = dot(star.polyflux, x[star.index_quads_visible]); # get the total flux
+   return star.polyft * x[star.index_quads_visible] / flux;
+end
 
-# function poly_to_flux(x, star)
-#   flux = dot(star.polyflux,x); # get the total flux
-#   return flux;
-# end
+function poly_to_flux(x, star)
+   flux = dot(star.polyflux,x[star.index_quads_visible]); # get the total flux
+   return flux;
+end
+
+
+@views function setup_oi!(data, stars)
+  nepochs = size(data,1);
+  T = eltype(stars[1].vertices_xyz);
+  #polyflux = Array{Array{T,1}}(undef,nepochs);
+  #polyft = Array{Array{Complex{T},2}}(undef,nepochs);
+  Threads.@threads for i=1:nepochs
+       stars[i].polyflux = setup_polyflux_single(stars[i])
+       stars[i].polyft = setup_polyft_single(data[i], stars[i]);
+     end
+end
 
 @views function setup_polygon_ft(data, star_epoch_geom)
   nepochs = size(data,1);
@@ -80,7 +92,7 @@ end
 
 
 function observables(x, star, data)
-  cvis_model = poly_to_cvis(x.*star.ldmap, star.polyflux, star.polyft);
+  cvis_model = poly_to_cvis(x, star);
   # compute observables from all cvis
   v2_model = cvis_to_v2(cvis_model, data.indx_v2);
   ~, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);

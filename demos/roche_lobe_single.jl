@@ -49,7 +49,18 @@ roche_parameters = (  surface_type  = 3,  # Round:0, Ellipsoid: 1, Rapid Rotator
 
 #if binary but single, extract star params, then compute D
 stars = create_star_multiepochs(tessels, roche_parameters, tepochs);
-star_maps = temperature_map_vonZeipel_roche_single(roche_parameters,stars[1], tepochs[1]);
-plot2d_temperature_allepochs(star_maps, stars)
 
-setup_polygon_ft(data, stars)
+# Create a single map based on the first epoch
+star_maps = temperature_map_vonZeipel_roche_single(roche_parameters,stars[1], tepochs[1]);
+
+# Or create as many maps as epochs (useful if interactions)
+#star_maps = temperature_map_vonZeipel_roche_single(roche_parameters,stars, tepochs);
+
+# Setup the temperature-to-flux vector and the temperature-to-visility matrix
+setup_oi!(data, stars)
+
+v2_model, t3amp_model, t3phi_model = observables(star_maps, stars[1], data[1]);
+chi2v2, chi2t3amp, chi2t3phi = chi2s(star_maps, stars[1], data[1])
+
+
+# plot2d_temperature_allepochs(star_maps, stars) #to update for variable maps

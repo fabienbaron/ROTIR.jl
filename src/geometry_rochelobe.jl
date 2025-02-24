@@ -212,6 +212,17 @@ function compute_gravity_secondary(r,θ,ϕ,D,q,async_ratio)
     return sqrt.(gx.*gx + gy.*gy + gz.*gz);
 end
 
+
+function temperature_map_vonZeipel_roche_single(parameters, star_geom, t::Array{T,1};  secondary = false) where T
+    npix = star_geom[1].npix
+    nepochs = length(t)
+    Tmap = zeros(T, npix, nepochs)
+    for i=1:nepochs
+        Tmap[:, i] = temperature_map_vonZeipel_roche_single(parameters, star_geom[i], t[i], secondary = false, T=T)
+    end
+    return Tmap
+end
+
 function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=Float32)
     rpole = parameters.rpole/parameters.a
     tpole = parameters.tpole

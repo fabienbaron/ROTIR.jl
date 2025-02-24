@@ -17,6 +17,8 @@ mutable struct stellar_geometry{T} # typically one per epoch, rotation and proje
   projy::Array{T,2}
   ldmap::Array{T,1}   # Limb-darkening map
   center_offsets::Array{T,1} # Center of mass within star
+  polyflux::Array{T,1}
+  polyft::Matrix{Complex{T}}
 end
 
 function Base.display(x::tessellation)
@@ -52,6 +54,13 @@ function Base.display(x::stellar_geometry)
   println("projx                 : projected x vertex coordinates")
   println("projy                 : projected y vertex coordinates") 
   println("ldmap                 : limb-darkening map")
+  if x.polyft == []
+  println("polyflux              : temperature to flux vector (not defined yet)")
+  println("polyft                : temperature to visibility matrix (not defined yet)")
+  else
+  println("polyflux              : temperature to flux vector (set)")
+  println("polyft                : temperature to visibility matrix (set)")
+  end
 end
 
 
@@ -183,7 +192,7 @@ end
   spherical[:,:,1] = r
   # Single star
   center = T.([0.0,0.0,0.0]);
-  return stellar_geometry{T}(star_params.surface_type, npix, xyz, spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, center);
+  return stellar_geometry{T}(star_params.surface_type, npix, xyz, spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, center, T[], zeros(Complex{T}, 0, 0));
 end
 
 function create_binary(star1::tessellation, star2::tessellation, binary_params::binaryparameters, t)
@@ -264,7 +273,7 @@ function create_star_multiepochs(tessels::tessellation, star_params, tepochs; kw
 nepochs = length(tepochs);
 npix = tessels.npix
 star_epoch_geom = Array{stellar_geometry}(undef, nepochs);
-println("Creating geometry for $(nepochs) epochs x $(npix) tessels");
+#println("Creating geometry for $(nepochs) epochs x $(npix) tessels");
 for i=1:nepochs
   star_epoch_geom[i] = create_star(tessels, star_params, tepochs[i]; kwargs...);
 end
