@@ -1,6 +1,6 @@
-include("di.jl")
-include("lci.jl")
-include("oichi2_spheroid.jl")
+#include("di.jl")
+#include("lci.jl")
+#include("oichi2_spheroid.jl")
 using Crayons
 
 function reconstruct(x_start::Vector{Float64}; diparams=[], lciparams=[], oiparams=[], w=[1.0, 1.0, 1.0], lowtemp=0, hightemp=10000, printcolor=[], verb=true, maxiter=200, regularizers=[])

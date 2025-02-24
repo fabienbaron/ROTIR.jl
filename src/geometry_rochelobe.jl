@@ -3,7 +3,7 @@ import Base: Math as math
 
 # The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
 #
-function update_roche_radii(tessels::tessellation, binary_parameters, D; use_fillout_factor = false, secondary = false, T=Float64) 
+function update_roche_radii(tessels::tessellation, binary_parameters, D; use_fillout_factor = false, secondary = false, T=Float32) 
     # if wanting to call this for secondary=true, invert binary_parameters.q;
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     secondary == false ? fillout_factor = binary_parameters.fillout_factor_primary : fillout_factor = binary_parameters.fillout_factor_secondary;

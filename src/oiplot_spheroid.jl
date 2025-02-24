@@ -1,7 +1,7 @@
 # gather common display tasks
 using PyCall
 using PyPlot
-using LazySets
+#using LazySets
 using Statistics
 using LaTeXStrings
 

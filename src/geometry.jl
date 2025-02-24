@@ -111,13 +111,7 @@ function rot_vertex(angle_r1, angle_r2, angle_r3) # new rotational matrix
 end
   
 
-function omega_rotation(A_rot, B_rot, latitude)
-  #omega = A_rot - B_rot*((sin(pi/2. - latitude)).^2) - C_rot*((sin(pi/2. - latitude)).^4);
-  omega = A_rot - B_rot*((sin.(pi/2.0 - latitude)).^2); #A_rot - B_rot*((cos.(latitude)).^2)
-  return omega
-end
-
-function compute_radii(tessels::tessellation, star_params, t) 
+function compute_radii(tessels::tessellation, star_params, t; T=Float32) 
   npix = tessels.npix
   xyz = [];
   r = [];
@@ -134,17 +128,17 @@ function compute_radii(tessels::tessellation, star_params, t)
     xyz = r.*tessels.unit_xyz;
   elseif star_params.surface_type == 3
     # Star params are actually binary parameters
-    D = compute_separation(star_params, t)
+    D = T(compute_separation(star_params, t))
     r = update_roche_radii(tessels, star_params, D) 
     xyz = r.*tessels.unit_xyz;
   end
   return r, xyz
 end
 
-function rotate_star(xyz, star_params, t)
+function rotate_star(xyz, star_params, t; T=Float32)
   # TODO: reimplement differential rotation for compatible surfaces (see old ROTIR)
   npix = size(xyz,1)
-  compound_rotation = rot_vertex( 2pi*t/star_params.rotation_period, star_params.inclination*pi/180., star_params.position_angle*pi/180.);
+  compound_rotation = rot_vertex( T(2pi)*t/star_params.rotation_period, star_params.inclination*T(pi/180.), star_params.position_angle*T(pi/180.));
   return reshape(reshape(xyz,(npix*5,3))*compound_rotation, (npix,5,3));
 end
 
@@ -161,7 +155,7 @@ function compute_ldmap(μ,star_params; T=Float32)
 end
 
 # Generate geometry and ld map from tesselation and stellar parameters
-function create_star(tessels::tessellation, star_params, t; secondary=false, binary_params=Array{Any}, T=Float64)
+@views function create_star(tessels::tessellation, star_params, t; secondary=false, binary_params=Array{Any}, T=Float32)
   npix = tessels.npix;
   # Compute radii 
   r, xyz = compute_radii(tessels, star_params, t);

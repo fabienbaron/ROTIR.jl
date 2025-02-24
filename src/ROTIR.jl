@@ -7,9 +7,9 @@ include("oistars.jl");
 include("geometry.jl");
 include("oichi2_spheroid.jl");
 include("oiplot_spheroid.jl");
-include("di.jl");
-include("di_dynamical.jl");
-include("reconstruct.jl");
+#include("di.jl");
+#include("di_dynamical.jl");
+#include("reconstruct.jl");
 
 export tessellation
 export tessellation_healpix, tessellation_latlong
@@ -57,37 +57,37 @@ export plot3d_temperature_binary
 export nside2npix, npix2n # Healpix
 export lci_linear_inversion_frame,lci_reconstruct_mutitemporal,rescale_temperature
 
-# Export Doppler imaging routines
-export modelGrid, globalLineProfiles, observedLineProfiles, jd2phase
-export setup_di, read_di_profiles, bin_spectrum, setup_stellar_parameters_di, di_reconstruct
-export make_circ_spot_DI, make_meridional_band_DI, make_equatorial_band_DI
-export calculate_global_profiles, calculate_global_profiles_unnormalized
-export compute_grid_atlas9_SPECTRUM, read_spectrum_grid, setup_model_grid
-export gaussian_instrumental_kernel, instrumental_broadening, doppler_shift_spectrum
-export calculate_chi2_f
-export plot_profiles, mollplot_healpix, mollplot_longlat
-export make_circ_spot_DI_spotfill, calculate_global_profiles_spotfill, di_reconstruct_spotfill
-export calculate_μv
+# # Export Doppler imaging routines
+# export modelGrid, globalLineProfiles, observedLineProfiles, jd2phase
+# export setup_di, read_di_profiles, bin_spectrum, setup_stellar_parameters_di, di_reconstruct
+# export make_circ_spot_DI, make_meridional_band_DI, make_equatorial_band_DI
+# export calculate_global_profiles, calculate_global_profiles_unnormalized
+# export compute_grid_atlas9_SPECTRUM, read_spectrum_grid, setup_model_grid
+# export gaussian_instrumental_kernel, instrumental_broadening, doppler_shift_spectrum
+# export calculate_chi2_f
+# export plot_profiles, mollplot_healpix, mollplot_longlat
+# export make_circ_spot_DI_spotfill, calculate_global_profiles_spotfill, di_reconstruct_spotfill
+# export calculate_μv
 
-# Export Dynamical Doppler routines
-export split_didata_by_period, di_reconstruct_multitemporal
-export evolve_frame
+# #Export Dynamical Doppler routines
+# export split_didata_by_period, di_reconstruct_multitemporal
+# export evolve_frame
 
-# Wrapped for LCI, DI, OI reconstructions
-export reconstruct
+# # Wrapped for LCI, DI, OI reconstructions
+# export reconstruct
 
-# Misc. Spectrum utilities
-include("specutils.jl")
-export normalize_UVES, fit_rv, fit_continuum
+# # Misc. Spectrum utilities
+# include("specutils.jl")
+# export normalize_UVES, fit_rv, fit_continuum
 
 # testing
 export cvis_to_v2, poly_to_cvis, cvis_to_t3
 export make_circ_spot, make_spot_move
 
-include("lci.jl") # Light curve inversion main functions
-export LCI
-export lci_reconstruct, read_lci_relative,read_lci_absolute,read_lci_absolute_mjd,write_lci,modelflux_lci,modelflux_lci_rel
-export setup_lci, chi2_lci_f, chi2_lci_bias_fg, setup_stellar_parameters_lci, split_lcidata_by_period, setup_regularization_matrices
-include("lciplot.jl") # Light curve inversion main functions
-export lciplot_phase, lciplot_mjd, lciplot_vs_model_phase,lciplot_vs_model_mjd, lciplot_vs_model, lciplot_vs_model_phase_residuals
+#include("lci.jl") # Light curve inversion main functions
+#export LCI
+#export lci_reconstruct, read_lci_relative,read_lci_absolute,read_lci_absolute_mjd,write_lci,modelflux_lci,modelflux_lci_rel
+#export setup_lci, chi2_lci_f, chi2_lci_bias_fg, setup_stellar_parameters_lci, split_lcidata_by_period, setup_regularization_matrices
+#include("lciplot.jl") # Light curve inversion main functions
+#export lciplot_phase, lciplot_mjd, lciplot_vs_model_phase,lciplot_vs_model_mjd, lciplot_vs_model, lciplot_vs_model_phase_residuals
 end

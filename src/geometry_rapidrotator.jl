@@ -99,6 +99,15 @@ end
   return star_map
 end
 
+
+
+# function omega_rotation(A_rot, B_rot, latitude)
+#   #omega = A_rot - B_rot*((sin(pi/2. - latitude)).^2) - C_rot*((sin(pi/2. - latitude)).^4);
+#   omega = A_rot - B_rot*((sin.(pi/2.0 - latitude)).^2); #A_rot - B_rot*((cos.(latitude)).^2)
+#   return omega
+# end
+
+
 # Modified von Zeipel law aka "Espinosa Lara-Rieutord law"
 # https://www.aanda.org/articles/aa/pdf/2011/09/aa17252-11.pdf
 # TBD!!
