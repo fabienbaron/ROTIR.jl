@@ -79,16 +79,11 @@ chi2v2, chi2t3amp, chi2t3phi = chi2s(tmap, stars[1], data[1], verbose = true);
 chi2_epochs = spheroid_chi2_allepochs_f(tmap, stars, data)
 
 
-
-
-# Now let's time the parameters to chi2 chain
+# Now let's time the parameters_to_chi2 chain
 chi2_parametric_surface=p->spheroid_parametric_f(p, tessels, data, tepochs) 
 
 # Test
 chi2_parametric_surface(roche_parameters)
-
-
-
 
 # Work in progress
 # Will need to use ParameterHandling to transform NamedTuple into parameter vector
