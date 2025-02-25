@@ -76,7 +76,7 @@ v2_model, t3amp_model, t3phi_model = observables(tmap, stars[1], data[1]);
 chi2v2, chi2t3amp, chi2t3phi = chi2s(tmap, stars[1], data[1], verbose = true);
 
 # Total chi2 summed over all epochs
-chi2 = spheroid_chi2_allepochs_f(x, stars, data)
+chi2 = spheroid_chi2_allepochs_f(tmap, stars, data)
 
 
 
