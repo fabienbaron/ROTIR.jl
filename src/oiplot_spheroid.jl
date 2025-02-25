@@ -562,7 +562,8 @@ function plot2d_wireframe(star) # this plots the temperature map onto the projec
   ax.spines["right"].set_linewidth(1);
   ax.set_aspect("equal")
   ax.plot();
-  PyPlot.draw()
+  PyPlot.draw();
+  return;
 end
 
 
@@ -623,377 +624,232 @@ function plot2d_temperature_allepochs(tmap, star; plotmesh=false, tepochs = [], 
       ax.spines["bottom"].set_linewidth(1);
       ax.spines["left"].set_linewidth(1);
       ax.spines["right"].set_linewidth(1);
-      ax.set_aspect("equal")
+      ax.set_aspect("equal");
     end
-
-    fig.canvas.draw() # Update the figure
-    #suptitle("All epochs")
-    fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
-    fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
+    fig.canvas.draw();
+    fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15);
+    fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15);
+    return;
 end
 
 
 
-# use of tmap has temperature maps in a (n,m) format where n is the pixels and m is the # of epochs
-function plot2d_temperature_allcompound_epochs(tmaps, star; plotmesh=false, tepochs = [], minmaxT = [], colormap="gist_heat",arr_box=23)
-  patches = pyimport("matplotlib.patches")
-  fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
-  if plotmesh == true
-    meshcolor = "grey"
-  else
-    meshcolor = "none"
-  end
+# # use of tmap has temperature maps in a (n,m) format where n is the pixels and m is the # of epochs
+# function plot2d_temperature_allcompound_epochs(tmaps, star; plotmesh=false, tepochs = [], minmaxT = [], colormap="gist_heat",arr_box=23)
+#   patches = pyimport("matplotlib.patches")
+#   fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
+#   if plotmesh == true
+#     meshcolor = "grey"
+#   else
+#     meshcolor = "none"
+#   end
 
-  if (minmaxT == [])
-    minT = minimum(minimum.(tmaps));
-    maxT = maximum(maximum.(tmaps));
-  else
-    minT = minmaxT[1];
-    maxT = minmaxT[2];
-  end
+#   if (minmaxT == [])
+#     minT = minimum(minimum.(tmaps));
+#     maxT = maximum(maximum.(tmaps));
+#   else
+#     minT = minmaxT[1];
+#     maxT = minmaxT[2];
+#   end
 
-  # minT = minimum(tmaps);
-  # maxT = maximum(tmaps);
+#   # minT = minimum(tmaps);
+#   # maxT = maximum(tmaps);
 
-  for t=1:length(star)
-    ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
-    if tepochs !=[]
-      epoch_title = string(tepochs[t])[1:10];
-      title("Epoch $t "*epoch_title,fontweight="bold") # Give the most recent axis a title
-    end
-    axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
-    ax.set_xlim([axis_max,-axis_max])
-    ax.set_ylim([-axis_max,axis_max])
-    visible_pixels = sometimes_visible(star);
-    projmap = (tmaps[:,t][star[t].index_quads_visible].-minT)./(maxT-minT);
-    for i=1:star[t].nquads_visible
-      p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
-      ax.add_patch(p);
-    end
-    ax.plot();
-    ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-    if (ceil(axis_max) <= 3.0)
-      long_tick = 1.0;
-      short_tick = 0.1;
-    elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-      long_tick = 2.0;
-      short_tick = 0.2;
-    elseif (ceil(axis_max) > 6.0)
-      long_tick = 3.0;
-      short_tick = 0.5;
-    end
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.tick_params(axis="both", which="minor", width=2, length=5);
-    # make axes thicker
-    ax.spines["top"].set_linewidth(2);
-    ax.spines["bottom"].set_linewidth(2);
-    ax.spines["left"].set_linewidth(2);
-    ax.spines["right"].set_linewidth(2);
-  end
-  fig.canvas.draw() # Update the figure
-  #suptitle("All epochs")
+#   for t=1:length(star)
+#     ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
+#     if tepochs !=[]
+#       epoch_title = string(tepochs[t])[1:10];
+#       title("Epoch $t "*epoch_title,fontweight="bold") # Give the most recent axis a title
+#     end
+#     axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
+#     ax.set_xlim([axis_max,-axis_max])
+#     ax.set_ylim([-axis_max,axis_max])
+#     visible_pixels = sometimes_visible(star);
+#     projmap = (tmaps[:,t][star[t].index_quads_visible].-minT)./(maxT-minT);
+#     for i=1:star[t].nquads_visible
+#       p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
+#       closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
+#       ax.add_patch(p);
+#     end
+#     ax.plot();
+#     ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+#     if (ceil(axis_max) <= 3.0)
+#       long_tick = 1.0;
+#       short_tick = 0.1;
+#     elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
+#       long_tick = 2.0;
+#       short_tick = 0.2;
+#     elseif (ceil(axis_max) > 6.0)
+#       long_tick = 3.0;
+#       short_tick = 0.5;
+#     end
+#     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.tick_params(axis="both", which="minor", width=2, length=5);
+#     # make axes thicker
+#     ax.spines["top"].set_linewidth(2);
+#     ax.spines["bottom"].set_linewidth(2);
+#     ax.spines["left"].set_linewidth(2);
+#     ax.spines["right"].set_linewidth(2);
+#   end
+#   fig.canvas.draw() # Update the figure
+#   #suptitle("All epochs")
 
-  fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
-  fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
+#   fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
+#   fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
 
-  cbar_ax = fig.add_axes([0.92, 0.15, 0.05, 0.7])
-  sm = plt.cm.ScalarMappable(cmap=colormap, norm=plt.Normalize(vmin=minT, vmax=maxT))
-  sm.set_array([])
-  plt.colorbar(sm,cax=cbar_ax,orientation="vertical",shrink=0.6)
-end
-
-
-function plot2d_temperature_allepochs_poleline(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",arr_box=23)
-  patches = pyimport("matplotlib.patches")
-  fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
-  if plotmesh == true
-    meshcolor = "grey"
-  else
-    meshcolor = "none"
-  end
-
-  # minT = minimum(minimum.(tmap));
-  # maxT = maximum(maximum.(tmap));
-  minT = minimum(tmap);
-  maxT = maximum(tmap);
-
-  for t=1:length(star)
-    ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
-    if tepochs !=[]
-      title("Epoch $t $(tepochs[t])",fontweight="bold") # Give the most recent axis a title
-    end
-    axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
-    ax.set_xlim([axis_max,-axis_max])
-    ax.set_ylim([-axis_max,axis_max])
-    visible_pixels = sometimes_visible(star);
-    projmap = (tmap[star[t].index_quads_visible].-minT)./(maxT-minT);
-    # TBD: Still needs to have pole lines partially hidden if behind star (add conditional statement?)
-    for i=1:star[t].nquads_visible
-        north = star[t].vertices_xyz[1,1,1:2]
-        south = star[t].vertices_xyz[end,3,1:2]
-        #lines = Any[collect(zip(-[north[1], south[1]],[north[2], south[2]]))];
-        lines = Any[collect(zip(-[1.5*north[1], north[1]],[1.5*north[2], north[2]]))];
-        push!(lines,collect(zip(-[south[1], 1.5*south[1]],[south[2], 1.5*south[2]])));
-        #poleline = matplotlib.collections.LineCollection(Any[collect(zip(-[north[1], south[1]],[north[2], south[2]]))])
-        poleline = matplotlib.collections.LineCollection(lines);
-        ax.add_collection(poleline);
-      p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
-      ax.add_patch(p);
-
-    end
-    ax.plot();
-    ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-    if (ceil(axis_max) <= 3.0)
-      long_tick = 1.0;
-      short_tick = 0.1;
-    elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-      long_tick = 2.0;
-      short_tick = 0.2;
-    elseif (ceil(axis_max) > 6.0)
-      long_tick = 3.0;
-      short_tick = 0.5;
-    end
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.tick_params(axis="both", which="minor", width=2, length=5);
-    # make axes thicker
-    ax.spines["top"].set_linewidth(2);
-    ax.spines["bottom"].set_linewidth(2);
-    ax.spines["left"].set_linewidth(2);
-    ax.spines["right"].set_linewidth(2);
-  end
-  fig.canvas.draw() # Update the figure
-  #suptitle("All epochs")
-
-  fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
-  fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
-end
+#   cbar_ax = fig.add_axes([0.92, 0.15, 0.05, 0.7])
+#   sm = plt.cm.ScalarMappable(cmap=colormap, norm=plt.Normalize(vmin=minT, vmax=maxT))
+#   sm.set_array([])
+#   plt.colorbar(sm,cax=cbar_ax,orientation="vertical",shrink=0.6)
+# end
 
 
-function plot2d_temperature_allepochs_cmap(tmap, star; plotmesh=false, tepochs = [], minmaxT = [], colormap="gist_heat",arr_box=23)
-  patches = pyimport("matplotlib.patches")
-  fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
-  if plotmesh == true
-    meshcolor = "grey"
-  else
-    meshcolor = "none"
-  end
+# function plot2d_temperature_allepochs_poleline(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",arr_box=23)
+#   patches = pyimport("matplotlib.patches")
+#   fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
+#   if plotmesh == true
+#     meshcolor = "grey"
+#   else
+#     meshcolor = "none"
+#   end
 
-  # minT = minimum(minimum.(tmap));
-  # maxT = maximum(maximum.(tmap));
-  if (minmaxT == [])
-    minT = minimum(tmap);
-    maxT = maximum(tmap);
-  else
-    minT = minmaxT[1];
-    maxT = minmaxT[2];
-  end
+#   # minT = minimum(minimum.(tmap));
+#   # maxT = maximum(maximum.(tmap));
+#   minT = minimum(tmap);
+#   maxT = maximum(tmap);
 
-  for t=1:length(star)
-    ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
-    if tepochs !=[]
-      epoch_title = string(tepochs[t])[1:10];
-      title("Epoch $t "*epoch_title,fontweight="bold") # Give the most recent axis a title
-    end
-    axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
-    ax.set_xlim([axis_max,-axis_max])
-    ax.set_ylim([-axis_max,axis_max])
-    visible_pixels = sometimes_visible(star);
-    projmap = (tmap[star[t].index_quads_visible].-minT)./(maxT-minT);
-    for i=1:star[t].nquads_visible
-      p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
-      ax.add_patch(p);
-    end
-    ax.plot();
-    ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-    if (ceil(axis_max) <= 3.0)
-      long_tick = 1.0;
-      short_tick = 0.1;
-    elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-      long_tick = 2.0;
-      short_tick = 0.2;
-    elseif (ceil(axis_max) > 6.0)
-      long_tick = 3.0;
-      short_tick = 0.5;
-    end
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.tick_params(axis="both", which="minor", width=2, length=5);
-    # make axes thicker
-    ax.spines["top"].set_linewidth(2);
-    ax.spines["bottom"].set_linewidth(2);
-    ax.spines["left"].set_linewidth(2);
-    ax.spines["right"].set_linewidth(2);
-  end
-  fig.canvas.draw() # Update the figure
-  #suptitle("All epochs")
+#   for t=1:length(star)
+#     ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
+#     if tepochs !=[]
+#       title("Epoch $t $(tepochs[t])",fontweight="bold") # Give the most recent axis a title
+#     end
+#     axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
+#     ax.set_xlim([axis_max,-axis_max])
+#     ax.set_ylim([-axis_max,axis_max])
+#     visible_pixels = sometimes_visible(star);
+#     projmap = (tmap[star[t].index_quads_visible].-minT)./(maxT-minT);
+#     # TBD: Still needs to have pole lines partially hidden if behind star (add conditional statement?)
+#     for i=1:star[t].nquads_visible
+#         north = star[t].vertices_xyz[1,1,1:2]
+#         south = star[t].vertices_xyz[end,3,1:2]
+#         #lines = Any[collect(zip(-[north[1], south[1]],[north[2], south[2]]))];
+#         lines = Any[collect(zip(-[1.5*north[1], north[1]],[1.5*north[2], north[2]]))];
+#         push!(lines,collect(zip(-[south[1], 1.5*south[1]],[south[2], 1.5*south[2]])));
+#         #poleline = matplotlib.collections.LineCollection(Any[collect(zip(-[north[1], south[1]],[north[2], south[2]]))])
+#         poleline = matplotlib.collections.LineCollection(lines);
+#         ax.add_collection(poleline);
+#       p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
+#       closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
+#       ax.add_patch(p);
 
-  fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
-  fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
+#     end
+#     ax.plot();
+#     ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+#     if (ceil(axis_max) <= 3.0)
+#       long_tick = 1.0;
+#       short_tick = 0.1;
+#     elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
+#       long_tick = 2.0;
+#       short_tick = 0.2;
+#     elseif (ceil(axis_max) > 6.0)
+#       long_tick = 3.0;
+#       short_tick = 0.5;
+#     end
+#     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.tick_params(axis="both", which="minor", width=2, length=5);
+#     # make axes thicker
+#     ax.spines["top"].set_linewidth(2);
+#     ax.spines["bottom"].set_linewidth(2);
+#     ax.spines["left"].set_linewidth(2);
+#     ax.spines["right"].set_linewidth(2);
+#   end
+#   fig.canvas.draw() # Update the figure
+#   #suptitle("All epochs")
 
-  #fig.subplots_adjust(right=0.8)
-  cbar_ax = fig.add_axes([0.92, 0.15, 0.05, 0.7])
-  sm = plt.cm.ScalarMappable(cmap=colormap, norm=plt.Normalize(vmin=minT, vmax=maxT))
-  sm.set_array([])
-  plt.colorbar(sm,cax=cbar_ax,orientation="vertical",shrink=0.6)
-  #plt.subplots_adjust(bottom=0.1, right=0.8, top=0.9);
-  #cax = plt.axes([0.85, 0.1, 0.075, 0.8])
-  #plt.colorbar(cax=cax)
-end
+#   fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
+#   fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
+# end
 
 
-# use if tmap array has multiple individual maps within it
-function plot2d_intensity_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",arr_box=23)
-  patches = pyimport("matplotlib.patches")
-  fig = figure("Intensity map -- All epochs",figsize=(15,10),facecolor="White")
-  if plotmesh == true
-    meshcolor = "grey"
-  else
-    meshcolor = "none"
-  end
+# function plot2d_temperature_allepochs_cmap(tmap, star; plotmesh=false, tepochs = [], minmaxT = [], colormap="gist_heat",arr_box=23)
+#   patches = pyimport("matplotlib.patches")
+#   fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
+#   if plotmesh == true
+#     meshcolor = "grey"
+#   else
+#     meshcolor = "none"
+#   end
 
-  minT = minimum(tmap);
-  maxT = maximum(tmap);
+#   # minT = minimum(minimum.(tmap));
+#   # maxT = maximum(maximum.(tmap));
+#   if (minmaxT == [])
+#     minT = minimum(tmap);
+#     maxT = maximum(tmap);
+#   else
+#     minT = minmaxT[1];
+#     maxT = minmaxT[2];
+#   end
 
-  for t=1:length(star)
-    ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
-    if tepochs !=[]
-      title("Epoch $t $(tepochs[t])",fontweight="bold") # Give the most recent axis a title
-    end
-    axis("equal")
-    axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
-    ax.set_xlim([axis_max,-axis_max])
-    ax.set_ylim([-axis_max,axis_max])
-    visible_pixels = sometimes_visible(star);
-    projmap = ((tmap[star[t].index_quads_visible].-minT)./(maxT-minT).*star[t].ldmap[star[t].index_quads_visible]);
-    for i=1:star[t].nquads_visible
-      p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
-      ax.add_patch(p);
-    end
-    ax.plot();
-    ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-    if (ceil(axis_max) <= 3.0)
-      long_tick = 1.0;
-      short_tick = 0.1;
-    elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-      long_tick = 2.0;
-      short_tick = 0.2;
-    elseif (ceil(axis_max) > 6.0)
-      long_tick = 3.0;
-      short_tick = 0.5;
-    end
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.tick_params(axis="both", which="minor", width=2, length=5);
-    # make axes thicker
-    ax.spines["top"].set_linewidth(2);
-    ax.spines["bottom"].set_linewidth(2);
-    ax.spines["left"].set_linewidth(2);
-    ax.spines["right"].set_linewidth(2);
-  end
-  fig.canvas.draw() # Update the figure
-  #suptitle("All epochs")
+#   for t=1:length(star)
+#     ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
+#     if tepochs !=[]
+#       epoch_title = string(tepochs[t])[1:10];
+#       title("Epoch $t "*epoch_title,fontweight="bold") # Give the most recent axis a title
+#     end
+#     axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
+#     ax.set_xlim([axis_max,-axis_max])
+#     ax.set_ylim([-axis_max,axis_max])
+#     visible_pixels = sometimes_visible(star);
+#     projmap = (tmap[star[t].index_quads_visible].-minT)./(maxT-minT);
+#     for i=1:star[t].nquads_visible
+#       p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
+#       closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
+#       ax.add_patch(p);
+#     end
+#     ax.plot();
+#     ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+#     if (ceil(axis_max) <= 3.0)
+#       long_tick = 1.0;
+#       short_tick = 0.1;
+#     elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
+#       long_tick = 2.0;
+#       short_tick = 0.2;
+#     elseif (ceil(axis_max) > 6.0)
+#       long_tick = 3.0;
+#       short_tick = 0.5;
+#     end
+#     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.tick_params(axis="both", which="minor", width=2, length=5);
+#     # make axes thicker
+#     ax.spines["top"].set_linewidth(2);
+#     ax.spines["bottom"].set_linewidth(2);
+#     ax.spines["left"].set_linewidth(2);
+#     ax.spines["right"].set_linewidth(2);
+#   end
+#   fig.canvas.draw() # Update the figure
+#   #suptitle("All epochs")
 
-  fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
-  fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
-end
+#   fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
+#   fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
 
-
-function plot2d_intensity_allepochs_cmap(tmap, star; plotmesh=false, tepochs = [], minmaxT = [], colormap="gist_heat",arr_box=23)
-  patches = pyimport("matplotlib.patches")
-  fig = figure("Intensity map -- All epochs",figsize=(15,10),facecolor="White")
-  if plotmesh == true
-    meshcolor = "grey"
-  else
-    meshcolor = "none"
-  end
-
-  if (minmaxT == [])
-    minT = minimum(tmap);
-    maxT = maximum(tmap);
-  else
-    minT = minmaxT[1];
-    maxT = minmaxT[2];
-  end
-
-  vmax = deepcopy(minT);
-  vmin = deepcopy(maxT);
-
-  for t=1:length(star)
-    ax= subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
-    if tepochs !=[]
-      epoch_title = string(tepochs[t])[1:10];
-      title("Epoch $t "*epoch_title,fontweight="bold") # Give the most recent axis a title
-    end
-    axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
-    ax.set_xlim([axis_max,-axis_max])
-    ax.set_ylim([-axis_max,axis_max])
-    visible_pixels = sometimes_visible(star);
-    projmap = ((tmap[star[t].index_quads_visible].-minT)./(maxT-minT).*star[t].ldmap[star[t].index_quads_visible]);
-
-    if (maximum(tmap[star[t].index_quads_visible].*star[t].ldmap[star[t].index_quads_visible]) > vmax)
-      vmax = maximum(tmap[star[t].index_quads_visible].*star[t].ldmap[star[t].index_quads_visible]);
-    end
-
-    if (minimum(tmap[star[t].index_quads_visible].*star[t].ldmap[star[t].index_quads_visible]) < vmin)
-      vmin = minimum(tmap[star[t].index_quads_visible].*star[t].ldmap[star[t].index_quads_visible]);
-    end
-
-    for i=1:star[t].nquads_visible
-      p = patches.Polygon(hcat(-star[t].projx[i,:],star[t].projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
-      ax.add_patch(p);
-      #println(tmap[star[t].index_quads_visible][i]*star[t].ldmap[star[t].index_quads_visible][i])
-    end
-    ax.plot();
-    ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-    if (ceil(axis_max) <= 3.0)
-      long_tick = 1.0;
-      short_tick = 0.1;
-    elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-      long_tick = 2.0;
-      short_tick = 0.2;
-    elseif (ceil(axis_max) > 6.0)
-      long_tick = 3.0;
-      short_tick = 0.5;
-    end
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.tick_params(axis="both", which="minor", width=2, length=5);
-    # make axes thicker
-    ax.spines["top"].set_linewidth(2);
-    ax.spines["bottom"].set_linewidth(2);
-    ax.spines["left"].set_linewidth(2);
-    ax.spines["right"].set_linewidth(2);
-  end
-  fig.canvas.draw() # Update the figure
-  #suptitle("All epochs")
-
-  cbar_ax = fig.add_axes([0.92, 0.15, 0.05, 0.7])
-  sm = plt.cm.ScalarMappable(cmap=colormap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
-  sm.set_array([])
-  plt.colorbar(sm,cax=cbar_ax,orientation="vertical",shrink=0.6)
-
-  fig.text(0.5, 0.04, "East (mas)", ha="center", va="center",fontweight="bold", fontsize=15)
-  fig.text(0.06, 0.5, "North (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15)
-end
-
-
+#   #fig.subplots_adjust(right=0.8)
+#   cbar_ax = fig.add_axes([0.92, 0.15, 0.05, 0.7])
+#   sm = plt.cm.ScalarMappable(cmap=colormap, norm=plt.Normalize(vmin=minT, vmax=maxT))
+#   sm.set_array([])
+#   plt.colorbar(sm,cax=cbar_ax,orientation="vertical",shrink=0.6)
+#   #plt.subplots_adjust(bottom=0.1, right=0.8, top=0.9);
+#   #cax = plt.axes([0.85, 0.1, 0.075, 0.8])
+#   #plt.colorbar(cax=cax)
+# end
 
 function mollplot_temperature_healpix(image; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide")
   xsize = 2000

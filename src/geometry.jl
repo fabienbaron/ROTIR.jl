@@ -6,7 +6,8 @@ mutable struct tessellation{T}
 end
 
 mutable struct stellar_geometry{T} # typically one per epoch, rotation and projection of the base geometry
-  surface_type::Int64 
+  surface_type::Int64
+  tessellation_type::Int64 # 0: Healpix, 1: Longitude/Latitude # inherited from setup
   npix::Int64
   vertices_xyz::Array{T,3}
   vertices_spherical::Array{T,3}
@@ -23,9 +24,9 @@ end
 
 function Base.display(x::tessellation)
   if x.tessellation_type==0
-    println("tessellation type: Healpix")
+    println("Tessellation type: Healpix")
   elseif x.tessellation_type==1
-    println("tessellation type: Longitude/Lattitude")
+    println("Tessellation type: Latitude-Longitude")
   else 
     println("Unknown tessellation type");
   end
@@ -44,6 +45,14 @@ function Base.display(x::stellar_geometry)
   else
     println("Unknown Surface type");
   end
+  if x.tessellation_type==0
+    println("Tessellation type: Healpix")
+  elseif x.tessellation_type==1
+    println("Tessellation type: Latitude-Longitude")
+  else 
+    println("Unknown tessellation type");
+  end
+  println("Number of tessels = $(x.npix)")
   println("nquads_visible = $(x.nquads_visible)")
   println("Other fields:")
   println("--------------------------------------------------")
@@ -192,7 +201,7 @@ end
   spherical[:,:,1] = r
   # Single star
   center = T.([0.0,0.0,0.0]);
-  return stellar_geometry{T}(star_params.surface_type, npix, xyz, spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, center, T[], zeros(Complex{T}, 0, 0));
+  return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, center, T[], zeros(Complex{T}, 0, 0));
 end
 
 function create_binary(star1::tessellation, star2::tessellation, binary_params::binaryparameters, t)
