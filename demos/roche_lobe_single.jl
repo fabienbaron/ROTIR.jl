@@ -53,7 +53,7 @@ roche_parameters = (  surface_type  = 3,  # Round:0, Ellipsoid: 1, Rapid Rotator
 stars = create_star_multiepochs(tessels, roche_parameters, tepochs);
 
 # Create a single map based on the first epoch
-tmap = temperature_map_vonZeipel_roche_single(roche_parameters,stars[1], tepochs[1]);
+tmap = parametric_temperature_map(roche_parameters,stars[1]);
 
 # Examples of plots
 plot2d_wireframe(stars[1])
@@ -61,8 +61,8 @@ plot2d_allepochs(tmap, stars)
 plot3d_vertices(stars[1])
 plot3d(tmap, stars[1])
 plot_mollweide(tmap, stars[1])
-#plot3d_makie(tmap, stars[1])
-#plot2d_makie(tmap, stars[1])
+##plot3d_makie(tmap, stars[1]) # Work in progress
+##plot2d_makie(tmap, stars[1]) # Work in progress
 # In the future, maybe create as many maps as epochs (useful if interactions)
 #tmaps = temperature_map_vonZeipel_roche_single(roche_parameters,stars, tepochs);
 
@@ -76,9 +76,42 @@ v2_model, t3amp_model, t3phi_model = observables(tmap, stars[1], data[1]);
 chi2v2, chi2t3amp, chi2t3phi = chi2s(tmap, stars[1], data[1], verbose = true);
 
 # Total chi2 summed over all epochs
-chi2 = spheroid_chi2_allepochs_f(tmap, stars, data)
+chi2_epochs = spheroid_chi2_allepochs_f(tmap, stars, data)
 
 
+
+
+# Now let's time the parameters to chi2 chain
+chi2_parametric_surface=p->spheroid_parametric_f(p, tessels, data, tepochs) 
+
+# Test
+chi2_parametric_surface(roche_parameters)
+
+
+
+
+# Work in progress
+# Will need to use ParameterHandling to transform NamedTuple into parameter vector
+
+
+chi2_parametric_surface = (p,g)->spheroid_surface_f(p, tessels, data, tepochs);
+using NLopt
+fitter = :LN_NELDERMEAD
+opt = Opt(fitter, length(shape_params));
+min_objective!(opt, chi2_parametric_surface)
+xtol_rel!(opt,1e-3)
+lower_bounds!(opt, lbounds);
+upper_bounds!(opt, hbounds);
+min_f,min_x,ret = optimize(opt, shape_params); # Will be slow due to the cost of each iteration
+num_evals = NLopt.numevals(opt)
+println(
+    """
+    Best chi2 value       : $min_f
+    Solution              : $min_x
+    Solution status       : $ret
+    Number of evaluations : $num_evals
+    """
+)
 
 
 

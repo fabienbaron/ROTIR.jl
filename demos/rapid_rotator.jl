@@ -33,6 +33,6 @@ star_params = (
               )
 
 stars = create_star_multiepochs(tessels, star_params, tepochs);
-tmap = temperature_map_vonZeipel_rapid_rotator(star_params,stars[1]);
-plot2d_temperature_allepochs(tmap, stars)
-mollplot_temperature_healpix(tmap)
+tmap = parametric_temperature_map(star_params,stars[1]);
+plot2d_allepochs(tmap, stars)
+plot_mollweide(tmap, stars[1])

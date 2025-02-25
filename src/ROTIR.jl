@@ -43,7 +43,7 @@ export setup_oi!, setup_polygon_ft, observables, chi2s
 export spheroid_chi2_f,spheroid_chi2_fg,spheroid_chi2_fg_alt,spheroid_chi2_allepochs_fg,spheroid_chi2_allepochs_f
 export spheroid_total_variation,spheroid_crit_multiepochs_fg,spheroid_l2_fg,spheroid_harmon_bias_fg,spheroid_regularization
 export spheroid_oi_reconstruct, oi_reconstruct_mutitemporal, oi_multitemporal_fg
-
+export parametric_temperature_map, spheroid_parametric_f
 # Export plotting routines
 export plot2d_wireframe, plot2d_allepochs
 export sometimes_visible, never_visible

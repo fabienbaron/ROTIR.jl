@@ -20,6 +20,7 @@ mutable struct stellar_geometry{T} # typically one per epoch, rotation and proje
   center_offsets::Array{T,1} # Center of mass within star
   polyflux::Array{T,1}
   polyft::Matrix{Complex{T}}
+  t::T # epoch time
 end
 
 function Base.display(x::tessellation)
@@ -70,6 +71,7 @@ function Base.display(x::stellar_geometry)
   println("polyflux              : temperature to flux vector (set)")
   println("polyft                : temperature to visibility matrix (set)")
   end
+  println("Epoch (time)          : time corresponding to this stellar shape")
 end
 
 
@@ -201,7 +203,7 @@ end
   spherical[:,:,1] = r
   # Single star
   center = T.([0.0,0.0,0.0]);
-  return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, center, T[], zeros(Complex{T}, 0, 0));
+  return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, center, T[], zeros(Complex{T}, 0, 0), t);
 end
 
 function create_binary(star1::tessellation, star2::tessellation, binary_params::binaryparameters, t)

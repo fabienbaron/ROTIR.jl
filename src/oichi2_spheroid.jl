@@ -168,6 +168,23 @@ end
 return f;
 end
 
+function parametric_temperature_map(parameters, star) # dispatches parametric 
+  if star.surface_type == 3
+    return temperature_map_vonZeipel_roche_single(parameters,star, star.t);
+  elseif star.surface_type == 2
+    return temperature_map_vonZeipel_rapid_rotator(parameters,star);
+  else
+    println("Unimplemented parametric von Zeipel function")
+  end
+  return
+end
+
+function spheroid_parametric_f(parameters, tessels, data, tepochs) 
+  stars = create_star_multiepochs(tessels, parameters, tepochs);
+  setup_oi!(data, stars) 
+  x = parametric_temperature_map(parameters, stars[1]);
+  return spheroid_chi2_allepochs_f(x, stars, data)
+end
 
 function proj_positivity(ztilde)
 z = copy(ztilde)
