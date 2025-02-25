@@ -35,7 +35,8 @@ roche_parameters = (  surface_type  = 3,  # Round:0, Ellipsoid: 1, Rapid Rotator
 # Now Roche parameters
                       d              =    77.0f0, # distance (parsecs)
                       q              =    1.0f0, # unitless, q = Mass secondary/Mass primary
-                      fillout_factor_primary = -1, # unitless; value of the potential at Roche lobe divided by value of potential at the surface
+                      fillout_factor_primary = -1, # if negative, won't be used and rpole will be used to define potential
+                                                   # unitless, value of the potential at Roche lobe divided by value of potential at the surface
 # And orbital parameters                      
                       i = 0.0f0, # degrees
                       Ω = 0.0f0, # degrees
