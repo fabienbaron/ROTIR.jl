@@ -45,14 +45,10 @@ export spheroid_total_variation,spheroid_crit_multiepochs_fg,spheroid_l2_fg,sphe
 export spheroid_oi_reconstruct, oi_reconstruct_mutitemporal, oi_multitemporal_fg
 
 # Export plotting routines
-export plot2d_wireframe, plot2d_temperature_allepochs, plot2d_temperature_allepochs_cmap
-export plot2d_intensity_allepochs, plot2d_intensity_allepochs_cmap
+export plot2d_wireframe, plot2d_allepochs
 export sometimes_visible, never_visible
-export mollplot_temperature_longlat, mollplot_temperature_healpix
-export plot3d_temperature, plot2d_temperature_binary, plot2d_temperature, plot2d_temperature_improved
-export plot2d_temperature_binary_poleline
-export plot2d_temperature_savefig, plot2d_temperature_cmap
-export plot3d_temperature_binary
+export plot_mollweide
+export plot3d, plot3d_vertices, plot2d
 
 export nside2npix, npix2n # Healpix
 export lci_linear_inversion_frame,lci_reconstruct_mutitemporal,rescale_temperature

@@ -54,8 +54,13 @@ stars = create_star_multiepochs(tessels, roche_parameters, tepochs);
 
 # Create a single map based on the first epoch
 tmap = temperature_map_vonZeipel_roche_single(roche_parameters,stars[1], tepochs[1]);
-plot2d_temperature_allepochs(tmap, stars)
-plot3d_temperature(tmap, stars[1])
+
+# Examples of plots
+plot2d_wireframe(stars[1])
+plot2d_allepochs(tmap, stars)
+plot3d_vertices(stars[1])
+plot3d(tmap, stars[1])
+plot_mollweide(tmap, stars[1])
 
 #plot3d_temperature_makie(tmap, stars[1])
 #plot2d_temperature_makie(tmap, stars[1])

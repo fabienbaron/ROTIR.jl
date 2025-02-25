@@ -27,7 +27,7 @@ function plot2Dquad(star,i) # plots the ith quad projected onto the imaging plan
   return 1
 end
 
-function plot3d_temperature(star_temperature_map,star) # this plots the temperature map
+function plot3d(star_temperature_map,star) # this plots the temperature map
 # star_temperature_map =secondary_temperature_map; star= secondary_geom
 # star_temperature_map = primary_temperature_map; star= primary_geom
   corners_xyz = star.vertices_xyz[:,1:4,:];
@@ -111,7 +111,7 @@ ax.set_aspect("equal")
 PyPlot.draw()
 end
 
-function plot2d_temperature(tmap, star, stellar_parameters, oblate_consts; plotmesh=false, colormap="gist_heat", offset=[0.0,0.0,0.0], fig=[], ax=[], draw_polelines=true, poleline_frac=0.35, draw_rotation_arrow=true, rotation_arrow_axis="S", rotation_arrow_axis_fraction=1.0, draw_graticules=true, draw_convex_hull=true) 
+function plot2d(tmap, star, stellar_parameters, oblate_consts; plotmesh=false, colormap="gist_heat", offset=[0.0,0.0,0.0], fig=[], ax=[], draw_polelines=true, poleline_frac=0.35, draw_rotation_arrow=true, rotation_arrow_axis="S", rotation_arrow_axis_fraction=1.0, draw_graticules=true, draw_convex_hull=true) 
 # this plots the temperature map onto the projected 2D image plane (= observer view)
     patches = pyimport("matplotlib.patches")
     collections = pyimport("matplotlib.collections")
@@ -530,8 +530,8 @@ function plot2d_wireframe(star) # this plots the temperature map onto the projec
   patches = pyimport("matplotlib.patches")
   fig = figure("Epoch image",figsize=(10,10),facecolor="White")
   ax = fig.add_axes([0.1,0.1,0.85,0.85]);
-  xlabel("X (mas)", fontweight="bold", fontsize=15);
-  ylabel("Y (mas)", fontweight="bold", fontsize=15);
+  xlabel("X (mas)", fontsize=14);
+  ylabel("Y (mas)", fontsize=14);
   axis_max = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))*1.5;
   ax.set_xlim([axis_max,-axis_max]);
   ax.set_ylim([-axis_max,axis_max]);
@@ -539,7 +539,7 @@ function plot2d_wireframe(star) # this plots the temperature map onto the projec
   p = patches.Polygon(hcat(-star.projx[i,:],star.projy[i,:]),closed=true,edgecolor="black", facecolor="white",rasterized=false)
   ax.add_patch(p);
   end
-  ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+  ax.tick_params(axis="both", which="both", labelsize=15, width=1, length=5);
   if (ceil(axis_max) <= 3.0)
     long_tick = 1.0;
     short_tick = 0.1;
@@ -567,7 +567,7 @@ function plot2d_wireframe(star) # this plots the temperature map onto the projec
 end
 
 
-function plot2d_temperature_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",arr_box=23)
+function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",arr_box=23)
     patches = pyimport("matplotlib.patches")
     fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
     if plotmesh == true
@@ -851,6 +851,17 @@ end
 #   #plt.colorbar(cax=cax)
 # end
 
+function plot_mollweide(tmap, star; kwargs...)
+  if star.tessellation_type == 0
+    mollplot_temperature_healpix(tmap,kwargs...)
+  else 
+    # Longitude and latitude need to be provided in kwargs
+    #... or could we do otherwise and recompute from theta/phi?
+    mollplot_temperature_longlat(tmap,kwargs...)
+  end
+  return
+end
+
 function mollplot_temperature_healpix(image; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide")
   xsize = 2000
   ysize = div(xsize,2)
@@ -987,273 +998,273 @@ function mollplot_temperature_longlat(image, ntheta, nphi; visible_pixels = [], 
   ax.tick_params(axis="y", labelsize=15)
 end
 
-function mollplot_temperature_longlat_visblock(image, ntheta, nphi, star_epoch_geom; vmin = -1000.0, vmax = 1000.0, colormap="gist_heat", figtitle="Mollweide")
-  xsize = 2000
-  ysize = div(xsize,2)
-  theta = collect(range(pi, stop=0, length=ysize))
-  phi   = collect(range(-pi, stop=pi, length=xsize))
-  longitude = collect(range(-180.0, stop=180.0, length=xsize))/180.0*pi
-  latitude = collect(range(90.0, stop=-90.0, length=ysize))/180.0*pi
-  # project the map to a rectangular matrix xsize x ysize
-  PHI = [i for j in theta, i in phi]
-  THETA = [j for j in theta, i in phi]
-  grid_pix = longlat_ang2pix(ntheta, nphi, THETA, PHI); # for long lat scheme
-  #grid_map = image[grid_pix]
+# function mollplot_temperature_longlat_visblock(image, ntheta, nphi, star_epoch_geom; vmin = -1000.0, vmax = 1000.0, colormap="gist_heat", figtitle="Mollweide")
+#   xsize = 2000
+#   ysize = div(xsize,2)
+#   theta = collect(range(pi, stop=0, length=ysize))
+#   phi   = collect(range(-pi, stop=pi, length=xsize))
+#   longitude = collect(range(-180.0, stop=180.0, length=xsize))/180.0*pi
+#   latitude = collect(range(90.0, stop=-90.0, length=ysize))/180.0*pi
+#   # project the map to a rectangular matrix xsize x ysize
+#   PHI = [i for j in theta, i in phi]
+#   THETA = [j for j in theta, i in phi]
+#   grid_pix = longlat_ang2pix(ntheta, nphi, THETA, PHI); # for long lat scheme
+#   #grid_map = image[grid_pix]
 
-  pixels_vis = Array{Bool}(undef, star_epoch_geom.npix);
-  pixels_hidden = Array{Bool}(undef, star_epoch_geom.npix);
-  pixels_vis[:] .= false;
-  pixels_hidden[:] .= true;
-  pixels_vis[star_epoch_geom.index_quads_visible] .= true;
-  pixels_hidden[star_epoch_geom.index_quads_visible] .= false;
+#   pixels_vis = Array{Bool}(undef, star_epoch_geom.npix);
+#   pixels_hidden = Array{Bool}(undef, star_epoch_geom.npix);
+#   pixels_vis[:] .= false;
+#   pixels_hidden[:] .= true;
+#   pixels_vis[star_epoch_geom.index_quads_visible] .= true;
+#   pixels_hidden[star_epoch_geom.index_quads_visible] .= false;
 
-  grid_map_vis = (image.*pixels_vis)[circshift(grid_pix,(0,Int(xsize/2)))];
-  grid_map_hidden = (image.*pixels_hidden)[circshift(grid_pix,(0,Int(xsize/2)))];
-  fig = figure(figtitle, figsize=(10, 7))
-  clf();
-  ax = subplot(111,projection="mollweide",title=title)
-  # rasterized makes the map bitmap while the labels remain vectorial
-  # flip longitude to the astro convention
-  # if visible_pixels == []
-  #     vmin = minimum(image);
-  #     vmax = maximum(image)*1.01;
-  # else
-  #    vmin = minimum(image[visible_pixels]);
-  #    vmax = maximum(image[visible_pixels])*1.01;
-  # end
-  vmin = minimum(image[star_epoch_geom.index_quads_visible]);
-  vmax = maximum(image[star_epoch_geom.index_quads_visible]);
+#   grid_map_vis = (image.*pixels_vis)[circshift(grid_pix,(0,Int(xsize/2)))];
+#   grid_map_hidden = (image.*pixels_hidden)[circshift(grid_pix,(0,Int(xsize/2)))];
+#   fig = figure(figtitle, figsize=(10, 7))
+#   clf();
+#   ax = subplot(111,projection="mollweide",title=title)
+#   # rasterized makes the map bitmap while the labels remain vectorial
+#   # flip longitude to the astro convention
+#   # if visible_pixels == []
+#   #     vmin = minimum(image);
+#   #     vmax = maximum(image)*1.01;
+#   # else
+#   #    vmin = minimum(image[visible_pixels]);
+#   #    vmax = maximum(image[visible_pixels])*1.01;
+#   # end
+#   vmin = minimum(image[star_epoch_geom.index_quads_visible]);
+#   vmax = maximum(image[star_epoch_geom.index_quads_visible]);
 
-  moll = pcolormesh(longitude, latitude, grid_map_vis, vmin=vmin, vmax=vmax, rasterized=true, cmap=colormap)
-  moll2 = pcolormesh(longitude, latitude, grid_map_hidden, rasterized=true, cmap="spring_r")
-  # graticule
-  ax.set_longitude_grid(30)
-  ax.set_latitude_grid(30)
-  ax.set_longitude_grid_ends(90)
-  spacing = 0.04
-  subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing)
-  grid(true)
+#   moll = pcolormesh(longitude, latitude, grid_map_vis, vmin=vmin, vmax=vmax, rasterized=true, cmap=colormap)
+#   moll2 = pcolormesh(longitude, latitude, grid_map_hidden, rasterized=true, cmap="spring_r")
+#   # graticule
+#   ax.set_longitude_grid(30)
+#   ax.set_latitude_grid(30)
+#   ax.set_longitude_grid_ends(90)
+#   spacing = 0.04
+#   subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing)
+#   grid(true)
 
-  ticks = collect(range(vmin, stop=vmax, length=7));
-  cb = colorbar(moll, orientation="horizontal", shrink=.6, pad=0.05, ticks=ticks)
-  cb.ax.xaxis.labelpad=5
-  cb.ax.xaxis.set_label_text("Temperature (K)")
-  # workaround for issue with viewers, see colorbar docstring
-  cb.solids.set_edgecolor("face")
-  ax.tick_params(axis="x", labelsize=15)
-  ax.tick_params(axis="y", labelsize=15)
-end
+#   ticks = collect(range(vmin, stop=vmax, length=7));
+#   cb = colorbar(moll, orientation="horizontal", shrink=.6, pad=0.05, ticks=ticks)
+#   cb.ax.xaxis.labelpad=5
+#   cb.ax.xaxis.set_label_text("Temperature (K)")
+#   # workaround for issue with viewers, see colorbar docstring
+#   cb.solids.set_edgecolor("face")
+#   ax.tick_params(axis="x", labelsize=15)
+#   ax.tick_params(axis="y", labelsize=15)
+# end
 
 
-function plot2d_temperature_binary(tmap1, tmap2, star_epoch_geom1, star_epoch_geom2; zorder = 1, plotmesh=false,labels=false, poleline_frac = 0.35, draw_orbit_arrow=true, draw_convex_hull=true, draw_graticules=true)
-    patches = pyimport("matplotlib.patches")
-    collections = pyimport("matplotlib.collections")
-    fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+# function plot2d_temperature_binary(tmap1, tmap2, star_epoch_geom1, star_epoch_geom2; zorder = 1, plotmesh=false,labels=false, poleline_frac = 0.35, draw_orbit_arrow=true, draw_convex_hull=true, draw_graticules=true)
+#     patches = pyimport("matplotlib.patches")
+#     collections = pyimport("matplotlib.collections")
+#     fig = figure("Epoch image",figsize=(10,10),facecolor="White")
     
-    if plotmesh == true
-      meshcolor = "grey"
-    else
-      meshcolor = "none"
-    end
-    xlabel("East (mas)", fontweight="bold", fontsize=15);
-    ylabel("West (mas)", fontweight="bold", fontsize=15);
+#     if plotmesh == true
+#       meshcolor = "grey"
+#     else
+#       meshcolor = "none"
+#     end
+#     xlabel("East (mas)", fontweight="bold", fontsize=15);
+#     ylabel("West (mas)", fontweight="bold", fontsize=15);
 
-    # find what the axes are
-    star1_radiusmax = maximum(sqrt.(star_epoch_geom1.vertices_xyz[:,:,1].^2 .+ star_epoch_geom1.vertices_xyz[:,:,2].^2 .+ star_epoch_geom1.vertices_xyz[:,:,3].^2));
-    star2_radiusmax = maximum(sqrt.(star_epoch_geom2.vertices_xyz[:,:,1].^2 .+ star_epoch_geom2.vertices_xyz[:,:,2].^2 .+ star_epoch_geom2.vertices_xyz[:,:,3].^2));
-    axis_max = (star1_radiusmax + star2_radiusmax)*1.5;
+#     # find what the axes are
+#     star1_radiusmax = maximum(sqrt.(star_epoch_geom1.vertices_xyz[:,:,1].^2 .+ star_epoch_geom1.vertices_xyz[:,:,2].^2 .+ star_epoch_geom1.vertices_xyz[:,:,3].^2));
+#     star2_radiusmax = maximum(sqrt.(star_epoch_geom2.vertices_xyz[:,:,1].^2 .+ star_epoch_geom2.vertices_xyz[:,:,2].^2 .+ star_epoch_geom2.vertices_xyz[:,:,3].^2));
+#     axis_max = (star1_radiusmax + star2_radiusmax)*1.5;
     
-    axis_max = 3.0
-    ax = gca();
-    ax.set_aspect("equal")
-    ax.set_xlim([axis_max,-axis_max])
-    ax.set_ylim([-axis_max,axis_max])
+#     axis_max = 3.0
+#     ax = gca();
+#     ax.set_aspect("equal")
+#     ax.set_xlim([axis_max,-axis_max])
+#     ax.set_ylim([-axis_max,axis_max])
 
 
-    projmap1 = tmap1[star_epoch_geom1.index_quads_visible];
-    projmap2 = tmap2[star_epoch_geom2.index_quads_visible];
-    max_temperature = maximum([projmap1;projmap2])*1.1; # multiply maximum temperature for best color scheme
+#     projmap1 = tmap1[star_epoch_geom1.index_quads_visible];
+#     projmap2 = tmap2[star_epoch_geom2.index_quads_visible];
+#     max_temperature = maximum([projmap1;projmap2])*1.1; # multiply maximum temperature for best color scheme
 
-    if (zorder == 1) # Primary is in front
-      for i=1:star_epoch_geom1.nquads_visible
-          # star 1
-          p = patches.Polygon(hcat(star_epoch_geom1.projx[i,:], star_epoch_geom1.projy[i,:]),
-          closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false, zorder=2);
-          ax.add_patch(p);
-      end
-      for i=1:star_epoch_geom2.nquads_visible
-          # star 2
-          p = patches.Polygon(hcat(star_epoch_geom2.projx[i,:], star_epoch_geom2.projy[i,:]),
-          closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false, zorder=3)
-          ax.add_patch(p);
-      end
-      else
-      for i=1:star_epoch_geom2.nquads_visible
-          # star 2
-          p = patches.Polygon(hcat(star_epoch_geom2.projx[i,:], star_epoch_geom2.projy[i,:]),
-          closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false, zorder=2)
-          ax.add_patch(p);
-      end
-      for i=1:star_epoch_geom1.nquads_visible
-          # star 1
-          p = patches.Polygon(hcat(star_epoch_geom1.projx[i,:], star_epoch_geom1.projy[i,:]),
-          closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false, zorder=3);
-          ax.add_patch(p);
-      end
-    end
-    ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-    if (ceil(axis_max) <= 3.0)
-    long_tick = 1.0;
-    short_tick = 0.1;
-    elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-    long_tick = 2.0;
-    short_tick = 0.2;
-    elseif (ceil(axis_max) > 6.0)
-    long_tick = 3.0;
-    short_tick = 0.5;
-    end
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.tick_params(axis="both", which="minor", width=2, length=5);
-    # make axes thicker
-    ax.spines["top"].set_linewidth(2);
-    ax.spines["bottom"].set_linewidth(2);
-    ax.spines["left"].set_linewidth(2);
-    ax.spines["right"].set_linewidth(2);
-end
+#     if (zorder == 1) # Primary is in front
+#       for i=1:star_epoch_geom1.nquads_visible
+#           # star 1
+#           p = patches.Polygon(hcat(star_epoch_geom1.projx[i,:], star_epoch_geom1.projy[i,:]),
+#           closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false, zorder=2);
+#           ax.add_patch(p);
+#       end
+#       for i=1:star_epoch_geom2.nquads_visible
+#           # star 2
+#           p = patches.Polygon(hcat(star_epoch_geom2.projx[i,:], star_epoch_geom2.projy[i,:]),
+#           closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false, zorder=3)
+#           ax.add_patch(p);
+#       end
+#       else
+#       for i=1:star_epoch_geom2.nquads_visible
+#           # star 2
+#           p = patches.Polygon(hcat(star_epoch_geom2.projx[i,:], star_epoch_geom2.projy[i,:]),
+#           closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false, zorder=2)
+#           ax.add_patch(p);
+#       end
+#       for i=1:star_epoch_geom1.nquads_visible
+#           # star 1
+#           p = patches.Polygon(hcat(star_epoch_geom1.projx[i,:], star_epoch_geom1.projy[i,:]),
+#           closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false, zorder=3);
+#           ax.add_patch(p);
+#       end
+#     end
+#     ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+#     if (ceil(axis_max) <= 3.0)
+#     long_tick = 1.0;
+#     short_tick = 0.1;
+#     elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
+#     long_tick = 2.0;
+#     short_tick = 0.2;
+#     elseif (ceil(axis_max) > 6.0)
+#     long_tick = 3.0;
+#     short_tick = 0.5;
+#     end
+#     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.tick_params(axis="both", which="minor", width=2, length=5);
+#     # make axes thicker
+#     ax.spines["top"].set_linewidth(2);
+#     ax.spines["bottom"].set_linewidth(2);
+#     ax.spines["left"].set_linewidth(2);
+#     ax.spines["right"].set_linewidth(2);
+# end
 
-# this plots the temperature map onto the projected 2D image plane (= observer view)
-# Adds polelines. TBD: Needs more centering of polelines
-function plot2d_temperature_binary_poleline(tmap1, tmap2, star1, star2, bparameters, tepoch; plotmesh=false,labels=false)
-  rotation_period = bparameters.binary_period;
-  fillout_factor = bparameters.fillout_factor;
+# # this plots the temperature map onto the projected 2D image plane (= observer view)
+# # Adds polelines. TBD: Needs more centering of polelines
+# function plot2d_temperature_binary_poleline(tmap1, tmap2, star1, star2, bparameters, tepoch; plotmesh=false,labels=false)
+#   rotation_period = bparameters.binary_period;
+#   fillout_factor = bparameters.fillout_factor;
   
-  # still missing the actual intensity (includes LD)
-  patches = pyimport("matplotlib.patches")
-  fig = figure("Epoch image",figsize=(10,10),facecolor="White")
-  ax = fig.add_axes([0.1,0.1,0.85,0.85])
-  if plotmesh == true
-    meshcolor = "grey"
-  else
-    meshcolor = "none"
-  end
-  xlabel("X (mas)", fontweight="bold", fontsize=15);
-  ylabel("Y (mas)", fontweight="bold", fontsize=15);
+#   # still missing the actual intensity (includes LD)
+#   patches = pyimport("matplotlib.patches")
+#   fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+#   ax = fig.add_axes([0.1,0.1,0.85,0.85])
+#   if plotmesh == true
+#     meshcolor = "grey"
+#   else
+#     meshcolor = "none"
+#   end
+#   xlabel("X (mas)", fontweight="bold", fontsize=15);
+#   ylabel("Y (mas)", fontweight="bold", fontsize=15);
 
-  # find what the axes are
-  star1_radiusmax = maximum(sqrt.(star1.vertices_xyz[:,:,1].^2 .+ star1.vertices_xyz[:,:,2].^2 .+ star1.vertices_xyz[:,:,3].^2));
-  star2_radiusmax = maximum(sqrt.(star2.vertices_xyz[:,:,1].^2 .+ star2.vertices_xyz[:,:,2].^2 .+ star2.vertices_xyz[:,:,3].^2));
-  axis_max = (star1_radiusmax + star2_radiusmax)*1.5;
-  ax.set_xlim([axis_max,-axis_max])
-  ax.set_ylim([-axis_max,axis_max])
+#   # find what the axes are
+#   star1_radiusmax = maximum(sqrt.(star1.vertices_xyz[:,:,1].^2 .+ star1.vertices_xyz[:,:,2].^2 .+ star1.vertices_xyz[:,:,3].^2));
+#   star2_radiusmax = maximum(sqrt.(star2.vertices_xyz[:,:,1].^2 .+ star2.vertices_xyz[:,:,2].^2 .+ star2.vertices_xyz[:,:,3].^2));
+#   axis_max = (star1_radiusmax + star2_radiusmax)*1.5;
+#   ax.set_xlim([axis_max,-axis_max])
+#   ax.set_ylim([-axis_max,axis_max])
 
-  projmap1 = tmap1[star1.index_quads_visible];
-  projmap2 = tmap2[star2.index_quads_visible];
-  max_temperature = maximum([projmap1;projmap2])*1.1; # multiply maximum temperature for best color scheme
+#   projmap1 = tmap1[star1.index_quads_visible];
+#   projmap2 = tmap2[star2.index_quads_visible];
+#   max_temperature = maximum([projmap1;projmap2])*1.1; # multiply maximum temperature for best color scheme
 
-  # Adds arrows to plotting
-  a1 = star2.projx[1,:][2]
-  b1 = star2.projy[1,:][2]
-  a2 = star2.projx[end,:][2]
-  b2 = star2.projy[end,:][2]
-  sx = a2-a1
-  sy = b2-b1
-  c = -sx*0.25
-  d = -sy*0.25
-  arrow(a1, b1, c, d,
-  head_width=0.008,
-  width=0.005,
-  head_length=0.007,
-  overhang=0.2,
-  facecolor="black")
-  arrow(a2, b2, -c, -d,
-  head_width=0.008,
-  width=0.005,
-  head_length=0.000,
-  overhang=0.0,
-  facecolor="black")
+#   # Adds arrows to plotting
+#   a1 = star2.projx[1,:][2]
+#   b1 = star2.projy[1,:][2]
+#   a2 = star2.projx[end,:][2]
+#   b2 = star2.projy[end,:][2]
+#   sx = a2-a1
+#   sy = b2-b1
+#   c = -sx*0.25
+#   d = -sy*0.25
+#   arrow(a1, b1, c, d,
+#   head_width=0.008,
+#   width=0.005,
+#   head_length=0.007,
+#   overhang=0.2,
+#   facecolor="black")
+#   arrow(a2, b2, -c, -d,
+#   head_width=0.008,
+#   width=0.005,
+#   head_length=0.000,
+#   overhang=0.0,
+#   facecolor="black")
 
-  aa1 = star1.projx[1,:][2]
-  bb1 = star1.projy[1,:][2]
-  aa2 = star1.projx[end,:][2]
-  bb2 = star1.projy[end,:][2]
-  sxx = aa2-aa1
-  syy = bb2-bb1
-  cc = -sxx*.25
-  dd = -syy*.25
-  arrow(aa1, bb1, cc, dd,
-  head_width=0.008,
-  width=0.005,
-  head_length=0.007,
-  overhang=0.2,
-  head_starts_at_zero="true",
-  facecolor="black")
+#   aa1 = star1.projx[1,:][2]
+#   bb1 = star1.projy[1,:][2]
+#   aa2 = star1.projx[end,:][2]
+#   bb2 = star1.projy[end,:][2]
+#   sxx = aa2-aa1
+#   syy = bb2-bb1
+#   cc = -sxx*.25
+#   dd = -syy*.25
+#   arrow(aa1, bb1, cc, dd,
+#   head_width=0.008,
+#   width=0.005,
+#   head_length=0.007,
+#   overhang=0.2,
+#   head_starts_at_zero="true",
+#   facecolor="black")
 
-  arrow(aa2, bb2, -cc, -dd,
-  head_width=0.008,
-  width=0.005,
-  head_length=0.000,
-  overhang=0.0,
-  head_starts_at_zero="true",
-  facecolor="black")
+#   arrow(aa2, bb2, -cc, -dd,
+#   head_width=0.008,
+#   width=0.005,
+#   head_length=0.000,
+#   overhang=0.0,
+#   head_starts_at_zero="true",
+#   facecolor="black")
 
-  x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparameters,tepoch);
-  if (z1 > z2) # plots furthest star first
-    for i=1:star1.nquads_visible
-      # star 1
-      p = patches.Polygon(hcat(star1.projx[i,:], star1.projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false);
-      ax.add_patch(p);
-    end
-    for i=1:star2.nquads_visible
-      # star 2
-      p = patches.Polygon(hcat(star2.projx[i,:], star2.projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false)
-      ax.add_patch(p);
-    end
-  else
-    for i=1:star2.nquads_visible
-      # star 2
-      p = patches.Polygon(hcat(star2.projx[i,:], star2.projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false)
-      ax.add_patch(p);
-    end
-    for i=1:star1.nquads_visible
-      # star 1
-      p = patches.Polygon(hcat(star1.projx[i,:], star1.projy[i,:]),
-      closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false);
-      ax.add_patch(p);
-    end
-  end
+#   x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparameters,tepoch);
+#   if (z1 > z2) # plots furthest star first
+#     for i=1:star1.nquads_visible
+#       # star 1
+#       p = patches.Polygon(hcat(star1.projx[i,:], star1.projy[i,:]),
+#       closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false);
+#       ax.add_patch(p);
+#     end
+#     for i=1:star2.nquads_visible
+#       # star 2
+#       p = patches.Polygon(hcat(star2.projx[i,:], star2.projy[i,:]),
+#       closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false)
+#       ax.add_patch(p);
+#     end
+#   else
+#     for i=1:star2.nquads_visible
+#       # star 2
+#       p = patches.Polygon(hcat(star2.projx[i,:], star2.projy[i,:]),
+#       closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap2[i]/max_temperature),fill=true,rasterized=false)
+#       ax.add_patch(p);
+#     end
+#     for i=1:star1.nquads_visible
+#       # star 1
+#       p = patches.Polygon(hcat(star1.projx[i,:], star1.projy[i,:]),
+#       closed=true,edgecolor=meshcolor,facecolor=get_cmap("gist_heat")(projmap1[i]/max_temperature),fill=true,rasterized=false);
+#       ax.add_patch(p);
+#     end
+#   end
 
-  ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-  if (ceil(axis_max) <= 3.0)
-    long_tick = 1.0;
-    short_tick = 0.1;
-  elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-    long_tick = 2.0;
-    short_tick = 0.2;
-  elseif (ceil(axis_max) > 6.0)
-    long_tick = 3.0;
-    short_tick = 0.5;
-  end
-  ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-  ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-  ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-  ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-  ax.tick_params(axis="both", which="minor", width=2, length=5);
-  # make axes thicker
-  ax.spines["top"].set_linewidth(2);
-  ax.spines["bottom"].set_linewidth(2);
-  ax.spines["left"].set_linewidth(2);
-  ax.spines["right"].set_linewidth(2);
+#   ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+#   if (ceil(axis_max) <= 3.0)
+#     long_tick = 1.0;
+#     short_tick = 0.1;
+#   elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
+#     long_tick = 2.0;
+#     short_tick = 0.2;
+#   elseif (ceil(axis_max) > 6.0)
+#     long_tick = 3.0;
+#     short_tick = 0.5;
+#   end
+#   ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#   ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#   ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#   ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#   ax.tick_params(axis="both", which="minor", width=2, length=5);
+#   # make axes thicker
+#   ax.spines["top"].set_linewidth(2);
+#   ax.spines["bottom"].set_linewidth(2);
+#   ax.spines["left"].set_linewidth(2);
+#   ax.spines["right"].set_linewidth(2);
 
-  ax.plot();
-  PyPlot.draw()
+#   ax.plot();
+#   PyPlot.draw()
 
-end
+# end
 
 
 # #note: this requires healpy
