@@ -155,7 +155,7 @@ end
 function spheroid_chi2_allepochs_f(x, stars, data; epochs_weights=[], verbose=false)
 nepochs = length(data)
 chi2_t = zeros(eltype(x), nepochs);
-for i=1:nepochs # weighted sum -- should probably do the computation in parallel
+Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
   chi2_t[i] = spheroid_chi2_f(x, stars[i], data[i], verbose=verbose);
 end
 f = sum(chi2_t)

@@ -928,6 +928,7 @@ cb.ax.xaxis.set_label_text("Temperature (K)")
 cb.solids.set_edgecolor("face")
 ax.tick_params(axis="x", labelsize=15)
 ax.tick_params(axis="y", labelsize=15)
+return
 end
 
 function mollplot_temperature_longlat(image, ntheta, nphi; visible_pixels = [], vmin = -Inf, vmax = Inf, colormap="gist_heat", figtitle="Mollweide", incl=90.0)
@@ -996,6 +997,7 @@ function mollplot_temperature_longlat(image, ntheta, nphi; visible_pixels = [], 
   cb.solids.set_edgecolor("face")
   ax.tick_params(axis="x", labelsize=15)
   ax.tick_params(axis="y", labelsize=15)
+  return
 end
 
 # function mollplot_temperature_longlat_visblock(image, ntheta, nphi, star_epoch_geom; vmin = -1000.0, vmax = 1000.0, colormap="gist_heat", figtitle="Mollweide")
