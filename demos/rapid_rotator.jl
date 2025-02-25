@@ -7,7 +7,6 @@ oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_
 nepochs, tepochs, data = readoifits_multiepochs(oifitsfiles);
 tepochs = tepochs .- tepochs[1]; # First epoch set as t=0
 
-
 # To use the latitude/longitude scheme
 # ntheta=50
 # nphi=50
@@ -35,5 +34,5 @@ star_params = (
 
 stars = create_star_multiepochs(tessels, star_params, tepochs);
 tmap = temperature_map_vonZeipel_rapid_rotator(star_params,stars[1]);
-#plot2d_temperature_allepochs(tmap, stars)
-#mollplot_temperature_healpix(tmap)
+plot2d_temperature_allepochs(tmap, stars)
+mollplot_temperature_healpix(tmap)

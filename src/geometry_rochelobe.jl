@@ -141,10 +141,11 @@ end
 
 
 function solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function)
+    # ii=64; jj=1; star = stars[1]
     # r0 = r_init; θ = star.vertices_spherical[ii,jj,2]; ϕ = star.vertices_spherical[ii,jj,3]
     # r0 = 0.5923035715675565; θ = 0.0; ϕ = 0.0; pot_surface = 4.45647759841041; potential_function = compute_potential_primary
     fgh = r->potential_function(r, D, θ, ϕ, q, async_ratio);
-    # close(); plot([fg(r)[1] for r in range(0.0001, D, length=1000)])
+    # close(); plot([fgh(r)[1] for r in range(0.0001, D, length=1000)])
     r = halley(r0, pot_surface, fgh);
     return r
 end
