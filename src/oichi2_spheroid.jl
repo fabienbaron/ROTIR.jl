@@ -94,11 +94,11 @@ function observables(x, star, data)
   cvis_model = poly_to_cvis(x, star);
   # compute observables from all cvis
   v2_model = cvis_to_v2(cvis_model, data.indx_v2);
-  ~, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);
+  _, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);
   return v2_model, t3amp_model, t3phi_model
 end
 
-function chi2s(x, star, data; verbose = true)
+function chi2s(x, star, data; verbose::Bool = true)
   v2_model, t3amp_model, t3phi_model = observables(x, star, data);
   chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
   chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
@@ -108,6 +108,36 @@ function chi2s(x, star, data; verbose = true)
   end
   return chi2_v2, chi2_t3amp, chi2_t3phi
 end
+
+function chi2s2(x, star, data; verbose::Bool = true)
+  v2_model, t3amp_model, t3phi_model = observables(x, star, data);
+  chi2_v2 = n2((v2_model - data.v2)./data.v2_err);
+  chi2_t3amp = n2((t3amp_model - data.t3amp)./data.t3amp_err);
+  chi2_t3phi = n2( mod360(t3phi_model - data.t3phi)./data.t3phi_err);
+  if verbose == true
+    println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi)
+  end
+  return chi2_v2, chi2_t3amp, chi2_t3phi
+end
+
+function spheroid_chi2_f(x, star, data; verbose::Bool = false) 
+  v2_model, t3amp_model, t3phi_model = observables(x, star, data);
+  chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
+  chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
+  chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);
+  if verbose == true
+    println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi)
+  end
+  return chi2_v2 + chi2_t3amp + chi2_t3phi
+end
+
+# function n2(A) # sum of squares. only makes a difference for thousands of uv points
+#   x = zero(eltype(A))
+#   @inbounds  @simd for v in A
+#     @fastmath x += v * v
+#   end
+#   return x
+# end
 
 function spheroid_chi2_allepochs_fg(x, g, epochs_weights, polyflux, polyft, data)
 f = 0;
@@ -122,13 +152,18 @@ println("All epochs, weighted chi2: ", f, "\n");
 return f;
 end
 
-function spheroid_chi2_allepochs_f(x, epochs_weights, polyflux, polyft, data)
-f = 0;
-npix = size(x);
+function spheroid_chi2_allepochs_f(x, stars, data; epochs_weights=[], verbose=false)
+chi2_t = zeros(eltype(x), length(data));
 for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-  f += epochs_weights[i]*spheroid_chi2_f(x, polyflux[i], polyft[i], data[i], true);
+  chi2_t[i] = spheroid_chi2_f(x, stars[i], data[i], verbose=true);
 end
-println("All epochs, weighted chi2: ", f, "\n");
+f = sum(chi2_t)
+if epochs_weights!=[]
+  f = f.*epochs_weights
+end
+if verbose == true 
+  println("All epochs, weighted chi2: ", f, "\n");
+end
 return f;
 end
 

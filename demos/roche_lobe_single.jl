@@ -61,17 +61,27 @@ plot2d_allepochs(tmap, stars)
 plot3d_vertices(stars[1])
 plot3d(tmap, stars[1])
 plot_mollweide(tmap, stars[1])
-
-#plot3d_temperature_makie(tmap, stars[1])
-#plot2d_temperature_makie(tmap, stars[1])
+#plot3d_makie(tmap, stars[1])
+#plot2d_makie(tmap, stars[1])
 # In the future, maybe create as many maps as epochs (useful if interactions)
 #tmaps = temperature_map_vonZeipel_roche_single(roche_parameters,stars, tepochs);
 
 # Setup the temperature-to-flux vector and the temperature-to-visility matrix
 setup_oi!(data, stars)
 
-v2_model, t3amp_model, t3phi_model = observables(star_maps, stars[1], data[1]);
-chi2v2, chi2t3amp, chi2t3phi = chi2s(star_maps, stars[1], data[1])
+# To get the observables are a given epoch
+v2_model, t3amp_model, t3phi_model = observables(tmap, stars[1], data[1]);
+
+# individual chi2
+chi2v2, chi2t3amp, chi2t3phi = chi2s(tmap, stars[1], data[1], verbose = true);
+
+# Total chi2 summed over all epochs
+chi2 = spheroid_chi2_allepochs_f(x, stars, data)
 
 
-# plot2d_temperature_allepochs(star_maps, stars) #to update for variable maps
+
+
+
+
+
+
