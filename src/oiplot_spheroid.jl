@@ -112,11 +112,11 @@ PyPlot.draw()
 end
 
 function plot2d(tmap, star, stellar_parameters, oblate_consts; plotmesh=false, colormap="gist_heat", offset=[0.0,0.0,0.0], fig=[], ax=[], draw_polelines=true, poleline_frac=0.35, draw_rotation_arrow=true, rotation_arrow_axis="S", rotation_arrow_axis_fraction=1.0, draw_graticules=true, draw_convex_hull=true) 
-# this plots the temperature map onto the projected 2D image plane (= observer view)
+# this plots the temperature map onto the projected 2D tmap plane (= observer view)
     patches = pyimport("matplotlib.patches")
     collections = pyimport("matplotlib.collections")
     if fig == []
-        fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+        fig = figure("Epoch tmap",figsize=(10,10),facecolor="White")
     end
     if ax == []
         ax = fig.add_axes([0.1,0.1,0.85,0.85]);
@@ -352,10 +352,10 @@ function plot2d(tmap, star, stellar_parameters, oblate_consts; plotmesh=false, c
     PyPlot.draw()
 end
 
-# function plot2d_temperature_cmap(tmap, star; plotmesh=true, minmaxT=[], colormap="gist_heat",offset=[0.0,0.0,0.0]) # this plots the temperature map onto the projected 2D image plane (= observer view)
+# function plot2d_temperature_cmap(tmap, star; plotmesh=true, minmaxT=[], colormap="gist_heat",offset=[0.0,0.0,0.0]) # this plots the temperature map onto the projected 2D tmap plane (= observer view)
 #   # still missing the actual intensity (includes LD)
 #   patches = pyimport("matplotlib.patches")
-#   fig = figure("Epoch image",figsize=(12,10),facecolor="White")
+#   fig = figure("Epoch tmap",figsize=(12,10),facecolor="White")
 #   ax = fig.add_axes([0.1,0.1,0.85,0.85]);
 #   if plotmesh == true
 #     meshcolor = "grey"
@@ -526,9 +526,9 @@ end
 #   close()
 # end
 
-function plot2d_wireframe(star) # this plots the temperature map onto the projected 2D image plane (= observer view)
+function plot2d_wireframe(star) # this plots the temperature map onto the projected 2D tmap plane (= observer view)
   patches = pyimport("matplotlib.patches")
-  fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+  fig = figure("Epoch tmap",figsize=(10,10),facecolor="White")
   ax = fig.add_axes([0.1,0.1,0.85,0.85]);
   xlabel("X (mas)", fontsize=14);
   ylabel("Y (mas)", fontsize=14);
@@ -583,6 +583,13 @@ function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gi
     # maxT = maximum(maximum.(tmap));
     minT = minimum(tmap);
     maxT = maximum(tmap);
+    
+    # Handle uniform maps
+    if minT == maxT
+      minT = 0.95*minT
+      maxT = 1.05*maxT
+      #meshcolor = "grey"
+    end
 
     for t=1:length(star)
       #fig.add_subplot(rows,cols,t)
@@ -862,7 +869,7 @@ function plot_mollweide(tmap, star; kwargs...)
   return
 end
 
-function mollplot_temperature_healpix(image; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide")
+function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide")
   xsize = 2000
   ysize = div(xsize,2)
   theta = collect(range(pi, stop=0.0, length=ysize))
@@ -870,38 +877,38 @@ function mollplot_temperature_healpix(image; visible_pixels = [], vmin = -Inf, v
   longitude = collect(range(-180, stop=180, length=xsize))/180*pi
   latitude = collect(range(-90, stop=90, length=ysize))/180*pi
   # project the map to a rectangular matrix xsize x ysize
-  nside = npix2nside(length(image))
+  nside = npix2nside(length(tmap))
   PHI = [i for j in theta, i in phi]
   THETA = [j for j in theta, i in phi]
   grid_pix = reshape(ang2pix_nest(nside, vec(THETA), vec(PHI)), size(PHI))
-  grid_map = image[grid_pix]
+  grid_map = tmap[grid_pix]
   fig = figure(figtitle, figsize=(10, 7))
-  clf();
+  fig.clear();
   ax = subplot(111,projection="mollweide")
   # rasterized makes the map bitmap while the labels remain vectorial
   # flip longitude to the astro convention
   if visible_pixels == []
     if (vmin == -Inf)
-      vmin = minimum(image);
+      vmin = minimum(tmap);
     end
     if (vmax == Inf)
-      vmax = maximum(image);
+      vmax = maximum(tmap);
     end
   else
     if (vmin == -Inf)
-      vmin = minimum(image[visible_pixels]);
+      vmin = minimum(tmap[visible_pixels]);
     end
     if (vmax == Inf)
-      vmax = maximum(image[visible_pixels]);
+      vmax = maximum(tmap[visible_pixels]);
     end
   end
   moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=colormap)
   # graticule
-  ax.set_longitude_grid(30)
-  ax.set_latitude_grid(30)
-  ax.set_longitude_grid_ends(90)
+  ax.set_longitude_grid(20);
+  ax.set_latitude_grid(20);
+  ax.set_longitude_grid_ends(90);
   spacing = 0.04
-  subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing)
+  subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing);
   grid(true)
   if incl != 90.0
     ax.axhline(-incl * pi/180, c=:black, ls="-.")
@@ -926,12 +933,12 @@ cb.ax.xaxis.set_label_text("Temperature (K)")
 
 # workaround for issue with viewers, see colorbar docstring
 cb.solids.set_edgecolor("face")
-ax.tick_params(axis="x", labelsize=15)
-ax.tick_params(axis="y", labelsize=15)
+ax.tick_params(axis="x", labelsize=12)
+ax.tick_params(axis="y", labelsize=12)
 return
 end
 
-function mollplot_temperature_longlat(image, ntheta, nphi; visible_pixels = [], vmin = -Inf, vmax = Inf, colormap="gist_heat", figtitle="Mollweide", incl=90.0)
+function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], vmin = -Inf, vmax = Inf, colormap="gist_heat", figtitle="Mollweide", incl=90.0)
   xsize = 2000
   ysize = div(xsize,2)
 
@@ -948,33 +955,33 @@ function mollplot_temperature_longlat(image, ntheta, nphi; visible_pixels = [], 
   PHI = [i for j in theta, i in phi]
   THETA = [j for j in theta, i in phi]
   grid_pix = longlat_ang2pix(ntheta, nphi, THETA, PHI); # for long lat scheme
-  #grid_map = image[grid_pix]
-  grid_map = image[circshift(grid_pix,(0,Int(xsize/2)))]
+  #grid_map = tmap[grid_pix]
+  grid_map = tmap[circshift(grid_pix,(0,Int(xsize/2)))]
   fig = figure(figtitle, figsize=(10, 7))
   clf();
   ax = subplot(111,projection="mollweide",title=title)
   # rasterized makes the map bitmap while the labels remain vectorial
   # flip longitude to the astro convention
   # if visible_pixels == []
-  #     vmin = minimum(image);
-  #     vmax = maximum(image)*1.01;
+  #     vmin = minimum(tmap);
+  #     vmax = maximum(tmap)*1.01;
   # else
-  #    vmin = minimum(image[visible_pixels]);
-  #    vmax = maximum(image[visible_pixels])*1.01;
+  #    vmin = minimum(tmap[visible_pixels]);
+  #    vmax = maximum(tmap[visible_pixels])*1.01;
   # end
   if visible_pixels == []
     if (vmin == -Inf)
-      vmin = minimum(image);
+      vmin = minimum(tmap);
     end
     if (vmax == Inf)
-      vmax = maximum(image);
+      vmax = maximum(tmap);
     end
   else
     if (vmin == -Inf)
-      vmin = minimum(image[visible_pixels]);
+      vmin = minimum(tmap[visible_pixels]);
     end
     if (vmax == Inf)
-      vmax = maximum(image[visible_pixels]);
+      vmax = maximum(tmap[visible_pixels]);
     end
   end
   moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=colormap)
@@ -1000,7 +1007,7 @@ function mollplot_temperature_longlat(image, ntheta, nphi; visible_pixels = [], 
   return
 end
 
-# function mollplot_temperature_longlat_visblock(image, ntheta, nphi, star_epoch_geom; vmin = -1000.0, vmax = 1000.0, colormap="gist_heat", figtitle="Mollweide")
+# function mollplot_temperature_longlat_visblock(tmap, ntheta, nphi, star_epoch_geom; vmin = -1000.0, vmax = 1000.0, colormap="gist_heat", figtitle="Mollweide")
 #   xsize = 2000
 #   ysize = div(xsize,2)
 #   theta = collect(range(pi, stop=0, length=ysize))
@@ -1011,7 +1018,7 @@ end
 #   PHI = [i for j in theta, i in phi]
 #   THETA = [j for j in theta, i in phi]
 #   grid_pix = longlat_ang2pix(ntheta, nphi, THETA, PHI); # for long lat scheme
-#   #grid_map = image[grid_pix]
+#   #grid_map = tmap[grid_pix]
 
 #   pixels_vis = Array{Bool}(undef, star_epoch_geom.npix);
 #   pixels_hidden = Array{Bool}(undef, star_epoch_geom.npix);
@@ -1020,22 +1027,22 @@ end
 #   pixels_vis[star_epoch_geom.index_quads_visible] .= true;
 #   pixels_hidden[star_epoch_geom.index_quads_visible] .= false;
 
-#   grid_map_vis = (image.*pixels_vis)[circshift(grid_pix,(0,Int(xsize/2)))];
-#   grid_map_hidden = (image.*pixels_hidden)[circshift(grid_pix,(0,Int(xsize/2)))];
+#   grid_map_vis = (tmap.*pixels_vis)[circshift(grid_pix,(0,Int(xsize/2)))];
+#   grid_map_hidden = (tmap.*pixels_hidden)[circshift(grid_pix,(0,Int(xsize/2)))];
 #   fig = figure(figtitle, figsize=(10, 7))
 #   clf();
 #   ax = subplot(111,projection="mollweide",title=title)
 #   # rasterized makes the map bitmap while the labels remain vectorial
 #   # flip longitude to the astro convention
 #   # if visible_pixels == []
-#   #     vmin = minimum(image);
-#   #     vmax = maximum(image)*1.01;
+#   #     vmin = minimum(tmap);
+#   #     vmax = maximum(tmap)*1.01;
 #   # else
-#   #    vmin = minimum(image[visible_pixels]);
-#   #    vmax = maximum(image[visible_pixels])*1.01;
+#   #    vmin = minimum(tmap[visible_pixels]);
+#   #    vmax = maximum(tmap[visible_pixels])*1.01;
 #   # end
-#   vmin = minimum(image[star_epoch_geom.index_quads_visible]);
-#   vmax = maximum(image[star_epoch_geom.index_quads_visible]);
+#   vmin = minimum(tmap[star_epoch_geom.index_quads_visible]);
+#   vmax = maximum(tmap[star_epoch_geom.index_quads_visible]);
 
 #   moll = pcolormesh(longitude, latitude, grid_map_vis, vmin=vmin, vmax=vmax, rasterized=true, cmap=colormap)
 #   moll2 = pcolormesh(longitude, latitude, grid_map_hidden, rasterized=true, cmap="spring_r")
@@ -1061,7 +1068,7 @@ end
 # function plot2d_temperature_binary(tmap1, tmap2, star_epoch_geom1, star_epoch_geom2; zorder = 1, plotmesh=false,labels=false, poleline_frac = 0.35, draw_orbit_arrow=true, draw_convex_hull=true, draw_graticules=true)
 #     patches = pyimport("matplotlib.patches")
 #     collections = pyimport("matplotlib.collections")
-#     fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+#     fig = figure("Epoch tmap",figsize=(10,10),facecolor="White")
     
 #     if plotmesh == true
 #       meshcolor = "grey"
@@ -1137,7 +1144,7 @@ end
 #     ax.spines["right"].set_linewidth(2);
 # end
 
-# # this plots the temperature map onto the projected 2D image plane (= observer view)
+# # this plots the temperature map onto the projected 2D tmap plane (= observer view)
 # # Adds polelines. TBD: Needs more centering of polelines
 # function plot2d_temperature_binary_poleline(tmap1, tmap2, star1, star2, bparameters, tepoch; plotmesh=false,labels=false)
 #   rotation_period = bparameters.binary_period;
@@ -1145,7 +1152,7 @@ end
   
 #   # still missing the actual intensity (includes LD)
 #   patches = pyimport("matplotlib.patches")
-#   fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+#   fig = figure("Epoch tmap",figsize=(10,10),facecolor="White")
 #   ax = fig.add_axes([0.1,0.1,0.85,0.85])
 #   if plotmesh == true
 #     meshcolor = "grey"

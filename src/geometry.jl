@@ -116,7 +116,7 @@ include("tessellation_healpix.jl");
 include("tessellation_latlong.jl");
 include("geometry_rochelobe.jl");
 include("geometry_rapidrotator.jl")
-
+include("geometry_ellipsoid.jl");
 function rot_vertex(angle_r1, angle_r2, angle_r3) # new rotational matrix
   c1 = cos(angle_r1)
   s1 = sin(angle_r1)

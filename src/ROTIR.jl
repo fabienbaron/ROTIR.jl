@@ -7,6 +7,7 @@ include("oistars.jl");
 include("geometry.jl");
 include("oichi2_spheroid.jl");
 include("oiplot_spheroid.jl");
+
 #include("di.jl");
 #include("di_dynamical.jl");
 #include("reconstruct.jl");
@@ -19,7 +20,7 @@ export compute_true_anomaly, compute_E_NR,compute_coeff, compute_xyz_rel # debug
 export compute_dpotential_primary_L1,  solve_R_L1, newton_raphson
 export rotate_single_star, compute_separation
 export temperature_map_vonZeipel_roche_single, compute_gravity_primary, compute_gravity_secondary
-
+export temperature_map_vonZeipel_ellipsoid
 # Export stellar/binary parameters for initializing and updating
 export starparameters, binaryparameters
 export compute_eccentric_anomaly, compute_true_anomaly

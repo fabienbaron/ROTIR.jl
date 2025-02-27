@@ -173,6 +173,10 @@ function parametric_temperature_map(parameters, star) # dispatches parametric
     return temperature_map_vonZeipel_roche_single(parameters,star, star.t);
   elseif star.surface_type == 2
     return temperature_map_vonZeipel_rapid_rotator(parameters,star);
+  elseif star.surface_type == 1
+    return temperature_map_vonZeipel_ellipsoid(parameters,star);
+  elseif star.surface_type == 0 # sphere
+    return parameters.tpole*ones(eltype(star.vertices_spherical), star.npix );  
   else
     println("Unimplemented parametric von Zeipel function")
   end
