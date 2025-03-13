@@ -71,11 +71,30 @@ function filllout_to_rpole(fillout, D, q, async_ratio; secondary = false)
     R_L1 = solve_R_L1(radius_leahy(q), D, q, async_ratio, potential_function);
     pot_L1, ~ = potential_function(R_L1, D, pi/2.0, 0.0, q, async_ratio);
     potS = (pot_L1 + 0.5 * q * q / (1.0 + q)) / fillout - 0.5 * q * q / (1.0 + q)
-    rpole = solve_radius(radius_leahy(q), potS, D, 0.0, 0.0, q, async_ratio, potential_function)
-    return rpole
+    rpole = solve_radius(radius_leahy(q), potS, D, 0.0, 0.0, q, async_ratio, potential_function, verbose=false)
+    return rpole # Beware, output is the reduced rpole = rpole/a
 end
 
+function rl1(roche_parameters; secondary = false) 
+    secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
+    async_ratio = roche_parameters.rotation_period/roche_parameters.P
+    a = roche_parameters.a;
+    q = roche_parameters.q;
+    secondary == false ? rtry = radius_leahy(q) : rtry = radius_leahy(1/q)  # Equatorial radius estimate 
+    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary = secondary)     
+    return R_L1*a
+end
+
+function max_rpole(D, roche_parameters; secondary = false)
+    a = roche_parameters.a;
+    q = roche_parameters.q;
+    async_ratio = roche_parameters.rotation_period/roche_parameters.P
+    return filllout_to_rpole(1.0, D, q, async_ratio)*a;
+end
+
+
 function rpole_to_fillout(rpole, D, q, async_ratio; secondary = false) 
+    # Beware, input is the reduced rpole = rpole/a
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     # Finds which fillout corresponds to the dimensionless rpole (=rpole/a)
     potS, ~ = potential_function(rpole, D, 0.0, 0.0, q, async_ratio);
