@@ -81,6 +81,9 @@ export lci_linear_inversion_frame,lci_reconstruct_mutitemporal,rescale_temperatu
 export cvis_to_v2, poly_to_cvis, cvis_to_t3
 export make_circ_spot, make_spot_move
 
+
+export rl1, max_rpole
+
 #include("lci.jl") # Light curve inversion main functions
 #export LCI
 #export lci_reconstruct, read_lci_relative,read_lci_absolute,read_lci_absolute_mjd,write_lci,modelflux_lci,modelflux_lci_rel
