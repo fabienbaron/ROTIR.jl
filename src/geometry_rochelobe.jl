@@ -3,14 +3,14 @@ import Base: Math as math
 
 # The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
 #
-function update_roche_radii(tessels::tessellation, binary_parameters, D; use_fillout_factor = false, secondary = false, T=Float32) 
-    # if wanting to call this for secondary=true, invert binary_parameters.q;
+function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float32) 
+    # if wanting to call this for secondary=true, invert roche_parameters.q;
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
-    secondary == false ? fillout_factor = binary_parameters.fillout_factor_primary : fillout_factor = binary_parameters.fillout_factor_secondary;
-    async_ratio = binary_parameters.rotation_period/binary_parameters.P
-    a = binary_parameters.a;
-    q = binary_parameters.q;
-    rpole = binary_parameters.rpole
+    secondary == false ? fillout_factor = roche_parameters.fillout_factor_primary : fillout_factor = roche_parameters.fillout_factor_secondary;
+    async_ratio = roche_parameters.rotation_period/roche_parameters.P
+    a = roche_parameters.a;
+    q = roche_parameters.q;
+    rpole = roche_parameters.rpole
     # Compute surface potentials and good init 
     pot_surface, r_init = get_surface_potential(rpole/a, D, q, async_ratio, fillout_factor, use_fillout_factor = use_fillout_factor, secondary=secondary);
     # Update the radii r(θ,ϕ) to match the surface potential
@@ -18,7 +18,7 @@ function update_roche_radii(tessels::tessellation, binary_parameters, D; use_fil
     r = zeros(T, npix, 5);
     for ii = 1:npix
         for jj = 1:5
-            r[ii,jj] = a*solve_radius(r_init, pot_surface, D, tessels.unit_spherical[ii,jj,2], tessels.unit_spherical[ii,jj,3], q, async_ratio, potential_function);
+            r[ii,jj] = a*solve_radius(r_init, pot_surface, D, tessels.unit_spherical[ii,jj,2], tessels.unit_spherical[ii,jj,3], q, async_ratio, potential_function, verbose=false);
         end
     end    
     return r
@@ -45,56 +45,42 @@ function update_roche_radii_binary(star1_geom::tessellation, star2_geom::tessell
     return star1_roche_geom, star2_roche_geom
 end
 
-function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false)
-## TEST rpole_a =binary_parameters.star1.rpole/a; async_ratio=async_ratio1; fillout_factor = fillout_factor1; potential_function=compute_potential_primary
-  potential_function = compute_potential_primary
-  if secondary == true
-      potential_function = compute_potential_secondary
-  end
-
+function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false, T=Float32)
+  secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
   if (use_fillout_factor == true)
     #
     # If Fillout factor defines the Roche Lobe
     #
-    rtry = radius_leahy(q) # Equatorial radius estimate 
-    # if secondary == true  # This function already takes 1/q
-    #     rtry = radius_leahy(1/q)
-    # end
+    secondary == false ? rtry = radius_leahy(q) : rtry = radius_leahy(1/q)  # Equatorial radius estimate 
     R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary = secondary)
     pot_L1, ~ = potential_function(R_L1, D, Int(-2*(secondary == true)+1)*pi/2, 0.0, q, async_ratio) # Primary -> π/2, Secondary -> -π/2
-    potS = (pot_L1 + 0.5 * q * q / (1.0 + q)) / fillout_factor - 0.5 * q * q / (1.0 + q)
+    potS = (pot_L1 + q * q / 2(1 + q)) / fillout_factor - q * q / 2(1 + q)
     return potS, rtry
   else
     #  The radius at the North pole defines the potential
-    potS, ~ = potential_function(rpole_a, D, 0.0, 0.0, q, async_ratio)    
+    potS, ~ = potential_function(rpole_a, D, T(0), T(0), q, async_ratio)    
     return potS, rpole_a
 end
 end
 
 function filllout_to_rpole(fillout, D, q, async_ratio; secondary = false) 
     # Note we expect calls to this with q = M2/M1 for primary, and = M1/M2 for secondary
-    f_pot = compute_potential_primary
-    if secondary == true
-        f_pot = compute_potential_secondary
-    end
+    secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     # Finds which (dimensionless) rpole corresponds to the fillout
     # Multiply by a to find the size in mas
-    R_L1 = solve_R_L1(radius_leahy(q), D, q, async_ratio, f_pot);
-    pot_L1, ~ = f_pot(R_L1, D, pi/2.0, 0.0, q, async_ratio);
+    R_L1 = solve_R_L1(radius_leahy(q), D, q, async_ratio, potential_function);
+    pot_L1, ~ = potential_function(R_L1, D, pi/2.0, 0.0, q, async_ratio);
     potS = (pot_L1 + 0.5 * q * q / (1.0 + q)) / fillout - 0.5 * q * q / (1.0 + q)
-    rpole = solve_radius(radius_leahy(q), potS, D, 0.0, 0.0, q, async_ratio, f_pot)
+    rpole = solve_radius(radius_leahy(q), potS, D, 0.0, 0.0, q, async_ratio, potential_function)
     return rpole
 end
 
 function rpole_to_fillout(rpole, D, q, async_ratio; secondary = false) 
-    f_pot = compute_potential_primary
-    if secondary == true
-        f_pot = compute_potential_secondary
-    end
+    secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     # Finds which fillout corresponds to the dimensionless rpole (=rpole/a)
-    potS, ~ = f_pot(rpole, D, 0.0, 0.0, q, async_ratio);
-    R_L1 = solve_R_L1(radius_leahy(q), D, q, async_ratio, f_pot);
-    pot_L1, ~ = f_pot(R_L1, D, Int(-2*(secondary == true)+1)*pi/2.0, 0.0, q, async_ratio);
+    potS, ~ = potential_function(rpole, D, 0.0, 0.0, q, async_ratio);
+    R_L1 = solve_R_L1(radius_leahy(q), D, q, async_ratio, potential_function);
+    pot_L1, ~ = potential_function(R_L1, D, Int(-2*(secondary == true)+1)*pi/2.0, 0.0, q, async_ratio);
     fillout =   (pot_L1 + 0.5 * q * q / (1.0 + q)) /  (potS + 0.5 * q * q / (1.0 + q))
     return fillout
 end
@@ -140,21 +126,50 @@ function compute_potential_secondary(r, D, θ, ϕ, q, async_ratio)
 end
 
 
-function solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function)
+function solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function; verbose=true)
     # ii=64; jj=1; star = stars[1]
-    # r0 = r_init; θ = star.vertices_spherical[ii,jj,2]; ϕ = star.vertices_spherical[ii,jj,3]
+    # r0 = r_init; θ = tessels.unit_spherical[ii,jj,2]; ϕ = tessels.unit_spherical[ii,jj,3]
     # r0 = 0.5923035715675565; θ = 0.0; ϕ = 0.0; pot_surface = 4.45647759841041; potential_function = compute_potential_primary
+    # θ=1.5707964f0;ϕ = 357.1875f0
     fgh = r->potential_function(r, D, θ, ϕ, q, async_ratio);
     # close(); plot([fgh(r)[1] for r in range(0.0001, D, length=1000)])
-    r = halley(r0, pot_surface, fgh);
+    r = halley(r0, pot_surface, fgh, verbose=verbose);
+    # fgh(r)[1]-pot_surface
     return r
 end
 
 
-function solve_R_L1(r0, D, q, async_ratio, potential_function; secondary = false, verbose = false)
-    fg = r->potential_function(r, D, Int(-2*(secondary == true)+1)*pi/2, 0.0, q, async_ratio); 
-    r = halley(r0, 0.0, fg, verbose = verbose);
+function solve_R_L1(r0, D, q, async_ratio, potential_function; secondary = false, verbose = false, ϵ=1e-6)
+    sg = Int(-2*(secondary == true)+1)
+    fg = r->potential_function(r, D, sg*pi/2, 0.0, q, async_ratio); 
+    r = newton_root(r0, fg)
+    if r<0
+        @warn "Negative R_L1 - unphysical Roche parameters"
+    end
+    if abs(fg(r)[2])>ϵ
+        @warn "R_L1 tol exceeded $(abs(fg(r)[1]))>$ϵ"
+    end
     return r
+end
+
+function newton_root(x0, fgh; ϵ = 1e-5, verbose=false)
+    # Get x so that f'(x) = 0 
+    n = 1; 
+    converged = false;
+    x = copy(x0)
+    while ((converged == false) & (n < 20))
+        f, g, h = fgh(x);
+        newton_step = g/h; 
+        if verbose == true
+            println("n = $n\t f = $f \t g = $g \t  h = $h \t x = $x \t step = $newton_step");
+        end  
+        x -= newton_step;
+        if (abs(newton_step) < ϵ)
+            converged = true;
+        end
+        n += 1;
+    end
+   return x
 end
 
 
@@ -163,7 +178,7 @@ function halley(x0, f0, fgh; ϵ = 1e-5, verbose=false)
     n = 1; 
     converged = false;
     x = copy(x0)
-    while ((converged == false) & (n < 10))
+    while ((converged == false) & (n < 20))
         f, g, h = fgh(x);
         halley_step = 2*(f - f0)*g/( 2*g^2 - (f-f0)*h); 
         if verbose == true
@@ -277,7 +292,8 @@ function radius_eggleton(q)
     return 0.49/(0.6 + q^(2/3)*log(1.0+q^(-1/3)));
 end
 
-function radius_leahy(q) # Leahy & Leahy 2015 "A calculator for Roche lobe properties" eq. 7
+function radius_leahy(q) 
+    # Leahy & Leahy 2015 "A calculator for Roche lobe properties" eq. 7
     a1 = 0.64334;
     a2 = 0.86907;
     a3 = 1.2809;
