@@ -51,10 +51,10 @@ function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secon
     #
     # If Fillout factor defines the Roche Lobe
     #
-    secondary == false ? rtry = radius_leahy(q) : rtry = radius_leahy(1/q)  # Equatorial radius estimate 
+    secondary == false ? rtry = radius_point_Pathania(q) : rtry=radius_point_Pathania(1/q) 
     R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary = secondary)
     pot_L1, ~ = potential_function(R_L1, D, Int(-2*(secondary == true)+1)*pi/2, 0.0, q, async_ratio) # Primary -> π/2, Secondary -> -π/2
-    potS = (pot_L1 + q * q / 2(1 + q)) / fillout_factor - q * q / 2(1 + q)
+    potS = (pot_L1 + q * q / 2(1 + q)) / fillout_factor - q * q / 2(1 + q) # eq 6, Leahy paper
     return potS, rtry
   else
     #  The radius at the North pole defines the potential
@@ -68,7 +68,8 @@ function filllout_to_rpole(fillout, D, q, async_ratio; secondary = false)
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     # Finds which (dimensionless) rpole corresponds to the fillout
     # Multiply by a to find the size in mas
-    R_L1 = solve_R_L1(radius_leahy(q), D, q, async_ratio, potential_function);
+    secondary == false ? rtry = radius_point_Pathania(q) : rtry=radius_point_Pathania(1/q) 
+    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function);
     pot_L1, ~ = potential_function(R_L1, D, pi/2.0, 0.0, q, async_ratio);
     potS = (pot_L1 + 0.5 * q * q / (1.0 + q)) / fillout - 0.5 * q * q / (1.0 + q)
     rpole = solve_radius(radius_leahy(q), potS, D, 0.0, 0.0, q, async_ratio, potential_function, verbose=false)
@@ -80,12 +81,13 @@ function rl1(roche_parameters; secondary = false)
     async_ratio = roche_parameters.rotation_period/roche_parameters.P
     a = roche_parameters.a;
     q = roche_parameters.q;
-    secondary == false ? rtry = radius_leahy(q) : rtry = radius_leahy(1/q)  # Equatorial radius estimate 
+    secondary == false ? rtry = radius_point_Pathania(q) : radius_point_Pathania(1/q) 
     R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary = secondary)     
     return R_L1*a
 end
 
 function max_rpole(D, roche_parameters; secondary = false)
+    # The maximum rpole will be gotten for a fillout factor of 1.0
     a = roche_parameters.a;
     q = roche_parameters.q;
     async_ratio = roche_parameters.rotation_period/roche_parameters.P
@@ -98,25 +100,26 @@ function rpole_to_fillout(rpole, D, q, async_ratio; secondary = false)
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     # Finds which fillout corresponds to the dimensionless rpole (=rpole/a)
     potS, ~ = potential_function(rpole, D, 0.0, 0.0, q, async_ratio);
-    R_L1 = solve_R_L1(radius_leahy(q), D, q, async_ratio, potential_function);
+    secondary == false ? rtry = radius_point_Pathania(q) : rtry=radius_point_Pathania(1/q) 
+    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function);
     pot_L1, ~ = potential_function(R_L1, D, Int(-2*(secondary == true)+1)*pi/2.0, 0.0, q, async_ratio);
-    fillout =   (pot_L1 + 0.5 * q * q / (1.0 + q)) /  (potS + 0.5 * q * q / (1.0 + q))
+    fillout =   (pot_L1 + q * q / 2(1.0 + q)) /  (potS + q * q / 2(1.0 + q))
     return fillout
 end
 
 # #
-# # Equations from Aufdenberg et al. 2021 + SAGE math
-# #
+# # Gravitational potential equations from Aufdenberg et al. 2021 + SAGE math
+# # "Modeling the Hα Emission Surrounding Spica Using the Lyman Continuum from a Gravity-darkened Central Star"
+# # https://iopscience.iop.org/article/10.3847/1538-4357/ac1c0e
 # # Primary at x,y,z = (0,0,0) and secondary at x,y,z=(D,0,0) 
-# # D = (1-e^2)/(1+e*cos.(ν)) , unitless (= separation/semimajoraxis)
-
+# # D is the instantaneous unitless separation unitless (= separation_distance/semimajoraxis)
+# # D = (1-e^2)/(1+e*cos.(υ)) υ: true anomaly (upsilon)
 # Note: 
-# Polar potential λ=0, ν = 1
+# Polar potential λ=0, ν = 1  note that here ν = cos(θ) (yeah, beware υ vs ν)
 # Ω1 = 1/r + q/sqrt( D^2 + r^2)
 # dΩ1 = -q*r/(D^2 + r^2)^(3/2) - 1/r^2
-
 #
-# Example of sage setup to check derivatives
+# Example of Sage setup to check derivatives
 #
 #var('r, D, λ, ν, q, async_ratio')
 # f = 1/r + q/sqrt( D^2 + r^2 - 2*r*λ*D) - q*r*λ*D + 1/2*async_ratio^2*(1+q)*r^2*(1-ν^2)
@@ -306,13 +309,32 @@ function temperature_map_vonZeipel_roche(binary_parameters, star_geom, t; second
     return Teff
 end
 
-# Eggleton formula for Roche equivalent size, modified to use q=m2/m1
-function radius_eggleton(q)
-    return 0.49/(0.6 + q^(2/3)*log(1.0+q^(-1/3)));
+
+# Formula for Roche radii
+# Radius of the Roche equipotential surfaces
+# A. Pathania · T. Medupe
+# Astrophys Space Sci (2012) 338:127–145
+# DOI 10.1007/s10509-011-0928-y
+# point radius (λ = 1, ν = 0) 
+# back radius  (λ =−1, ν = 0) 
+# the side radius (λ = 0, ν = 0)
+# the pole radius (λ = 0, ν = 1)
+
+# Eggleton formula for Roche equivalent size (eq 17)
+function radius_equivalent_eggleton(q)
+    q1=1/q
+    return 0.49*q1^(2/3)/(0.6*q1^(2/3)+log(1.0+q1^(1/3)));
+end
+
+function radius_point_kopal_polynomial(x)
+    # Polynomial = 0 at x=point radius
+    return (q + 1)x^5 - (3q + 2)x^4 + (3q + 1)x^3 - x^2 + 2x - 1 
 end
 
 function radius_leahy(q) 
-    # Leahy & Leahy 2015 "A calculator for Roche lobe properties" eq. 7
+    #A calculator for Roche lobe properties, Denis A Leahy & Janet C Leahy   
+    #Computational Astrophysics and Cosmology volume 2, Article number: 4 (2015)
+    # Eq. 7
     a1 = 0.64334;
     a2 = 0.86907;
     a3 = 1.2809;
@@ -320,6 +342,16 @@ function radius_leahy(q)
     a5 = 0.73103;
     return a1*q^a4/(a2*q^a5+log(1+a3*q^(a4+1/3)))
 end
+
+function radius_back_Pathania(q)
+    return exp(-1.00598q^3 + 2.09674q^2 - 1.69263q - 0.319909)
+end
+
+function radius_point_Pathania(q)
+    return exp(-0.725742q^3 + 1.53893q^2 - 1.31638q - 0.202505)
+end
+
+
 
 # function solve_radius_newton_raphson(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function)
 #     # Prone to convergence issues unless initialized at good location

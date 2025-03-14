@@ -56,10 +56,10 @@ function binary_orbit_rel_alt(bparameters,tepoch::Float64)
     Ω = bparameters.Ω*pi/180.; # longitude of ascending node
     i = bparameters.i*pi/180.;
     ω = bparameters.ω*pi/180.; # argument of periapsis
-    ν = compute_true_anomaly(bparameters, tepoch);
-    x = cos(Ω)*cos(ω+ν) - sin(Ω)*sin(ω+ν)*cos(i);
-    y = sin(Ω)*cos(ω+ν) - cos(Ω)*sin(ω+ν)*cos(i);
-    z = sin(ω+ν)*sin(i);
+    υ = compute_true_anomaly(bparameters, tepoch);
+    x = cos(Ω)*cos(ω+υ) - sin(Ω)*sin(ω+υ)*cos(i);
+    y = sin(Ω)*cos(ω+υ) - cos(Ω)*sin(ω+υ)*cos(i);
+    z = sin(ω+υ)*sin(i);
     return 0.0, 0.0, 0.0, x, y, z
 end
 
@@ -71,17 +71,17 @@ function binary_orbit_abs(bparameters,tepoch::Float64)
     q = bparameters.q;
     a = bparameters.a;
     e = bparameters.e;
-    ν = compute_true_anomaly(bparameters, tepoch);
-    D = a*(1.0 - e^2)./(1.0 .+ e* cos.(ν));  
+    υ = compute_true_anomaly(bparameters, tepoch);
+    D = a*(1.0 - e^2)./(1.0 .+ e* cos.(υ));  
     # distance of objects from the center of mass
     r1 = D / (1/q+1);
     r2 = D / (1+q);
     L1, M1, N1, L2, M2, N2 = compute_coeff(Ω, i, ω);
-    x1, y1, z1 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, ν, r1);
-    if ((ν .>= 0.0) & (ν .<= pi))
-        x2, y2, z2 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, ν .+pi, r2);
+    x1, y1, z1 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ, r1);
+    if ((υ .>= 0.0) & (υ .<= pi))
+        x2, y2, z2 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ .+pi, r2);
     else
-        x2, y2, z2 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, ν .-pi, r2);
+        x2, y2, z2 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ .-pi, r2);
     end
     return x1, y1, z1, x2, y2, z2
 end
@@ -111,9 +111,9 @@ end
 function compute_separation_alt(bparameters, tepoch) # uses true anomaly
   # dimentionless instantaneous separation of the centers of mass of the two stars
   # Multiply by a to find the real separation
-  ν = compute_true_anomaly(bparameters, tepoch);
+  υ = compute_true_anomaly(bparameters, tepoch);
   e = bparameters.e;
-  D = (1 - e^2)./(1 .+ e*cos.(ν)); 
+  D = (1 - e^2)./(1 .+ e*cos.(υ)); 
   return D
 end
 
@@ -156,9 +156,9 @@ function compute_true_anomaly(bparameters,tepoch)
     # Supposedly avoids numerical issues when the arguments are near ± π, as the two tangents
     # in the classic equation become infinite. 
      β = e/(1+sqrt(1-e^2))
-     ν = E .+ 2*atan.((β*sin.(E)) ./ (1 .-  β*cos.(E)))    
-    #ν = 2*atan.(sqrt((1+e)/(1-e))*tan.(E/2));    
-    return ν
+     υ = E .+ 2*atan.((β*sin.(E)) ./ (1 .-  β*cos.(E)))    
+    #υ = 2*atan.(sqrt((1+e)/(1-e))*tan.(E/2));    
+    return υ
 end
 
 # epool = collect(range(0,1.0,length=1000))
@@ -209,10 +209,10 @@ end
 function binary_RV(bparameters, tepoch::Union{Float64, Vector{Float64}}; K1::Float64, K2::Float64, γ::Float64)
     ω = bparameters.ω*pi/180.0; # argument of periapsis
     e = bparameters.e;
-    ν = compute_true_anomaly(bparameters, tepoch)
+    υ = compute_true_anomaly(bparameters, tepoch)
     #calculate radial velocity
-    Vrad1 = γ + K1 * (cos.(ν  .+ ω) .+ e * cos(ω))
-    Vrad2 = γ + K2 * (cos.(ν .+ (ω .+pi)) .+ e * cos(ω .+ pi))
+    Vrad1 = γ + K1 * (cos.(υ  .+ ω) .+ e * cos(ω))
+    Vrad2 = γ + K2 * (cos.(υ .+ (ω .+pi)) .+ e * cos(ω .+ pi))
     return Vrad1, Vrad2
 end
 
@@ -224,11 +224,11 @@ function binary_proj_plane(bparameters, tepochs)
     ω = bparameters.ω*pi/180.0; # argument of periapsis
     a = bparameters.a;
     e = bparameters.e;
-    ν = compute_true_anomaly(bparameters, tepochs)
-    r = a * (1.0 - e^2)./(1.0 .+ e*cos.(ν)); # Separation between the two stars
-    O_w = atan.(sin.(ν .+ ω) .* cos(i) , cos.(ν .+ ω))
+    υ = compute_true_anomaly(bparameters, tepochs)
+    r = a * (1.0 - e^2)./(1.0 .+ e*cos.(υ)); # Separation between the two stars
+    O_w = atan.(sin.(υ .+ ω) .* cos(i) , cos.(υ .+ ω))
     θ = O_w .+ Ω;                            # Principal axis angle in cyclindrical coordinates
-    ρ = abs.(r .* cos.(ν .+ ω) ./ cos.(O_w)) # Radius in the projected cylindrical coordinates
+    ρ = abs.(r .* cos.(υ .+ ω) ./ cos.(O_w)) # Radius in the projected cylindrical coordinates
     x = ρ .* cos.(θ)
     y = ρ .* sin.(θ)
     return x, y, ρ, θ
