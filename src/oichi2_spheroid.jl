@@ -309,13 +309,13 @@ function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcol
 end
 
 function image_reconstruct_oi_crit(x, data, stars, regularizers =[],  verbose = verbose)
-  dummy = similar(x);
+  g = similar(x);
   crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers,epochs_weights=[],  verbose = verbose);
   return crit
 end
 
 function image_reconstruct_oi_chi2(x, data, stars;  verbose = verbose)
-  dummy = similar(x);
+  g = similar(x);
   crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=[], epochs_weights= [], verbose = verbose);
   return crit
 end
