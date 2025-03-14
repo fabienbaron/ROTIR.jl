@@ -299,14 +299,31 @@ end
 
 using OptimPackNextGen
 
-function spheroid_oi_reconstruct(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=0, maxiter = 100, regularizers =[])
+function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=0, maxiter = 100, regularizers =[])
   x_sol = [];
   crit_imaging = (x,g)->spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers, epochs_weights=  epochs_weights, verbose = verbose);
   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verbose, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
   dummy = similar(x_sol);
   crit_opt = crit_imaging(x_sol,dummy);
-  return x_sol, crit_opt
+  return x_sol
 end
+
+function image_reconstruct_oi_crit(x, data, stars, regularizers =[],  verbose = verbose)
+  dummy = similar(x);
+  crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers,epochs_weights=[],  verbose = verbose);
+  return crit
+end
+
+function image_reconstruct_oi_chi2(x, data, stars;  verbose = verbose)
+  dummy = similar(x);
+  crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=[], epochs_weights= [], verbose = verbose);
+  return crit
+end
+
+
+
+
+
 
 # "Multitemporal" = dynamical reconstruction
 
