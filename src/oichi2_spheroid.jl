@@ -1,4 +1,4 @@
-using OptimPackNextGen
+using LinearAlgebra, OptimPackNextGen
 # The Fourier transform for polygonal surfaces
 function poly_to_cvis(x, polyflux, polyft)
   flux = sum(polyflux.*x); # get the total flux
@@ -131,25 +131,26 @@ function spheroid_chi2_f(x, star, data; verbose::Bool = false)
   return chi2_v2 + chi2_t3amp + chi2_t3phi
 end
 
-# function n2(A) # sum of squares. only makes a difference for thousands of uv points
-#   x = zero(eltype(A))
-#   @inbounds  @simd for v in A
-#     @fastmath x += v * v
-#   end
-#   return x
-# end
-
-function spheroid_chi2_allepochs_fg(x, g, epochs_weights, polyflux, polyft, data)
-f = 0;
-g[:] = 0;
-npix = size(x);
-singleepoch_g = zeros(Float64, npix);
-for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-  f += epochs_weights[i]*spheroid_chi2_fg_alt(x, singleepoch_g, polyflux[i], polyft[i], data[i], verbose=true);
-  g[:] += epochs_weights[i]*singleepoch_g;
-end
-println("All epochs, weighted chi2: ", f, "\n");
-return f;
+@views function spheroid_chi2_fg(x, g, star, data; verbose::Bool = true)
+  npix = star.npix;
+  T = eltype(x);
+  indx = star.index_quads_visible
+  cvis_model = poly_to_cvis(x, star);
+  v2_model = cvis_to_v2(cvis_model, data.indx_v2);
+  t3_model, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);
+  chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
+  chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
+  chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);
+  g_v2 = real(transpose(star.polyft[data.indx_v2,:])*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2])));
+  g_t3amp = real(transpose(star.polyft[data.indx_t3_1,:]) *(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_2,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_3,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
+  g_t3phi = T(360/pi)*imag(transpose(star.polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
+  gsum = g_v2 + g_t3amp + g_t3phi;
+  flux = poly_to_flux(x, star);
+  g[indx] = (gsum .- sum(x[indx].*gsum)*star.polyflux / flux ) / flux; # gradient correction to take into account the non-normalization
+  if verbose == true
+    println("V2: ", chi2_v2/data.nv2, "\tT3A: ", chi2_t3amp/data.nt3amp, "\tT3P: ", chi2_t3phi/data.nt3phi,"\tFlux: ", flux)
+  end
+  return chi2_v2 + chi2_t3amp + chi2_t3phi
 end
 
 function spheroid_chi2_allepochs_f(x, stars, data; epochs_weights=[], verbose=false)
@@ -166,6 +167,32 @@ if verbose == true
   println("All epochs, weighted chi2: ", f, "\n");
 end
 return f;
+end
+
+function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[], verbose=false, T=Float32)
+  T = eltype(x)
+  #g[:] .= T(0);
+  nepochs = length(data)
+  chi2_t = zeros(T, nepochs);
+  #npix = stars[1].npix
+  singleepoch_g = zeros(T, nepochs, length(x));
+  Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
+    chi2_t[i] = spheroid_chi2_fg(x, singleepoch_g[i,:], stars[i], data[i], verbose=verbose);
+  end
+  chi2_f = sum(chi2_t)
+  if epochs_weights!=[]
+  #  f = f.*epochs_weights
+    @warn "Epoch weights not implemented"
+   end 
+  g[:] .= dropdims(sum(singleepoch_g, dims=1), dims=1)
+  if verbose == true
+    println("Total weighted chi2: ", chi2_f, "\n");
+  end
+  # Map regularization
+  reg_g = zeros(T, length(x));
+  reg_f = spheroid_regularization(x, reg_g, regularizers=regularizers, verbose = verbose);
+  g[:] += reg_g
+  return chi2_f + reg_f;
 end
 
 function parametric_temperature_map(parameters, star) # dispatches parametric 
@@ -196,109 +223,26 @@ z[ztilde.>0]=0
 return z
 end
 
-
-function spheroid_crit_multiepochs_fg(x, g, polyflux, polyft, data; regularizers=[], epochs_weights = [], verb=true)
-chi2_f = 0.0;
-g[:] .= 0.0;
-npix = size(x);
-singleepoch_g = zeros(Float64, npix);
-nepochs = length(data)
-if epochs_weights == []
-    epochs_weights = ones(Float64, nepochs)/nepochs
-end
-for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-  chi2_f += epochs_weights[i]*spheroid_chi2_fg_alt(x, singleepoch_g, polyflux[i], polyft[i], data[i], verbose=verb);
-  g[:] += epochs_weights[i]*singleepoch_g;
-end
-reg_f = spheroid_regularization(x, g, regularizers=regularizers, verb = verb); #note: this adds to g
-if (verb==true)
-    println("All epochs, weighted chi2: ", chi2_f, " crit: ", chi2_f + reg_f);
-end
-return chi2_f + reg_f;
-end
-
-
-function spheroid_total_variation_fg(x, tv_g, tvinfo; ϵ = 1e-13, verb = true)
-  # Add total variation regularization
-  #tvinfo: neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse
+function spheroid_total_variation2_fg(x, tv_g, tvinfo; ϵ = 1e-13, verbose = true)
   npix = length(x)
-  xs = x[tvinfo[2]];
-  xw = x[tvinfo[3]];
-  tv_f = sum(sqrt.( (x-xs).^2 + (x-xw).^2) .+ ϵ )
-  tv_g[1:npix] = (2*x-xs-xw)./(sqrt.( (x-xs).^2 + (x-xw).^2) .+ ϵ)
-  for j=1:length(x)
-    k = tvinfo[4][j]
-    l = tvinfo[5][j]
-    if length(k)>0
-      kk=k[1]
-      tv_g[j] += (x[j]-x[kk])/sqrt((x[kk]-x[j])^2+(x[kk]-x[tvinfo[3][kk]])^2 +ϵ)
-    end
-    if length(l)>0
-      ll=l[1]
-      tv_g[j] += (x[j]-x[ll])/sqrt((x[ll]-x[tvinfo[2][ll]])^2+(x[ll]-x[j])^2 +ϵ)
-    end
-   end
-if verb == true
-      println("TV: ", tv_f);
-end
-  return tv_f
-end
-
-function spheroid_total_variation_latitude_fg(x, tv_g, tvinfo; ϵ = 1e-13, verb = true)
-  # Add total variation regularization only in the latitudinal direction
-  #tvinfo: neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse
-  npix = length(x)
-  xs = x[tvinfo[2]];
-  xw = x[tvinfo[3]];
-  tv_f = sum(sqrt.( (x-xw).^2) .+ ϵ )
-  tv_g[1:npix] = (x-xw)./(sqrt.((x-xs).^2 + (x-xw).^2) .+ ϵ) # or just 1.0?
-  for j=1:length(x)
-    l = tvinfo[5][j]
-    if length(l)>0
-      ll=l[1]
-      tv_g[j] += (x[j]-x[ll])/sqrt((x[ll]-x[tvinfo[2][ll]])^2+(x[ll]-x[j])^2 +ϵ)
-    end
-  end
-  if verb == true
-    println("TV: ", tv_f);
+  tv_f = norm(tvinfo[6]*x)^2
+  tv_g[:] = 2*(tvinfo[7]*x)
+  if verbose == true
+      println("TV2: ", tv_f);
   end
   return tv_f
 end
 
-function spheroid_total_variation_f(x, tvinfo; ϵ = 1e-13, verb = true)
-  # Add total variation regularization
-  #tvinfo: neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse
-  xs = x[tvinfo[2]];
-  xw = x[tvinfo[3]];
-  tv_f = sum(sqrt.( (x-xs).^2 + (x-xw).^2) .+ ϵ )
-  if verb == true
-      println("TV: ", tv_f);
-end
-  return tv_f
-end
-
-function spheroid_total_variation_latitude_f(x, tvinfo; ϵ = 1e-13, verb = true)
-  # Add total variation regularization
-  #tvinfo: neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse
-  xw = x[tvinfo[3]];
-  tv_f = sum(sqrt.( (x-xw).^2) .+ ϵ )
-  if verb == true
-      println("TV: ", tv_f);
-end
-  return tv_f
-end
-
-
-function spheroid_l2_fg(x, g; verb = true)
+function spheroid_l2_fg(x, g; verbose = true)
 l2f = sum(abs.(x.-sum(x)/length(x)))
 g[:] = sign.(x.-sum(x)/length(x))
-if verb == true
+if verbose == true
 println(" L2: ", l2f);
 end
 return l2f;
 end
 
-function spheroid_harmon_bias_fg(x, g, B::Float64; verb = true)
+function spheroid_harmon_bias_fg(x, g, B::Float64; verbose = true)
 n = length(x);
 avg_x = mean(x);
 bcorr = (B-1.0)*Int.((x.-avg_x).>0).+1.0
@@ -308,13 +252,13 @@ reg_f = sum(bcorr.*(x.-avg_x).^2)/n;
 reg_g = 2/n*bcorr.*(x.-avg_x)
 g[:] = reg_g .- mean(reg_g); # necessary ?
 
-if verb == true
+if verbose == true
 println(" Bias: ", reg_f);
 end
 return reg_f;
 end
 
-function max_entropy_fg(x, g; verb=true, ϵ=1e-9)
+function max_entropy_fg(x, g; verbose=true, ϵ=1e-9)
   # mmap = sum(x) / length(x)
   # nmap = x ./ mmap
   # reg_f = sum(nmap .* log.(nmap))
@@ -322,107 +266,103 @@ function max_entropy_fg(x, g; verb=true, ϵ=1e-9)
   xm = x ./ (mean(x) + ϵ)
   reg_f = sum(xm .* log.(xm .+ ϵ))
   g[:] = ((mean(x) .- (x ./ length(x))) ./ (mean(x)^2 + ϵ)) .* (log.(xm .+ ϵ) .+ 1)
-  if verb == true
+  if verbose == true
     println(" MEM: ", reg_f)
   end
   return reg_f
 end
 
-function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb=false)
-    reg_f = 0.0;
-    for ireg =1:length(regularizers)
+function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verbose=false)
+  reg_f = 0.0;
+  for ireg =1:length(regularizers)
       x_sub = x[regularizers[ireg][4]] # take the pixel subset if needed (example: only regularize visible pixels)
       temp_g = similar(x_sub);
       if regularizers[ireg][1] == "tv"
-        reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
-      elseif regularizers[ireg][1] == "tv_lat"
-        reg_f += regularizers[ireg][2]*spheroid_total_variation_latitude_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb);
+          reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "tv2"
+          reg_f += regularizers[ireg][2]*spheroid_total_variation2_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
       elseif regularizers[ireg][1] == "l2"
-        reg_f += regularizers[ireg][2]*spheroid_l2_fg(x_sub, temp_g, verb = verb);
+          reg_f += regularizers[ireg][2]*spheroid_l2_fg(x_sub, temp_g, verbose = verbose);
       elseif regularizers[ireg][1] == "bias"
-        reg_f += regularizers[ireg][2]*spheroid_harmon_bias_fg(x_sub, temp_g, regularizers[ireg][3], verb = verb );
-      elseif regularizers[ireg][1] == "mem"
-        reg_f += regularizers[ireg][2]*max_entropy_fg(x_sub, temp_g, verb = verb);
+          reg_f += regularizers[ireg][2]*spheroid_harmon_bias_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose );
       end
-      g[regularizers[ireg][4]] .+= regularizers[ireg][2].*temp_g
-    end
-    if verb == true
+      g[regularizers[ireg][4]] += regularizers[ireg][2]*temp_g
+  end
+  if verbose == true
       println("\n");
-    end
-  return reg_f
+  end
+return reg_f
 end
 
 
 using OptimPackNextGen
-function spheroid_oi_reconstruct(x_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; epochs_weights =[], printcolor= [], verb = true, lower=0, upper=0, maxiter = 100, regularizers =[])
+
+function spheroid_oi_reconstruct(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=0, maxiter = 100, regularizers =[])
   x_sol = [];
-  crit_imaging = (x,g)->spheroid_crit_multiepochs_fg(x, g, polyflux, polyft, data, regularizers=regularizers, epochs_weights=  epochs_weights, verb = verb);
-  # if (upper == 0)
-  #   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
-  # elseif (upper > 0)
-  #   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=0, upper=upper, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
-  # end
-  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
+  crit_imaging = (x,g)->spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers, epochs_weights=  epochs_weights, verbose = verbose);
+  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verbose, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
   dummy = similar(x_sol);
   crit_opt = crit_imaging(x_sol,dummy);
   return x_sol, crit_opt
 end
 
-function oi_reconstruct_mutitemporal(x_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; epochs_weights =[], printcolor= [], verb = true, maxiter = 100, regularizers =[])
-  crit_imaging = (x,g)->oi_multitemporal_fg(x, g, polyflux, polyft, data, regularizers=regularizers, epochs_weights=  epochs_weights);
-  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verb, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
-  return reshape(x_sol, size(polyflux[1],1), length(data))
-end
+# "Multitemporal" = dynamical reconstruction
 
-function oi_multitemporal_fg(x, g, polyflux, polyft, data; regularizers=[], epochs_weights = [], verb=true)
-  # Explanation of the following: optimpack optimizes a vector, but we want an array of images
-  npix = size(polyflux[1],1);
-  chi2_f = 0.0;
-  g[:] .= 0.0;
-  #temp_g = deepcopy(g[:]);
-  #npix = size(x);
-  nepochs = length(data);
-  if epochs_weights == []
-    epochs_weights = ones(Float64, nepochs)/nepochs;
-  end
+# function oi_reconstruct_mutitemporal(x_start::Array{Float64,1}, data::Array{OIdata,1}, polyflux::Array{Array{Float64,1},1}, polyft::Array{Array{Complex{Float64},2},1}; epochs_weights =[], printcolor= [], verbose = true, maxiter = 100, regularizers =[])
+#   crit_imaging = (x,g)->oi_multitemporal_fg(x, g, polyflux, polyft, data, regularizers=regularizers, epochs_weights=  epochs_weights);
+#   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verbose=verbose, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
+#   return reshape(x_sol, size(polyflux[1],1), length(data))
+# end
 
-  #singleepoch_g = zeros(Float64, npix);
-  #for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-  #  chi2_f += epochs_weights[i]*spheroid_chi2_fg_alt(x[1:npix], singleepoch_g, polyflux[i], polyft[i], data[i], verbose=verb);
-  #  g[1:npix] += epochs_weights[i]*singleepoch_g;
-  #end
+# function oi_multitemporal_fg(x, g, polyflux, polyft, data; regularizers=[], epochs_weights = [], verbose=true)
+#   # Explanation of the following: optimpack optimizes a vector, but we want an array of images
+#   npix = size(polyflux[1],1);
+#   chi2_f = 0.0;
+#   g[:] .= 0.0;
+#   #temp_g = deepcopy(g[:]);
+#   #npix = size(x);
+#   nepochs = length(data);
+#   if epochs_weights == []
+#     epochs_weights = ones(Float64, nepochs)/nepochs;
+#   end
+
+#   #singleepoch_g = zeros(Float64, npix);
+#   #for i=1:nepochs # weighted sum -- should probably do the computation in parallel
+#   #  chi2_f += epochs_weights[i]*spheroid_chi2_fg_alt(x[1:npix], singleepoch_g, polyflux[i], polyft[i], data[i], verbose=verbose);
+#   #  g[1:npix] += epochs_weights[i]*singleepoch_g;
+#   #end
 
 
-  for i=1:nepochs # weighted sum -- in the future, do the computation in parallel
-    tslice = 1+(i-1)*npix:i*npix; # temporal slice
-    subg = zeros(Float64, npix);
-    chi2_f += epochs_weights[i]*spheroid_chi2_fg_alt(x[tslice], subg, polyflux[i], polyft[i], data[i], verbose=verb);
-    g[tslice] = epochs_weights[i]*subg;
-    #x[tslice] = x[1:npix];
-    #g[tslice] = g[1:npix];
-  end
+#   for i=1:nepochs # weighted sum -- in the future, do the computation in parallel
+#     tslice = 1+(i-1)*npix:i*npix; # temporal slice
+#     subg = zeros(Float64, npix);
+#     chi2_f += epochs_weights[i]*spheroid_chi2_fg_alt(x[tslice], subg, polyflux[i], polyft[i], data[i], verbose=verbose);
+#     g[tslice] = epochs_weights[i]*subg;
+#     #x[tslice] = x[1:npix];
+#     #g[tslice] = g[1:npix];
+#   end
 
-  # cross temporal regularization -- weight needs to be defined in the "regularizers" variable
-  if length(regularizers)>nepochs
-    if (regularizers[nepochs+1][1][1] == "temporal_tvsq")  & (regularizers[nepochs+1][1][2] > 0.0) & (nepochs>1)
-      y = reshape(x,(npix,nepochs))
-      temporalf = sum( (y[:,2:end]-y[:,1:end-1]).^2 )
-      tv_g = Array{Float64}(undef, npix,nepochs)
-      if nepochs>2
-         tv_g[:,1] = 2*(y[:,1] - y[:,2])
-         tv_g[:,2:end-1] = 4*y[:,2:end-1]-2*(y[:,1:end-2]+y[:,3:end])
-         tv_g[:,end] = 2*(y[:,end] - y[:,end-1])
-      else
-         tv_g[:,1] = 2*(y[:,1]-y[:,2]);
-         tv_g[:,2] = 2*(y[:,2]-y[:,1]);
-      end
-      chi2_f += regularizers[nepochs+1][1][2]*temporalf
-      g[:] += regularizers[nepochs+1][1][2]*vec(tv_g);
-      if verb == true
-           printstyled("Temporal regularization: $temporalf\n", color=:yellow)
-      end
-    end
-  end
-  reg_f = spheroid_regularization(x, g, regularizers=regularizers[1:nepochs], verb = verb); # Note: adds to g
-  return chi2_f + reg_f;
-end
+#   # cross temporal regularization -- weight needs to be defined in the "regularizers" variable
+#   if length(regularizers)>nepochs
+#     if (regularizers[nepochs+1][1][1] == "temporal_tvsq")  & (regularizers[nepochs+1][1][2] > 0.0) & (nepochs>1)
+#       y = reshape(x,(npix,nepochs))
+#       temporalf = sum( (y[:,2:end]-y[:,1:end-1]).^2 )
+#       tv_g = Array{Float64}(undef, npix,nepochs)
+#       if nepochs>2
+#          tv_g[:,1] = 2*(y[:,1] - y[:,2])
+#          tv_g[:,2:end-1] = 4*y[:,2:end-1]-2*(y[:,1:end-2]+y[:,3:end])
+#          tv_g[:,end] = 2*(y[:,end] - y[:,end-1])
+#       else
+#          tv_g[:,1] = 2*(y[:,1]-y[:,2]);
+#          tv_g[:,2] = 2*(y[:,2]-y[:,1]);
+#       end
+#       chi2_f += regularizers[nepochs+1][1][2]*temporalf
+#       g[:] += regularizers[nepochs+1][1][2]*vec(tv_g);
+#       if verbose == true
+#            printstyled("Temporal regularization: $temporalf\n", color=:yellow)
+#       end
+#     end
+#   end
+#   reg_f = spheroid_regularization(x, g, regularizers=regularizers[1:nepochs], verbose = verbose); # Note: adds to g
+#   return chi2_f + reg_f;
+# end
