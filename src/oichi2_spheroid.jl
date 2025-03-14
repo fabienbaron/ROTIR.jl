@@ -308,7 +308,7 @@ function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcol
   return x_sol
 end
 
-function image_reconstruct_oi_crit(x, data, stars, regularizers =[],  verbose = verbose)
+function image_reconstruct_oi_crit(x, data, stars; regularizers =[],  verbose = verbose)
   g = similar(x);
   crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers,epochs_weights=[],  verbose = verbose);
   return crit

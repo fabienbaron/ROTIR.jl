@@ -23,11 +23,11 @@ star_params = (
               ldtype         =      3,   # LD type  1: Linear 2: quadratic 3: power (Hestroffer)
               ld1            =  0.22886f0, # limb darkening,first coefficient is for LD law type, then LD coefficients
               ld2            =    0.0f0,   # second ld coeff, used if needed
-              inclination    =   4.65f0,  # degrees; inclination
+              inclination    =   78.0962,  # degrees; inclination
               position_angle =      24f0,  # degrees; position_angle
-              rotation_period= 55.3044f0,  # rotation period in days
+              rotation_period= 54.8f0,  # rotation period in days
               beta           =    0.08f0,  # exponent for von Zeipel law
-              frac_escapevel =      0.001f0, # unitless; fractional rotational velocity
+              frac_escapevel =      0.0, # unitless; fractional rotational velocity
               B_rot =               0.  # 2nd constant for rotational velocity              
               )
 
@@ -39,6 +39,6 @@ setup_oi!(data, stars)
 regularizers = [["tv2", 0.01f0, tv_neighbours_healpix(n),1:length(tmap_start)]];
 
 # RECONSTRUCTION
-tmap =  image_reconstruct_oi(tmap_start, data, stars, regularizers = [], verbose = true);
+tmap =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 1000, regularizers = [], verbose = true);
 crit = image_reconstruct_oi_crit(tmap, data, stars, regularizers = [], verbose = true)
 chi2 = image_reconstruct_oi_chi2(tmap, data, stars, verbose = true)

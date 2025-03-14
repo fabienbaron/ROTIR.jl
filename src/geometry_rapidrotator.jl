@@ -9,7 +9,7 @@ end
   ω = star_parameters.frac_escapevel;
   r = rpole * f_rapid_rot(ω*sin.(tessels.unit_spherical[:,:,2])); 
   # Fix for ω sin \theta  -->0
-  r[r .== Inf] .= rpole;
+  r[abs.(r) .== Inf] .= rpole;
   # Rewrite pole radius values
   if tessels.tessellation_type==1 # Longitude/Latitude
     # Overwrite pole radius values with exact values
