@@ -146,7 +146,7 @@ end
   g_t3phi = T(360/pi)*imag(transpose(star.polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
   gsum = g_v2 + g_t3amp + g_t3phi;
   flux = poly_to_flux(x, star);
-  g[indx] = (gsum .- sum(x[indx].*gsum)*star.polyflux / flux ) / flux; # gradient correction to take into account the non-normalization
+  g[indx] = (gsum .- dot(x[indx],gsum)*star.polyflux / flux ) / flux; # gradient correction to take into account the non-normalization
   if verbose == true
     println("V2: ", chi2_v2/data.nv2, "\tT3A: ", chi2_t3amp/data.nt3amp, "\tT3P: ", chi2_t3phi/data.nt3phi,"\tFlux: ", flux)
   end
@@ -175,24 +175,26 @@ function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_w
   nepochs = length(data)
   chi2_t = zeros(T, nepochs);
   #npix = stars[1].npix
-  singleepoch_g = zeros(T, nepochs, length(x));
+  singleepoch_g = [zeros(T, length(x)) for i=1:nepochs];
   Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-    chi2_t[i] = spheroid_chi2_fg(x, singleepoch_g[i,:], stars[i], data[i], verbose=verbose);
+    chi2_t[i] = spheroid_chi2_fg(x, singleepoch_g[i], stars[i], data[i], verbose=verbose);
   end
-  chi2_f = sum(chi2_t)
+  f = sum(chi2_t)
   if epochs_weights!=[]
   #  f = f.*epochs_weights
     @warn "Epoch weights not implemented"
    end 
-  g[:] .= dropdims(sum(singleepoch_g, dims=1), dims=1)
+  g[:] .= sum(singleepoch_g)
   if verbose == true
-    println("Total weighted chi2: ", chi2_f, "\n");
+    println("Total weighted chi2: $f");
   end
   # Map regularization
-  reg_g = zeros(T, length(x));
-  reg_f = spheroid_regularization(x, reg_g, regularizers=regularizers, verbose = verbose);
-  g[:] += reg_g
-  return chi2_f + reg_f;
+  if regularizers!=[]
+    reg_g = zeros(T, length(x));
+    f += spheroid_regularization(x, reg_g, regularizers=regularizers, verbose = verbose);
+    g[:] += reg_g
+  end
+  return f;
 end
 
 function parametric_temperature_map(parameters, star) # dispatches parametric 

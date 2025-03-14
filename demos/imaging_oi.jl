@@ -39,4 +39,4 @@ setup_oi!(data, stars)
 regularizers = [["tv2", 0.01f0, tv_neighbours_healpix(n),1:length(tmap_start)]];
 
 # RECONSTRUCTION
-tmap =  spheroid_oi_reconstruct(tmap_start, data, stars, regularizers = regularizers, verbose = true);
+tmap =  spheroid_oi_reconstruct(tmap_start, data, stars, regularizers = [], verbose = true);
