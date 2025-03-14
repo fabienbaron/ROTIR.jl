@@ -12,7 +12,7 @@ data = dataF32.(data)
 tepochs = Float32.(tepochs)
 
 # To use a Healpix scheme
-n=3; 
+n=4; 
 tessels = tessellation_healpix(n)
 
 ## Rapid rotator
@@ -27,8 +27,8 @@ star_params = (
               position_angle =      24f0,  # degrees; position_angle
               rotation_period= 54.8f0,  # rotation period in days
               beta           =    0.08f0,  # exponent for von Zeipel law
-              frac_escapevel =      0.0, # unitless; fractional rotational velocity
-              B_rot =               0.  # 2nd constant for rotational velocity              
+              frac_escapevel =      0f0, # unitless; fractional rotational velocity
+              B_rot =               0f0  # 2nd constant for rotational velocity              
               )
 
 stars = create_star_multiepochs(tessels, star_params, tepochs);
@@ -36,9 +36,11 @@ tmap_start = parametric_temperature_map(star_params,stars[1]);
 setup_oi!(data, stars)
 
 # SETUP REGULARIZATION
-regularizers = [["tv2", 0.01f0, tv_neighbours_healpix(n),1:length(tmap_start)]];
+regularizers = [["tv2", 1f-5, tv_neighbours_healpix(n),1:length(tmap_start)]];
 
 # RECONSTRUCTION
-tmap =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 1000, regularizers = [], verbose = true);
+tmap =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 1000, regularizers = regularizers, verbose = true);
 crit = image_reconstruct_oi_crit(tmap, data, stars, regularizers = [], verbose = true)
 chi2 = image_reconstruct_oi_chi2(tmap, data, stars, verbose = true)
+plot2d_allepochs(tmap, stars)
+plot_mollweide(tmap, stars[1])
