@@ -928,7 +928,7 @@ end
 
 using SparseArrays
 
-function tv_neighbours_healpix(n)
+function tv_neighbours_healpix(n;T=Float32)
 # Complete Neighbor setup (healpix)
 neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
 south_neighbors=[(neighbors[i])[1] for i=1:length(neighbors)]
@@ -941,10 +941,10 @@ npix = nside2npix(2^n)
 # ∇s = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, south_neighbors, -1.0)
 # ∇w = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, west_neighbors, -1.0)
 # Matrix form, all tessels
-∇ = sparse(1:npix, 1:npix, 1.0) 
+∇ = sparse(1:npix, 1:npix, T(1.0)) 
 for k=1:npix
-   ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= -1.0#/length(neighbors[k])
-   ∇[k, k]=length(neighbors[k])
+   ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= T(-1.0)#/length(neighbors[k])
+   ∇[k, k]= T(length(neighbors[k]))
 end
 H=∇'*∇
 return neighbors,south_neighbors,east_neighbors,south_neighbors_reverse,east_neighbors_reverse, ∇, H

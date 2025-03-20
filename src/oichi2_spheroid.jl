@@ -225,7 +225,7 @@ z[ztilde.>0]=0
 return z
 end
 
-function spheroid_total_variation2_fg(x, tv_g, tvinfo; ϵ = 1e-13, verbose = true)
+function spheroid_total_variation2_fg(x, tv_g, tvinfo; verbose = true)
   npix = length(x)
   tv_f = norm(tvinfo[6]*x)^2
   tv_g[:] = 2*(tvinfo[7]*x)
