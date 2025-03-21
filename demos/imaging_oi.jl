@@ -12,7 +12,7 @@ data = dataF32.(data)
 tepochs = Float32.(tepochs)
 
 # To use a Healpix scheme
-n=4; 
+n=3; 
 tessels = tessellation_healpix(n)
 
 ## Rapid rotator

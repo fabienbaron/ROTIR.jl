@@ -152,3 +152,29 @@ return OIdata{Float32}(
     data.filename
 )
 end
+
+using FITSIO
+function readfits(fitsfile; normalize = false, vectorize=false)
+    x = (read((FITS(fitsfile))[1]))
+    if normalize == true
+        x ./= sum(x)
+    end
+    if vectorize == true
+        x = vec(x)
+    end
+    return x;
+end
+
+function writefits(data, fitsfile;pixsize=-1)
+    """
+    pixsize should be input as mas
+    """
+    f = FITS(fitsfile, "w");
+    if pixsize!=-1
+        header = FITSHeader(["CDELT1","CDELT2","CRVAL1","CRVAL2","CRPIX1","CRPIX2"],[-(pixsize/1000.0)/(206265.0),(pixsize/1000.0)/(206265.0),0.0,0.0,(size(data)[1]/2),(size(data)[1]/2)],["Radians per Pixel","Radians per Pixel","X-coordinate of reference pixel","Y-coordinate of reference pixel","reference pixel in X","reference pixel in Y"])
+        write(f, data,header=header);
+    else
+        write(f, data);
+    end
+    close(f);
+end

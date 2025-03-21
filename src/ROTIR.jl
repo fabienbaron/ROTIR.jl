@@ -53,7 +53,7 @@ export plot3d, plot3d_vertices, plot2d
 
 export nside2npix, npix2n # Healpix
 export lci_linear_inversion_frame,lci_reconstruct_mutitemporal,rescale_temperature
-
+export readfits, writefits
 # # Export Doppler imaging routines
 # export modelGrid, globalLineProfiles, observedLineProfiles, jd2phase
 # export setup_di, read_di_profiles, bin_spectrum, setup_stellar_parameters_di, di_reconstruct
@@ -78,7 +78,7 @@ export lci_linear_inversion_frame,lci_reconstruct_mutitemporal,rescale_temperatu
 # export normalize_UVES, fit_rv, fit_continuum
 
 # testing
-export cvis_to_v2, poly_to_cvis, cvis_to_t3
+export cvis_to_v2, poly_to_cvis, poly_to_flux, cvis_to_t3
 export make_circ_spot, make_spot_move
 
 

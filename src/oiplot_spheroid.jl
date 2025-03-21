@@ -1,9 +1,27 @@
-# gather common display tasks
-using PyCall
-using PyPlot
-#using LazySets
-using Statistics
-using LaTeXStrings
+using PyPlot,PyCall, LaTeXStrings, Statistics
+
+function set_oiplot_defaults()
+    PyDict(pyimport("matplotlib")."rcParams")["font.family"]=["serif"]
+    PyDict(pyimport("matplotlib")."rcParams")["font.size"]=[14]
+    PyDict(pyimport("matplotlib")."rcParams")["xtick.major.size"]=[6]
+    PyDict(pyimport("matplotlib")."rcParams")["ytick.major.size"]=[6]
+    PyDict(pyimport("matplotlib")."rcParams")["xtick.minor.size"]=[6]
+    PyDict(pyimport("matplotlib")."rcParams")["ytick.minor.size"]=[6]
+    PyDict(pyimport("matplotlib")."rcParams")["xtick.major.width"]=[1]
+    PyDict(pyimport("matplotlib")."rcParams")["ytick.major.width"]=[1]
+    PyDict(pyimport("matplotlib")."rcParams")["xtick.minor.width"]=[1]
+    PyDict(pyimport("matplotlib")."rcParams")["ytick.minor.width"]=[1]
+    PyDict(pyimport("matplotlib")."rcParams")["lines.markeredgewidth"]=[1]
+    PyDict(pyimport("matplotlib")."rcParams")["legend.numpoints"]=[1]
+    PyDict(pyimport("matplotlib")."rcParams")["legend.handletextpad"]=[0.3]
+    #PyDict(pyimport("matplotlib")."rcParams")["agg.path.chunksize"]=[10000]
+end
+
+const global oiplot_colors=["black", "gold","chartreuse","blue","red", "pink","lightgray","darkorange","darkgreen","aqua",
+"fuchsia","saddlebrown","dimgray","darkslateblue","violet","indigo","blue","dodgerblue",
+"sienna","olive","purple","darkorchid","tomato","darkturquoise","steelblue","seagreen","darkgoldenrod","darkseagreen","salmon","slategray","lime","coral","maroon","mistyrose","sandybrown","tan","olivedrab"]
+
+const global oiplot_markers=["o","s","v","P","*","x","^","D","p",1,"<","H","X","4",4,"_","1",6,"8","d",9]
 
 ############################################################
 #
@@ -111,246 +129,289 @@ ax.set_aspect("equal")
 PyPlot.draw()
 end
 
-function plot2d(tmap, star, stellar_parameters, oblate_consts; plotmesh=false, colormap="gist_heat", offset=[0.0,0.0,0.0], fig=[], ax=[], draw_polelines=true, poleline_frac=0.35, draw_rotation_arrow=true, rotation_arrow_axis="S", rotation_arrow_axis_fraction=1.0, draw_graticules=true, draw_convex_hull=true) 
-# this plots the temperature map onto the projected 2D tmap plane (= observer view)
-    patches = pyimport("matplotlib.patches")
-    collections = pyimport("matplotlib.collections")
-    if fig == []
-        fig = figure("Epoch tmap",figsize=(10,10),facecolor="White")
-    end
-    if ax == []
-        ax = fig.add_axes([0.1,0.1,0.85,0.85]);
-    end
-    ax.set_aspect("equal")
-    if plotmesh == true
-    meshcolor = "grey"
-    else
-    meshcolor = "none"
-    end
-    xlabel("East (mas)", fontsize=14);
-    ylabel("North (mas)",fontsize=14);
-    axis_max = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))*1.5;
-    ax.set_xlim([axis_max,-axis_max])
-    ax.set_ylim([-axis_max,axis_max])
-    projmap = (tmap[star.index_quads_visible] .- minimum(tmap))/(maximum(tmap) - minimum(tmap));
-    #projmap = ((tmap[star.index_quads_visible].-minimum(tmap[star.index_quads_visible]))./(maximum(tmap[star.index_quads_visible]) - minimum(tmap[star.index_quads_visible]))).*star.ldmap[star.index_quads_visible];
-    for i=1:star.nquads_visible
-      p = patches.Polygon(hcat(-star.projx[i,:],star.projy[i,:]),closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill=true,rasterized=false, zorder=9)
-      ax.add_patch(p);
-    end
+function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5, colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="black") 
+  # this plots the temperature map onto the projected 2D image plane (= observer view)
+  set_oiplot_defaults()
+  patches = pyimport("matplotlib.patches")
+  axdiv= pyimport("mpl_toolkits.axes_grid1.axes_divider")
+  facecolor="White"
+  if background=="black"
+    facecolor="Black"
+  end
+  fig = figure("Epoch image",figsize=(10,10),facecolor="White")
+  clf();
+  ax = gca();
+  title(figtitle)
+  ax.set_facecolor(facecolor)
+  axis("equal")
+  axis_max = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))+pad;
+  ax.set_xlim([axis_max,-axis_max]);
+  ax.set_ylim([-axis_max,axis_max]);
+  projmap = tmap[star.index_quads_visible];
+  if intensity == true
+    projmap .*=star.ldmap[star.index_quads_visible]
+  end
+  colours = get_cmap(colormap).(projmap/maximum(projmap))
+  
+  for i=1:star.nquads_visible
+  p = patches.Polygon(hcat(-star.projx[i,:],star.projy[i,:]),closed=true,edgecolor= (plotmesh == true) ? "lightgrey" : colours[i],facecolor=colours[i],fill=true,rasterized=false)
+  ax.add_patch(p);
+  end
+  xlabel("East Left (mas)", fontsize=20)
+  ylabel("North Up (mas)", fontsize=20)
+  cmap=ColorMap(colormap)
+  projmap ./= maximum(projmap)  # TODO: this is for intensity -- we will have to rewrite it properly for temperature
+  norm = matplotlib.colors.Normalize(vmin=minimum(projmap), vmax=maximum(projmap)) 
+  divider = axdiv.make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=0.07)
+  cb=colorbar(matplotlib.cm.ScalarMappable(norm=norm,cmap=cmap), cax=cax)
+  #tight_layout()
+  end
+  
 
-    PA = stellar_parameters.position_angle
-    i = stellar_parameters.inclination
-    rot_angle = stellar_parameters.selfrotangle
-    Rx = α -> [1.0 0.0 0.0; 0.0 cos(α) -sin(α); 0.0 sin(α) cos(α)]
-    Ry = α -> [cos(α) 0.0 sin(α); 0.0 1.0 0.0; -sin(α) 0.0 cos(α)]
-    Rz = α -> [cos(α) -sin(α) 0.0; sin(α) cos(α) 0.0; 0.0 0.0 1.0]
 
-    function compute_polelines(star)
-        north = star.vertices_xyz[1,1,1:3]
-        south = star.vertices_xyz[end,3,1:3]
-        Δcoords = north .- south
-        north_end = north .+ Δcoords*poleline_frac
-        south_end = south .- Δcoords*poleline_frac
-        north_line = [north north_end]
-        south_line = [south south_end]
-        return north_line, south_line
-    end
 
-    function plot_polelines(ax, north_poleline, south_poleline)
-        ## Plot polelines
-        znorth = north_poleline[3, 2]
-        zsouth = south_poleline[3, 2]
-        if znorth > 0; nzorder = 10; else; nzorder = 1; end;
-        if zsouth > 0; szorder = 10; else; szorder = 1; end;
-        Δcoords = north_poleline[:, 2] - north_poleline[:, 1]
-        ax.arrow(-north_poleline[1, 1], north_poleline[2, 1], -Δcoords[1], Δcoords[2], color="k", zorder=nzorder, linewidth=1, length_includes_head=true, head_width=0.075, head_length=0.1125)
-        ax.plot(-south_poleline[1, :], south_poleline[2, :], "k-", zorder=szorder)
-    end
+# function plot2d(tmap, star; intensity=false, stellar_parameters=[], oblate_consts=[], plotmesh=false, colormap="gist_heat", offset=[0.0,0.0,0.0], fig=[], ax=[], draw_polelines=true, poleline_frac=0.35, draw_rotation_arrow=true, rotation_arrow_axis="S", rotation_arrow_axis_fraction=1.0, draw_graticules=true, draw_convex_hull=true) 
+# # this plots the temperature map onto the projected 2D tmap plane (= observer view)
+#     patches = pyimport("matplotlib.patches")
+#     collections = pyimport("matplotlib.collections")
+#     if fig == []
+      
+#       fig = figure(intensity == true ? "Flux" : "Temperature", figsize=(10,10),facecolor="White")
+#     end
+#     if ax == []
+#         ax = fig.add_axes([0.1,0.1,0.85,0.85]);
+#     end
+#     ax.set_aspect("equal")
+#     if plotmesh == true
+#     meshcolor = "grey"
+#     else
+#     meshcolor = "none"
+#     end
+#     xlabel("East (mas)", fontsize=14);
+#     ylabel("North (mas)",fontsize=14);
+#     axis_max = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))*1.5;
+#     ax.set_xlim([axis_max,-axis_max])
+#     ax.set_ylim([-axis_max,axis_max])
+#     projmap = (tmap[star.index_quads_visible] .- minimum(tmap))/(maximum(tmap) - minimum(tmap));
+#     #projmap = ((tmap[star.index_quads_visible].-minimum(tmap[star.index_quads_visible]))./(maximum(tmap[star.index_quads_visible]) - minimum(tmap[star.index_quads_visible]))).*star.ldmap[star.index_quads_visible];
+#     for i=1:star.nquads_visible
+#       p = patches.Polygon(hcat(-star.projx[i,:],star.projy[i,:]),closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill=true,rasterized=false, zorder=9)
+#       ax.add_patch(p);
+#     end
 
-    north_poleline, south_poleline = compute_polelines(star)
-    Δcoords = north_poleline[:, 2] - north_poleline[:, 1]
-    if (i in [0.0 180.0]) == false && draw_polelines == true
-        plot_polelines(ax, north_poleline, south_poleline)
-    end
+#     # PA = stellar_parameters.position_angle
+#     # i = stellar_parameters.inclination
+#     # rot_angle = stellar_parameters.selfrotangle
+#     # Rx = α -> [1.0 0.0 0.0; 0.0 cos(α) -sin(α); 0.0 sin(α) cos(α)]
+#     # Ry = α -> [cos(α) 0.0 sin(α); 0.0 1.0 0.0; -sin(α) 0.0 cos(α)]
+#     # Rz = α -> [cos(α) -sin(α) 0.0; sin(α) cos(α) 0.0; 0.0 0.0 1.0]
 
-    function compute_rotation_arrow(c, r, i, PA)
-        if 80.0 < i <= 90.0 
-            i = 80.0;
-        elseif 90.0 < i < 100.0
-            i = 100.0
-        end
+#     # function compute_polelines(star)
+#     #     north = star.vertices_xyz[1,1,1:3]
+#     #     south = star.vertices_xyz[end,3,1:3]
+#     #     Δcoords = north .- south
+#     #     north_end = north .+ Δcoords*poleline_frac
+#     #     south_end = south .- Δcoords*poleline_frac
+#     #     north_line = [north north_end]
+#     #     south_line = [south south_end]
+#     #     return north_line, south_line
+#     # end
 
-        θ = collect(range(-pi/4, stop=-7pi/4, length=201))
-        x = r*cos.(θ)
-        y = r*sin.(θ)
-        z = zeros(length(θ))
-        coords = [x y z]'
+#     # function plot_polelines(ax, north_poleline, south_poleline)
+#     #     ## Plot polelines
+#     #     znorth = north_poleline[3, 2]
+#     #     zsouth = south_poleline[3, 2]
+#     #     if znorth > 0; nzorder = 10; else; nzorder = 1; end;
+#     #     if zsouth > 0; szorder = 10; else; szorder = 1; end;
+#     #     Δcoords = north_poleline[:, 2] - north_poleline[:, 1]
+#     #     ax.arrow(-north_poleline[1, 1], north_poleline[2, 1], -Δcoords[1], Δcoords[2], color="k", zorder=nzorder, linewidth=1, length_includes_head=true, head_width=0.075, head_length=0.1125)
+#     #     ax.plot(-south_poleline[1, :], south_poleline[2, :], "k-", zorder=szorder)
+#     # end
 
-        # Rz = [cos(-PA*pi/180) -sin(-PA*pi/180) 0.0; sin(-PA*pi/180) cos(-PA*pi/180) 0.0; 0.0 0.0 1.0]
-        # Rx = [1.0 0.0 0.0; 0.0 cos(-i*pi/180) -sin(-i*pi/180); 0.0 sin(-i*pi/180) cos(-i*pi/180)]
+#     # north_poleline, south_poleline = compute_polelines(star)
+#     # Δcoords = north_poleline[:, 2] - north_poleline[:, 1]
+#     # if (i in [0.0 180.0]) == false && draw_polelines == true
+#     #     plot_polelines(ax, north_poleline, south_poleline)
+#     # end
 
-        for n=1:length(θ)
-            coords[:, n] = Rx(-i*pi/180) * coords[:, n]
-            coords[:, n] = Rz(-PA*pi/180) * coords[:, n]
-        end
+#     # function compute_rotation_arrow(c, r, i, PA)
+#     #     if 80.0 < i <= 90.0 
+#     #         i = 80.0;
+#     #     elseif 90.0 < i < 100.0
+#     #         i = 100.0
+#     #     end
 
-        coords[1, :] .+= -c[1]
-        coords[2, :] .+= c[2]
-        # coords[3, :] .+= zc
+#     #     θ = collect(range(-pi/4, stop=-7pi/4, length=201))
+#     #     x = r*cos.(θ)
+#     #     y = r*sin.(θ)
+#     #     z = zeros(length(θ))
+#     #     coords = [x y z]'
 
-        tip_angle = atan((coords[2, end] - coords[2, end-1]), (coords[1, end] - coords[1, end-1]))
-        tip_radius = poleline_frac/10
-        tip_coords = coords[1:2, end]
-        tip_coords[1] += tip_radius/2*cos(tip_angle)
-        tip_coords[2] += tip_radius/2*sin(tip_angle)
-        return coords, tip_coords, tip_radius, tip_angle
-    end
+#     #     # Rz = [cos(-PA*pi/180) -sin(-PA*pi/180) 0.0; sin(-PA*pi/180) cos(-PA*pi/180) 0.0; 0.0 0.0 1.0]
+#     #     # Rx = [1.0 0.0 0.0; 0.0 cos(-i*pi/180) -sin(-i*pi/180); 0.0 sin(-i*pi/180) cos(-i*pi/180)]
 
-    function plot_rotation_arrow(ax, rotation_line_coords, tip_coords, tip_radius, tip_angle)
-        if rotation_line_coords[3, end] > 0.0; zorder = 10; else; zorder = 1; end;
-        ax.plot(rotation_line_coords[1, rotation_line_coords[3, :] .> 0.0], rotation_line_coords[2, rotation_line_coords[3, :] .> 0.0], "-", color="k", linewidth=1, zorder=10)
-        ax.plot(rotation_line_coords[1, rotation_line_coords[3, :] .< 0.0], rotation_line_coords[2, rotation_line_coords[3, :] .< 0.0], "--", color="k", linewidth=1, zorder=1)
-        ax.add_patch(patches.RegularPolygon((tip_coords[1], tip_coords[2]), 3, tip_radius, tip_angle-pi/2, color="k", zorder=zorder))
-    end
+#     #     for n=1:length(θ)
+#     #         coords[:, n] = Rx(-i*pi/180) * coords[:, n]
+#     #         coords[:, n] = Rz(-PA*pi/180) * coords[:, n]
+#     #     end
 
-    if rotation_arrow_axis == "N"; 
-        rotation_ellipse_center = star.vertices_xyz[1,1,1:3] .+ rotation_arrow_axis_fraction*Δcoords; 
-    elseif rotation_arrow_axis == "S"; 
-        rotation_ellipse_center = star.vertices_xyz[end,3,1:3] .- rotation_arrow_axis_fraction*Δcoords;
-    end
+#     #     coords[1, :] .+= -c[1]
+#     #     coords[2, :] .+= c[2]
+#     #     # coords[3, :] .+= zc
 
-    rotation_line_coords, tip_coords, tip_radius, tip_angle = compute_rotation_arrow(rotation_ellipse_center, poleline_frac, i, PA)
-    if draw_rotation_arrow == true
-        plot_rotation_arrow(ax, rotation_line_coords, tip_coords, tip_radius, tip_angle)
-    end
+#     #     tip_angle = atan((coords[2, end] - coords[2, end-1]), (coords[1, end] - coords[1, end-1]))
+#     #     tip_radius = poleline_frac/10
+#     #     tip_coords = coords[1:2, end]
+#     #     tip_coords[1] += tip_radius/2*cos(tip_angle)
+#     #     tip_coords[2] += tip_radius/2*sin(tip_angle)
+#     #     return coords, tip_coords, tip_radius, tip_angle
+#     # end
 
-    function compute_graticules(oblate_consts, incl, PA, rot_angle)
-        # Rz = [cos(-PA*pi/180) -sin(-PA*pi/180) 0.0; sin(-PA*pi/180) cos(-PA*pi/180) 0.0; 0.0 0.0 1.0]
-        # Rx = [1.0 0.0 0.0; 0.0 cos((90-incl)*pi/180) -sin((90-incl)*pi/180); 0.0 sin((90-incl)*pi/180) cos((90-incl)*pi/180)]
-        # Ry = [cos(rot_angle*pi/180) 0.0 sin(rot_angle*pi/180); 0.0 1.0 0.0; -sin(rot_angle*pi/180) 0.0 cos(rot_angle*pi/180)]
+#     # function plot_rotation_arrow(ax, rotation_line_coords, tip_coords, tip_radius, tip_angle)
+#     #     if rotation_line_coords[3, end] > 0.0; zorder = 10; else; zorder = 1; end;
+#     #     ax.plot(rotation_line_coords[1, rotation_line_coords[3, :] .> 0.0], rotation_line_coords[2, rotation_line_coords[3, :] .> 0.0], "-", color="k", linewidth=1, zorder=10)
+#     #     ax.plot(rotation_line_coords[1, rotation_line_coords[3, :] .< 0.0], rotation_line_coords[2, rotation_line_coords[3, :] .< 0.0], "--", color="k", linewidth=1, zorder=1)
+#     #     ax.add_patch(patches.RegularPolygon((tip_coords[1], tip_coords[2]), 3, tip_radius, tip_angle-pi/2, color="k", zorder=zorder))
+#     # end
 
-        # Rx = α -> [1.0 0.0 0.0; 0.0 cos(α) -sin(α); 0.0 sin(α) cos(α)]
-        # Ry = α -> [cos(α) 0.0 sin(α); 0.0 1.0 0.0; -sin(α) 0.0 cos(α)]
-        # Rz = α -> [cos(α) -sin(α) 0.0; sin(α) cos(α) 0.0; 0.0 0.0 1.0]
+#     # if rotation_arrow_axis == "N"; 
+#     #     rotation_ellipse_center = star.vertices_xyz[1,1,1:3] .+ rotation_arrow_axis_fraction*Δcoords; 
+#     # elseif rotation_arrow_axis == "S"; 
+#     #     rotation_ellipse_center = star.vertices_xyz[end,3,1:3] .- rotation_arrow_axis_fraction*Δcoords;
+#     # end
 
-        a, b, c = oblate_consts
+#     # rotation_line_coords, tip_coords, tip_radius, tip_angle = compute_rotation_arrow(rotation_ellipse_center, poleline_frac, i, PA)
+#     # if draw_rotation_arrow == true
+#     #     plot_rotation_arrow(ax, rotation_line_coords, tip_coords, tip_radius, tip_angle)
+#     # end
 
-        r = ones(200) * b
-        θs = vec([-pi/3 -pi/6 0.0 pi/6 pi/3])
-        ϕ = collect(range(-pi/2, stop=3pi/2, length=200))
-        latlong_lines = []
-        for i=eachindex(θs)
-            θ = ones(200) * θs[i]
-            coords_rθϕ = [r θ ϕ]'
-            sortixs = sortperm(ϕ)
-            x = a * cos.(θ) .* cos.(ϕ)
-            y = c * sin.(θ)
-            z = b * cos.(θ) .* sin.(ϕ)
-            coords_xyz = [x y z]'
-            # coords_xyz = coords_xyz[:, sortixs]
-            for j=axes(coords_xyz, 2)
-                coords_xyz[:, j] = Rx((90.0-i)*pi/180) * coords_xyz[:, j]
-                coords_xyz[:, j] = Rz(-PA*pi/180) * coords_xyz[:, j]
-            end
-            if length(coords_xyz[1, coords_xyz[3, :] .> 0.0]) > 0
-                coords_xyz = coords_xyz[:, coords_xyz[3, :] .> 0.0]
-                push!(latlong_lines, hcat(coords_xyz[1, :], coords_xyz[2, :]))
-            end
-        end
+#     # function compute_graticules(oblate_consts, incl, PA, rot_angle)
+#     #     # Rz = [cos(-PA*pi/180) -sin(-PA*pi/180) 0.0; sin(-PA*pi/180) cos(-PA*pi/180) 0.0; 0.0 0.0 1.0]
+#     #     # Rx = [1.0 0.0 0.0; 0.0 cos((90-incl)*pi/180) -sin((90-incl)*pi/180); 0.0 sin((90-incl)*pi/180) cos((90-incl)*pi/180)]
+#     #     # Ry = [cos(rot_angle*pi/180) 0.0 sin(rot_angle*pi/180); 0.0 1.0 0.0; -sin(rot_angle*pi/180) 0.0 cos(rot_angle*pi/180)]
 
-        θ = collect(range(-pi/2, stop=pi/2, length=200))
-        ϕs = collect(range(0.0, stop=2pi, step=pi/4))[1:end-1]
-        for i=eachindex(ϕs)
-            ϕ  = ones(200) * ϕs[i]
-            x = a * cos.(θ) .* cos.(ϕ)
-            y = c * sin.(θ)
-            z = b * cos.(θ) .* sin.(ϕ)
-            coords_xyz = [x y z]'
-            for j=axes(coords_xyz, 2)
-                coords_xyz[:, j] = Ry(rot_angle*pi/180) * coords_xyz[:, j]
-                coords_xyz[:, j] = Rx((90.0-i)*pi/180) * coords_xyz[:, j]
-                coords_xyz[:, j] = Rz(-PA*pi/180) * coords_xyz[:, j]
-            end
-            if length(coords_xyz[1, coords_xyz[3, :] .> 0.0]) > 0
-                coords_xyz = coords_xyz[:, coords_xyz[3, :] .> 0.0]
-                push!(latlong_lines, hcat(coords_xyz[1, :], coords_xyz[2, :]))
-            end
+#     #     # Rx = α -> [1.0 0.0 0.0; 0.0 cos(α) -sin(α); 0.0 sin(α) cos(α)]
+#     #     # Ry = α -> [cos(α) 0.0 sin(α); 0.0 1.0 0.0; -sin(α) 0.0 cos(α)]
+#     #     # Rz = α -> [cos(α) -sin(α) 0.0; sin(α) cos(α) 0.0; 0.0 0.0 1.0]
 
-            ## Longitude labels
-            # x = a * cos(ϕs[i])
-            # y = 0.0
-            # z = b * sin(ϕs[i])
-            # coords_xyz = [x y z]'
-            # coords_xyz = Ry * coords_xyz
-            # coords_xyz = Rx * coords_xyz
-            # coords_xyz = Rz * coords_xyz
-            # ϕ_label = mod(ϕs[i] - pi, 2pi)
-            # ϕ_label = round(Int, ϕ_label*180/pi)
-            # if z >= 0
-            #     ax.text(coords_xyz[1], coords_xyz[2], "$(ϕ_label)°", zorder=13)
-            # end
-        end
-        return latlong_lines
-    end
+#     #     a, b, c = oblate_consts
 
-    function plot_graticules(ax, graticules)
-        ax.add_collection(collections.PolyCollection(graticules, closed=false, ec="k", fc="none", zorder=13))
-    end
+#     #     r = ones(200) * b
+#     #     θs = vec([-pi/3 -pi/6 0.0 pi/6 pi/3])
+#     #     ϕ = collect(range(-pi/2, stop=3pi/2, length=200))
+#     #     latlong_lines = []
+#     #     for i=eachindex(θs)
+#     #         θ = ones(200) * θs[i]
+#     #         coords_rθϕ = [r θ ϕ]'
+#     #         sortixs = sortperm(ϕ)
+#     #         x = a * cos.(θ) .* cos.(ϕ)
+#     #         y = c * sin.(θ)
+#     #         z = b * cos.(θ) .* sin.(ϕ)
+#     #         coords_xyz = [x y z]'
+#     #         # coords_xyz = coords_xyz[:, sortixs]
+#     #         for j=axes(coords_xyz, 2)
+#     #             coords_xyz[:, j] = Rx((90.0-i)*pi/180) * coords_xyz[:, j]
+#     #             coords_xyz[:, j] = Rz(-PA*pi/180) * coords_xyz[:, j]
+#     #         end
+#     #         if length(coords_xyz[1, coords_xyz[3, :] .> 0.0]) > 0
+#     #             coords_xyz = coords_xyz[:, coords_xyz[3, :] .> 0.0]
+#     #             push!(latlong_lines, hcat(coords_xyz[1, :], coords_xyz[2, :]))
+#     #         end
+#     #     end
 
-    graticules = compute_graticules(oblate_consts, i, PA, rot_angle)
-    if draw_graticules == true
-        plot_graticules(ax, graticules)
-    end
+#     #     θ = collect(range(-pi/2, stop=pi/2, length=200))
+#     #     ϕs = collect(range(0.0, stop=2pi, step=pi/4))[1:end-1]
+#     #     for i=eachindex(ϕs)
+#     #         ϕ  = ones(200) * ϕs[i]
+#     #         x = a * cos.(θ) .* cos.(ϕ)
+#     #         y = c * sin.(θ)
+#     #         z = b * cos.(θ) .* sin.(ϕ)
+#     #         coords_xyz = [x y z]'
+#     #         for j=axes(coords_xyz, 2)
+#     #             coords_xyz[:, j] = Ry(rot_angle*pi/180) * coords_xyz[:, j]
+#     #             coords_xyz[:, j] = Rx((90.0-i)*pi/180) * coords_xyz[:, j]
+#     #             coords_xyz[:, j] = Rz(-PA*pi/180) * coords_xyz[:, j]
+#     #         end
+#     #         if length(coords_xyz[1, coords_xyz[3, :] .> 0.0]) > 0
+#     #             coords_xyz = coords_xyz[:, coords_xyz[3, :] .> 0.0]
+#     #             push!(latlong_lines, hcat(coords_xyz[1, :], coords_xyz[2, :]))
+#     #         end
 
-    function compute_convex_hull(star)
-        xpts = vec(star.vertices_xyz[:, :, 1])
-        ypts = vec(star.vertices_xyz[:, :, 2])
-        pts = [vec([xpts[i] ypts[i]]) for i=eachindex(xpts)]
-        chull = convex_hull(pts)
-        chull = mapreduce(permutedims, vcat, chull)
-        return chull
-    end
+#     #         ## Longitude labels
+#     #         # x = a * cos(ϕs[i])
+#     #         # y = 0.0
+#     #         # z = b * sin(ϕs[i])
+#     #         # coords_xyz = [x y z]'
+#     #         # coords_xyz = Ry * coords_xyz
+#     #         # coords_xyz = Rx * coords_xyz
+#     #         # coords_xyz = Rz * coords_xyz
+#     #         # ϕ_label = mod(ϕs[i] - pi, 2pi)
+#     #         # ϕ_label = round(Int, ϕ_label*180/pi)
+#     #         # if z >= 0
+#     #         #     ax.text(coords_xyz[1], coords_xyz[2], "$(ϕ_label)°", zorder=13)
+#     #         # end
+#     #     end
+#     #     return latlong_lines
+#     # end
 
-    function plot_convex_hull(ax, chull)
-        chull_polygon = patches.Polygon(hcat(-chull[:, 1], chull[:, 2]), closed=true, fill=false, ec="k", rasterized=false, zorder=13)
-        ax.add_patch(chull_polygon)
-    end
+#     # function plot_graticules(ax, graticules)
+#     #     ax.add_collection(collections.PolyCollection(graticules, closed=false, ec="k", fc="none", zorder=13))
+#     # end
+
+#     # graticules = compute_graticules(oblate_consts, i, PA, rot_angle)
+#     # if draw_graticules == true
+#     #     plot_graticules(ax, graticules)
+#     # end
+
+#     # function compute_convex_hull(star)
+#     #     xpts = vec(star.vertices_xyz[:, :, 1])
+#     #     ypts = vec(star.vertices_xyz[:, :, 2])
+#     #     pts = [vec([xpts[i] ypts[i]]) for i=eachindex(xpts)]
+#     #     chull = convex_hull(pts)
+#     #     chull = mapreduce(permutedims, vcat, chull)
+#     #     return chull
+#     # end
+
+#     # function plot_convex_hull(ax, chull)
+#     #     chull_polygon = patches.Polygon(hcat(-chull[:, 1], chull[:, 2]), closed=true, fill=false, ec="k", rasterized=false, zorder=13)
+#     #     ax.add_patch(chull_polygon)
+#     # end
     
-    chull = compute_convex_hull(star)
-    ## Plot Convex Hull
-    if draw_convex_hull == true
-        plot_convex_hull(ax, chull)
-    end
+#     # chull = compute_convex_hull(star)
+#     # ## Plot Convex Hull
+#     # if draw_convex_hull == true
+#     #     plot_convex_hull(ax, chull)
+#     # end
 
-    ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
-    if (ceil(axis_max) <= 3.0)
-        long_tick = 1.0;
-        short_tick = 0.1;
-    elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
-        long_tick = 2.0;
-        short_tick = 0.2;
-    elseif (ceil(axis_max) > 6.0)
-        long_tick = 3.0;
-        short_tick = 0.5;
-    end
-    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
-    ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
-    ax.tick_params(axis="both", which="minor", width=2, length=5);
-    # make axes thicker
-    ax.spines["top"].set_linewidth(2);
-    ax.spines["bottom"].set_linewidth(2);
-    ax.spines["left"].set_linewidth(2);
-    ax.spines["right"].set_linewidth(2);
+#     ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+#     if (ceil(axis_max) <= 3.0)
+#         long_tick = 1.0;
+#         short_tick = 0.1;
+#     elseif ((ceil(axis_max) > 3.0) & (ceil(axis_max) <= 6.0))
+#         long_tick = 2.0;
+#         short_tick = 0.2;
+#     elseif (ceil(axis_max) > 6.0)
+#         long_tick = 3.0;
+#         short_tick = 0.5;
+#     end
+#     ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.yaxis.set_major_locator(matplotlib.ticker.MultipleLocator(long_tick));
+#     ax.xaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
+#     ax.tick_params(axis="both", which="minor", width=2, length=5);
+#     # make axes thicker
+#     ax.spines["top"].set_linewidth(2);
+#     ax.spines["bottom"].set_linewidth(2);
+#     ax.spines["left"].set_linewidth(2);
+#     ax.spines["right"].set_linewidth(2);
 
-    ax.set_xlim(ax.get_xlim().*[1.1, 1.1])
-    ax.set_ylim(ax.get_ylim().*[1.1, 1.1])
+#     ax.set_xlim(ax.get_xlim().*[1.1, 1.1])
+#     ax.set_ylim(ax.get_ylim().*[1.1, 1.1])
 
-    ax.plot();
-    PyPlot.draw()
-end
+#     ax.plot();
+#     PyPlot.draw()
+# end
 
 # function plot2d_temperature_cmap(tmap, star; plotmesh=true, minmaxT=[], colormap="gist_heat",offset=[0.0,0.0,0.0]) # this plots the temperature map onto the projected 2D tmap plane (= observer view)
 #   # still missing the actual intensity (includes LD)
@@ -568,6 +629,7 @@ end
 
 
 function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",arr_box=23)
+    nepochs = length(star)  
     patches = pyimport("matplotlib.patches")
     fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
     if plotmesh == true
@@ -591,7 +653,7 @@ function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gi
       #meshcolor = "grey"
     end
 
-    for t=1:length(star)
+    for t=1:nepochs
       #fig.add_subplot(rows,cols,t)
       ax = subplot(arr_box*10+t) # Create the 1st axis of a 2x2 arrax of axes
       if tepochs !=[]
