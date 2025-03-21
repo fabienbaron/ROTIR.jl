@@ -296,6 +296,16 @@ function with_invisible_neighbours(n, stars)
   return 
 end
 
+function without_invisible_neighbours(n, stars)
+  # all visible tessels who have at least an invisible neighbor
+  # they should be the limb tessels
+  nlist = tv_neighbours_healpix(n)[1]
+  npix= length(nlist)
+  invisible = invisible_neighbours(n, stars)
+  return findall(.!prod.([nlist[i] .∉ Ref(invisible) for i=1:npix]))
+end
+
+
 
 function create_star_multiepochs(tessels::tessellation, star_params, tepochs; kwargs...)
 nepochs = length(tepochs);
