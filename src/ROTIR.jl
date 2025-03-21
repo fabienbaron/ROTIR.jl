@@ -47,7 +47,7 @@ export image_reconstruct_oi, image_reconstruct_oi_crit, image_reconstruct_oi_chi
 export parametric_temperature_map, spheroid_parametric_f
 # Export plotting routines
 export plot2d_wireframe, plot2d_allepochs
-export sometimes_visible, never_visible
+export sometimes_visible, never_visible, invisible_neighbours
 export plot_mollweide
 export plot3d, plot3d_vertices, plot2d
 

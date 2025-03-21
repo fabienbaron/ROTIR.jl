@@ -225,6 +225,34 @@ z[ztilde.>0]=0
 return z
 end
 
+
+# function spheroid_total_variation_fg(x, tv_g, tvinfo; ϵ = 1e-13, T=Float32, verbose = true)
+#   # Add total variation regularization
+#   #tvinfo: neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse
+#   ϵ = T(ϵ)
+#   npix = length(x)
+#   xs = x[tvinfo[2]];
+#   xw = x[tvinfo[3]];
+#   tv_f = sum(sqrt.( (x-xs).^2 + (x-xw).^2) .+ ϵ )
+#   tv_g[1:npix] = (2*x-xs-xw)./(sqrt.( (x-xs).^2 + (x-xw).^2) .+ ϵ)
+#   for j=1:length(x)
+#     k = tvinfo[4][j]
+#     l = tvinfo[5][j]
+#     if length(k)>0
+#       kk=k[1]
+#       tv_g[j] += (x[j]-x[kk])/sqrt((x[kk]-x[j])^2+(x[kk]-x[tvinfo[3][kk]])^2 +ϵ)
+#     end
+#     if length(l)>0
+#       ll=l[1]
+#       tv_g[j] += (x[j]-x[ll])/sqrt((x[ll]-x[tvinfo[2][ll]])^2+(x[ll]-x[j])^2 +ϵ)
+#     end
+#    end
+# if verbose == true
+#       println("TV: ", tv_f);
+# end
+#   return tv_f
+# end
+
 function spheroid_total_variation2_fg(x, tv_g, tvinfo; verbose = true)
   npix = length(x)
   tv_f = norm(tvinfo[6]*x)^2
@@ -235,13 +263,27 @@ function spheroid_total_variation2_fg(x, tv_g, tvinfo; verbose = true)
   return tv_f
 end
 
-function spheroid_l2_fg(x, g; verbose = true)
-l2f = sum(abs.(x.-sum(x)/length(x)))
+function spheroid_total_variation_fg(x, tv_g, tvinfo; verbose = true)
+  npix = length(x)
+  tv_f = norm(tvinfo[6]*x)
+  if tv_f>0 
+  tv_g[:] = (tvinfo[7]*x)/tv_f
+  else
+    tv_g[:] .= 0
+  end
+  if verbose == true
+      println("TV: ", tv_f);
+  end
+  return tv_f
+end
+
+function spheroid_mean_fg(x, g; verbose = true)
+f = sum(abs.(x.-sum(x)/length(x)))
 g[:] = sign.(x.-sum(x)/length(x))
 if verbose == true
-println(" L2: ", l2f);
+println(" MeanReg: ", f);
 end
-return l2f;
+return f;
 end
 
 function spheroid_harmon_bias_fg(x, g, B::Float64; verbose = true)
@@ -260,7 +302,7 @@ end
 return reg_f;
 end
 
-function max_entropy_fg(x, g; verbose=true, ϵ=1e-9)
+function max_entropy_fg(x, g; verbose=false, ϵ=1e-9)
   # mmap = sum(x) / length(x)
   # nmap = x ./ mmap
   # reg_f = sum(nmap .* log.(nmap))
@@ -279,12 +321,14 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
   for ireg =1:length(regularizers)
       x_sub = x[regularizers[ireg][4]] # take the pixel subset if needed (example: only regularize visible pixels)
       temp_g = similar(x_sub);
-      if regularizers[ireg][1] == "tv"
-          reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      if regularizers[ireg][1] == "mem"
+          reg_f += regularizers[ireg][2]*max_entropy_fg(x_sub, temp_g, verbose = verbose);
       elseif regularizers[ireg][1] == "tv2"
           reg_f += regularizers[ireg][2]*spheroid_total_variation2_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
-      elseif regularizers[ireg][1] == "l2"
-          reg_f += regularizers[ireg][2]*spheroid_l2_fg(x_sub, temp_g, verbose = verbose);
+      elseif regularizers[ireg][1] == "tv"
+          reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "mean"
+          reg_f += regularizers[ireg][2]*spheroid_mean_fg(x_sub, temp_g, verbose = verbose);
       elseif regularizers[ireg][1] == "bias"
           reg_f += regularizers[ireg][2]*spheroid_harmon_bias_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose );
       end
@@ -299,10 +343,10 @@ end
 
 using OptimPackNextGen
 
-function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=0, maxiter = 100, regularizers =[])
+function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf32, maxiter = 100, regularizers =[])
   x_sol = [];
   crit_imaging = (x,g)->spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers, epochs_weights=  epochs_weights, verbose = verbose);
-  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verbose, lower=0, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
+  x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verbose, lower=lower, upper=upper, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
   dummy = similar(x_sol);
   crit_opt = crit_imaging(x_sol,dummy);
   return x_sol
