@@ -253,6 +253,7 @@ end
 #   return tv_f
 # end
 
+
 function spheroid_total_variation2_fg(x, tv_g, tvinfo; verbose = true)
   npix = length(x)
   tv_f = norm(tvinfo[6]*x)^2

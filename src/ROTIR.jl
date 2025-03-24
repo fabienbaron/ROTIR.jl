@@ -30,10 +30,10 @@ export binary_orbit_rel, binary_orbit_abs, binary_RV, binary_proj_plane
 # Export reading in oifits files, geometry initialization, and regularization
 export readoifits_multiepochs, readoifits #, OIdata, LCI
 export oblate_const
-export healpix_round_star, healpix_ellipsoid_star, tv_neighbours_healpix
+export healpix_round_star, healpix_ellipsoid_star, tv_neighbours_healpix,tv_neighbours_healpix_visible 
 export latlong_round_star, latlong_ellipsoid_star, tv_neighbors_longlat, latlong_rochelobe
 export create_star, create_star_multiepochs, create_binary
-
+export upsample_map_stars, downsample_map_stars
 # Export for rapid rotators
 export temperature_map_vonZeipel_rapid_rotator, calc_grelmap_vZ
 export compute_teff_vonzeipel

@@ -931,10 +931,10 @@ using SparseArrays
 function tv_neighbours_healpix(n;T=Float32)
 # Complete Neighbor setup (healpix)
 neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
-south_neighbors=[(neighbors[i])[1] for i=1:length(neighbors)]
-east_neighbors=[(neighbors[i])[3] for i=1:length(neighbors)]
-south_neighbors_reverse=[findall(south_neighbors.==i) for i=1:length(neighbors)]
-east_neighbors_reverse=[findall(east_neighbors.==i) for i=1:length(neighbors)]
+#south_neighbors=[(neighbors[i])[1] for i=1:length(neighbors)]
+#east_neighbors=[(neighbors[i])[3] for i=1:length(neighbors)]
+#south_neighbors_reverse=[findall(south_neighbors.==i) for i=1:length(neighbors)]
+#east_neighbors_reverse=[findall(east_neighbors.==i) for i=1:length(neighbors)]
 
 # Matrix form, only S/W tessels
 npix = nside2npix(2^n)
@@ -943,13 +943,49 @@ npix = nside2npix(2^n)
 # Matrix form, all tessels
 ∇ = sparse(1:npix, 1:npix, T(1.0)) 
 for k=1:npix
-   ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= T(-1.0)#/length(neighbors[k])
+   ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= T(-1.0)
    ∇[k, k]= T(length(neighbors[k]))
 end
 H=∇'*∇
-return neighbors,south_neighbors,east_neighbors,south_neighbors_reverse,east_neighbors_reverse, ∇, H
+#return neighbors,south_neighbors,east_neighbors,south_neighbors_reverse,east_neighbors_reverse, ∇, H
+return neighbors,[],[],[],[], ∇, H
 end
 
 
+function tv_neighbours_healpix_visible(n, stars;T=Float32)
+  # Same as the default tv_neighbours but
+  # here the difference matrix is set so that only visible pixels are regularized
+  neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
+  invis = never_visible(stars)
+  vis = sometimes_visible(stars)
 
+  npix = nside2npix(2^n)
+  ∇ = sparse(1:npix, 1:npix, T(0.0)) 
+  for k in vis
+    list_vis_neighbors = findall(neighbors[k] .∉ Ref(invis))
+    neffective_neighbors = length(list_vis_neighbors)
+    effective_neighbors = neighbors[k][list_vis_neighbors]
+    ∇[effective_neighbors, k*ones(Int, neffective_neighbors)] .= T(-1.0)
+    ∇[k, k]= T(neffective_neighbors)
+  end
+  H=∇'*∇
+  return neighbors,[],[],[],[], ∇, H
+end
+
+
+function upsample_map_stars(tmap, stars, star_params, tepochs)
+  n_old = npix2n(stars[1].npix)
+  n_new = n_old + 1 
+  stars_new = create_star_multiepochs(tessellation_healpix(n_new), star_params, tepochs);
+  tmap_new = vec(repeat(tmap, 1, 4)')
+  return tmap_new, stars_new
+end
+
+function downsample_map_stars(tmap, stars, star_params, tepochs)
+  n_old = npix2n(stars[1].npix)
+  n_new = n_old - 1 
+  stars_new = create_star_multiepochs(tessellation_healpix(n_new), star_params, tepochs);
+  tmap_new = [mean(tmap[i:i+3]) for i=1:4:nside2npix(2^n_new)-3]
+  return tmap_new, stars_new
+end
 
