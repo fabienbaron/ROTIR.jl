@@ -21,10 +21,15 @@ end
   T = eltype(stars[1].vertices_xyz);
   #polyflux = Array{Array{T,1}}(undef,nepochs);
   #polyft = Array{Array{Complex{T},2}}(undef,nepochs);
+  if nepochs>1
   Threads.@threads for i=1:nepochs
        stars[i].polyflux = setup_polyflux_single(stars[i])
        stars[i].polyft = setup_polyft_single(data[i], stars[i]);
      end
+  else # single epoch, thread over calculation
+    stars[1].polyflux = setup_polyflux_single(stars[1])
+    stars[1].polyft = setup_polyft_single_alt(data[1], stars[1]);
+  end
 end
 
 @views function setup_polygon_ft(data, star_epoch_geom)
@@ -54,6 +59,36 @@ end
   + pjx[:,4].*pjy[:,1]
   - pjx[:,1].*pjy[:,4]);
   return polyflux;
+end
+
+
+function stcis(x1,x2,y1,y2,kx,ky; T=Float32)
+  return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-T(pi)*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
+end
+
+@views function setup_polyft_single_alt(data, star_epoch_geom; T=Float32)
+  pjx = star_epoch_geom.projx
+  pjy = star_epoch_geom.projy
+  kx =  data.uv[1,:] * T(-pi / (180*3600000))
+  ky =  data.uv[2,:] * T( pi / (180*3600000))
+  x = [Array(pjx[:,i])' for i in 1:4]
+  y = [Array(pjy[:,i])' for i in 1:4]
+
+  term1 = Threads.@spawn stcis(x[1], x[2], y[1], y[2], kx, ky)
+  term2 = Threads.@spawn stcis(x[2], x[3], y[2], y[3], kx, ky)
+  term3 = Threads.@spawn stcis(x[3], x[4], y[3], y[4], kx, ky)
+  term4 = Threads.@spawn stcis(x[4], x[1], y[4], y[1], kx, ky)
+
+  factor = -im * T(1/(2pi)) ./ (kx .* kx + ky .* ky)
+  
+  # Wait for the tasks to complete and get their results
+  term1 = fetch(term1)
+  term2 = fetch(term2)
+  term3 = fetch(term3)
+  term4 = fetch(term4)
+
+  polyft = factor .* (term1 + term2 + term3 + term4)
+  return polyft
 end
 
 @views function setup_polyft_single(data, star_epoch_geom; T=Float32)
@@ -365,6 +400,11 @@ function image_reconstruct_oi_chi2(x, data, stars;  verbose = verbose)
   return crit
 end
 
+function image_reconstruct_oi_chi2_fg(x, data, stars;  verbose = verbose)
+  g = similar(x);
+  crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=[], epochs_weights= [], verbose = verbose);
+  return crit,g
+end
 
 
 
