@@ -54,9 +54,9 @@ function crit_single_obj_fg(x,g,ft,ftT,psf,data)
 end
 
 function crit_single_psf_fg(psf,g,V,data)
-    res = convolve_fo(psf,V) .- data
+    res = convolve_psf_V(psf,V) .- data
     f   = sum(abs2,res)
-    g[:] .= 2*real(V'*convolve_fo_tr(res,V))
+    g[:] .= 
     return f
 end
 
@@ -91,9 +91,16 @@ function convolve(object::Array{T,2}, psf::SubArray{T, 2, Array{T, 3}, Tuple{Bas
     return irfft(rfft(object).*rfft(psf),size(object,1))
 end
       
-function convolve_tr(object::Array{T,2}, psf::Array{T,2}) where T
-    return irfft(conj(rfft(object)).*rfft(psf),size(object,1))  
+function convolve_psf_V(psf::Array{T,2}, V::Array{Complex{T},1}) where T
+  nx = size(psf,1)  
+  return irfft(reshape(vec(rfft(psf)).*V,nx÷2+1,nx),  nx)
 end
+
+function convolve_psf_V_tr(psf::Array{T,2}, V::Array{Complex{T},1}) where T
+  nx = size(psf,1)  
+  return irfft(reshape(vec(rfft(psf)).*V,nx÷2+1,nx),  nx)
+end
+
 
 # # function convolve_fo(psf::Array{T,2}, fo::Array{Complex{T},2}) where T
 # #     return irfft(rfft(psf).*fo,size(psf,1))
@@ -107,9 +114,9 @@ end
 #   return irfft(reshape(vec(rfft(psf)).*fo, nx÷2+1,nx), size(psf,1))
 # end
 
-# function convolve_fo_tr(psf::Array{T,2}, fo::Array{Complex{T},1}) where T
-#   return irfft(reshape(vec(rfft(psf)).*conj(fo), nx÷2+1,nx), size(psf,1))
-# end
+ function convolve_fo_tr(psf::Array{T,2}, fo::Array{Complex{T},1}) where T
+   return irfft(reshape(vec(rfft(psf)).*conj(fo), nx÷2+1,nx), size(psf,1))
+ end
 
 # function convolve_fo_adj(y::Array{T,2}, fo::Array{Complex{T},1}) where T
 #     nx = size(y, 1)
