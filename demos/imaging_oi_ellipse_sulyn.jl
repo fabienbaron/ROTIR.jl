@@ -46,3 +46,4 @@ f = x->chi2s(x, stars[1], data[1], verbose=false)
 x = rand(Float32, tessels.npix)
 @benchmark f(x)
 
+@benchmark setup_oi!(data, stars)

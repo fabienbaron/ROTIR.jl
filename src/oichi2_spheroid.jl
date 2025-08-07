@@ -15,7 +15,6 @@ function poly_to_flux(x, star)
    return flux;
 end
 
-
 @views function setup_oi!(data, stars)
   nepochs = size(data,1);
   T = eltype(stars[1].vertices_xyz);
@@ -24,11 +23,11 @@ end
   if nepochs>1
   Threads.@threads for i=1:nepochs
        stars[i].polyflux = setup_polyflux_single(stars[i])
-       stars[i].polyft = setup_polyft_single(data[i], stars[i]);
+       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i]);
      end
   else # single epoch, thread over calculation
     stars[1].polyflux = setup_polyflux_single(stars[1])
-    stars[1].polyft = setup_polyft_single_alt(data[1], stars[1]);
+    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1]);
   end
 end
 
@@ -39,7 +38,7 @@ end
   polyft = Array{Array{Complex{T},2}}(undef,nepochs);
   Threads.@threads for i=1:nepochs
        polyflux[i] = setup_polyflux_single(star_epoch_geom[i])
-       polyft[i] = setup_polyft_single(data[i], star_epoch_geom[i]);
+       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i]);
      end
   return polyflux, polyft
 end
@@ -61,16 +60,15 @@ end
   return polyflux;
 end
 
-
-function stcis(x1,x2,y1,y2,kx,ky; T=Float32)
-  return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-T(pi)*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
+function stcis(x1,x2,y1,y2,kx,ky)
+  return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-Float32(π)*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
 end
 
-@views function setup_polyft_single_alt(data, star_epoch_geom; T=Float32)
+@views function setup_polyft_single_alt(uv, star_epoch_geom; T=Float32)
   pjx = star_epoch_geom.projx
   pjy = star_epoch_geom.projy
-  kx =  data.uv[1,:] * T(-pi / (180*3600000))
-  ky =  data.uv[2,:] * T( pi / (180*3600000))
+  kx =  uv[1,:] * T(-pi / (180*3600000))
+  ky =  uv[2,:] * T( pi / (180*3600000))
   x = [Array(pjx[:,i])' for i in 1:4]
   y = [Array(pjy[:,i])' for i in 1:4]
 
@@ -91,12 +89,12 @@ end
   return polyft
 end
 
-@views function setup_polyft_single(data, star_epoch_geom; T=Float32)
+@views function setup_polyft_single(uv, star_epoch_geom; T=Float32)
   # Polyflux is the weight of each pixel, proportional to the surface
   pjx = star_epoch_geom.projx;
   pjy = star_epoch_geom.projy;
-  kx =  data.uv[1,:] * T(-pi / (180*3600000));
-  ky =  data.uv[2,:] * T( pi / (180*3600000));
+  kx =  uv[1,:] * T(-pi / (180*3600000));
+  ky =  uv[2,:] * T( pi / (180*3600000));
   # note: check definition sinc(x) = sin(pi*x)/(pi*x)
   polyft = -im*T(1/(2pi))*(((sinc.( (kx*transpose(pjx[:,2]-pjx[:,1])) + (ky*transpose(pjy[:,2]-pjy[:,1])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,2]+pjx[:,1])) +  (ky*transpose(pjy[:,2]+pjy[:,1])) )).* ( (ky*transpose(pjx[:,2]-pjx[:,1]))  - (kx*transpose(pjy[:,2]-pjy[:,1])) ) + sinc.( (kx*transpose(pjx[:,3]-pjx[:,2])) + (ky*transpose(pjy[:,3]-pjy[:,2])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,3]+pjx[:,2])) +  (ky*transpose(pjy[:,3]+pjy[:,2])) )).* ( (ky*transpose(pjx[:,3]-pjx[:,2]))  - (kx*transpose(pjy[:,3]-pjy[:,2])) )+ sinc.( (kx*transpose(pjx[:,4]-pjx[:,3])) + (ky*transpose(pjy[:,4]-pjy[:,3])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,4]+pjx[:,3])) +  (ky*transpose(pjy[:,4]+pjy[:,3])) )).* ( (ky*transpose(pjx[:,4]-pjx[:,3]))  - (kx*transpose(pjy[:,4]-pjy[:,3])) ) + sinc.( (kx*transpose(pjx[:,1]-pjx[:,4])) + (ky*transpose(pjy[:,1]-pjy[:,4])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,1]+pjx[:,4])) +  (ky*transpose(pjy[:,1]+pjy[:,4])) )).* ( (ky*transpose(pjx[:,1]-pjx[:,4]))  - (kx*transpose(pjy[:,1]-pjy[:,4])) )))./((kx.*kx+ky.*ky)));
   return polyft;
