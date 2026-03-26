@@ -1,5 +1,5 @@
 # Solve Kepler's equation using Newton-Raphson
-function compute_E_NR(M,e; T=Float32) # Union{Vector{Float},Float}
+function compute_E_NR(M,e; T=Float64) # Union{Vector{Float},Float}
     # initial guess (from Smith (1979))
     E = M + e*sin.(M)./(1 .- sin.(M .+ e) + sin.(M));
     E_old = M*0
@@ -127,7 +127,7 @@ function compute_separation(bparameters, tepoch)
 end
 
 # Calculate eccentric anomaly
-function compute_eccentric_anomaly(bparameters,tepoch; T=Float32) # Note: this can be called with tepochs = vector
+function compute_eccentric_anomaly(bparameters,tepoch; T=Float64) # Note: this can be called with tepochs = vector
     P = bparameters.P;
     dP = bparameters.dP;
     e = bparameters.e;

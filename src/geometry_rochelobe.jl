@@ -3,7 +3,7 @@ import Base: Math as math
 
 # The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
 #
-function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float32) 
+function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float64) 
     # if wanting to call this for secondary=true, invert roche_parameters.q;
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     secondary == false ? fillout_factor = roche_parameters.fillout_factor_primary : fillout_factor = roche_parameters.fillout_factor_secondary;
@@ -45,7 +45,7 @@ function update_roche_radii_binary(star1_geom::tessellation, star2_geom::tessell
     return star1_roche_geom, star2_roche_geom
 end
 
-function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false, T=Float32)
+function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false, T=Float64)
   secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
   if (use_fillout_factor == true)
     #
@@ -261,7 +261,7 @@ function temperature_map_vonZeipel_roche_single(parameters, star_geom, t::Array{
     return Tmap
 end
 
-function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=Float32)
+function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=Float64)
     rpole = parameters.rpole/parameters.a
     tpole = parameters.tpole
     r = star_geom.vertices_spherical[:, 5 ,1]/parameters.a

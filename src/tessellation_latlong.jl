@@ -1,4 +1,4 @@
-@views function tessellation_latlong(ntheta,nphi; T=Float32)
+@views function tessellation_latlong(ntheta,nphi; T=Float64)
     npix = ntheta*nphi;
     unit_spherical = zeros(T, npix, 5, 3); # r, theta, phi
     unit_xyz = zeros(T, npix, 5, 3); # x, y, z

@@ -1,4 +1,4 @@
-function tessellation_healpix(n::Int64; T=Float32)
+function tessellation_healpix(n::Int64; T=Float64)
   # instantiate the base geometry
   nside = 2^n
   npix = nside2npix(nside)
@@ -377,7 +377,7 @@ end
     return ipf + face_num * nside * nside .+ 1
   end
   
-  function pix2vec_nest(nside::Int64, ipix::Array{Int64,1}; T=Float32)
+  function pix2vec_nest(nside::Int64, ipix::Array{Int64,1}; T=Float64)
   #   coordinate of the lowest corner of each face
     jrll = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4] # in unit of nside
     jpll = [1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7] # in unit of nside/2
@@ -490,7 +490,7 @@ end
   end # pix2vec_nest
   
   
-  function pix2ang_nest(nside::Int64, ipix::Array{Int64,1}; T=Float32)
+  function pix2ang_nest(nside::Int64, ipix::Array{Int64,1}; T=Float64)
       jrll = [ 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4 ]
       jpll = [ 1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7 ]
   
@@ -928,31 +928,40 @@ end
 
 using SparseArrays
 
-function tv_neighbours_healpix(n;T=Float32)
-# Complete Neighbor setup (healpix)
-neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
-#south_neighbors=[(neighbors[i])[1] for i=1:length(neighbors)]
-#east_neighbors=[(neighbors[i])[3] for i=1:length(neighbors)]
-#south_neighbors_reverse=[findall(south_neighbors.==i) for i=1:length(neighbors)]
-#east_neighbors_reverse=[findall(east_neighbors.==i) for i=1:length(neighbors)]
-
-# Matrix form, only S/W tessels
+function tv_neighbours_healpix(n;T=Float64)
+# COO (coordinate) construction — O(nnz) instead of O(npix × nnz)
+# Uses triplet accumulation followed by a single sparse() call,
+# avoiding costly element-wise CSC insertion.
+neighbors = all_neighbours_nest(n)
 npix = nside2npix(2^n)
-# ∇s = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, south_neighbors, -1.0)
-# ∇w = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, west_neighbors, -1.0)
-# Matrix form, all tessels
-∇ = sparse(1:npix, 1:npix, T(1.0)) 
-for k=1:npix
-   ∇[neighbors[k], k*ones(Int, length(neighbors[k]))] .= T(-1.0)
-   ∇[k, k]= T(length(neighbors[k]))
+
+# Pre-count total entries: each pixel has nn off-diagonals + 1 diagonal
+total_nnz = sum(length(neighbors[k]) for k in 1:npix) + npix
+I = Vector{Int}(undef, total_nnz)
+J = Vector{Int}(undef, total_nnz)
+V = Vector{T}(undef, total_nnz)
+pos = 0
+for k in 1:npix
+    nb = neighbors[k]
+    nn = length(nb)
+    for i in 1:nn
+        pos += 1
+        I[pos] = nb[i]
+        J[pos] = k
+        V[pos] = T(-1)
+    end
+    pos += 1
+    I[pos] = k
+    J[pos] = k
+    V[pos] = T(nn)
 end
-H=∇'*∇
-#return neighbors,south_neighbors,east_neighbors,south_neighbors_reverse,east_neighbors_reverse, ∇, H
+∇ = sparse(I, J, V, npix, npix)
+H = ∇'*∇
 return neighbors,[],[],[],[], ∇, H
 end
 
 
-function tv_neighbours_healpix_visible(n, stars;T=Float32)
+function tv_neighbours_healpix_visible(n, stars;T=Float64)
   # Same as the default tv_neighbours but
   # here the difference matrix is set so that only visible pixels are regularized
   neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
@@ -968,6 +977,7 @@ function tv_neighbours_healpix_visible(n, stars;T=Float32)
     ∇[effective_neighbors, k*ones(Int, neffective_neighbors)] .= T(-1.0)
     ∇[k, k]= T(neffective_neighbors)
   end
+  ∇ = ∇[vis, vis]
   H=∇'*∇
   return neighbors,[],[],[],[], ∇, H
 end

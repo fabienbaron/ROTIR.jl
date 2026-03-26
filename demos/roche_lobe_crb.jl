@@ -1,15 +1,13 @@
-include("../src/ROTIR.jl"); using Main.ROTIR
-include("../src/oitools-ext.jl")
-using BenchmarkTools; 
+using ROTIR
 # LOAD DATA
 oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_And_prepped.oifits",
 "./data/2011Sep10.lam_And_prepped.oifits","./data/2011Sep14.lam_And_prepped.oifits",
 "./data/2011Sep19.lam_And_prepped.oifits","./data/2011Sep24.lam_And_prepped.oifits"];
-nepochs, tepochs, data = readoifits_multiepochs(oifitsfiles);
+data_all = readoifits_multiepochs(oifitsfiles; T=Float32);
+data = data_all[1, :]; # select first wavelength bin, all epochs
+nepochs = length(data)
+tepochs = Float32.([d.mean_mjd for d in data])
 tepochs = tepochs .- tepochs[1]; # First epoch set as t=0
-
-data = dataF32.(data)
-tepochs = Float32.(tepochs)
 
 # To use the latitude/longitude scheme
 # ntheta=50

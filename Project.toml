@@ -1,0 +1,23 @@
+name = "ROTIR"
+uuid = "1effc416-1cd3-435e-ba3b-8cf647137d25"
+keywords = ["astronomy", "interferometry", "imaging", "stellar surfaces"]
+license = "GPLv3"
+desc = "Regularized imaging of stellar surfaces from optical interferometry, Doppler imaging, and light curves"
+authors = ["Fabien Baron <fbaron@gsu.edu>"]
+version = "0.1.0"
+
+[deps]
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+FITSIO = "525bcba6-941b-5504-bd06-fd0dc1a4d2eb"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
+OptimPackNextGen = "080ffe24-4a27-4ab0-ad71-7b624e73ef8d"
+PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
+PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[compat]
+OITOOLS = "0.9"
+julia = "1.10"

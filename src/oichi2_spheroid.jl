@@ -61,10 +61,10 @@ end
 end
 
 function stcis(x1,x2,y1,y2,kx,ky)
-  return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-Float32(π)*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
+  return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-π*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
 end
 
-@views function setup_polyft_single_alt(uv, star_epoch_geom; T=Float32)
+@views function setup_polyft_single_alt(uv, star_epoch_geom; T=Float64)
   pjx = star_epoch_geom.projx
   pjy = star_epoch_geom.projy
   kx =  uv[1,:] * T(-pi / (180*3600000))
@@ -89,7 +89,7 @@ end
   return polyft
 end
 
-@views function setup_polyft_single(uv, star_epoch_geom; T=Float32)
+@views function setup_polyft_single(uv, star_epoch_geom; T=Float64)
   # Polyflux is the weight of each pixel, proportional to the surface
   pjx = star_epoch_geom.projx;
   pjy = star_epoch_geom.projy;
@@ -101,6 +101,17 @@ end
 end
 
 
+
+
+@views function setup_polyft_single(kx, ky, pjx, pjy; T=Float64)
+  polyft = -im*T(1/(2pi))*(((sinc.( (kx*transpose(pjx[:,2]-pjx[:,1])) + (ky*transpose(pjy[:,2]-pjy[:,1])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,2]+pjx[:,1])) +  (ky*transpose(pjy[:,2]+pjy[:,1])) )).* ( (ky*transpose(pjx[:,2]-pjx[:,1]))  - (kx*transpose(pjy[:,2]-pjy[:,1])) ) + sinc.( (kx*transpose(pjx[:,3]-pjx[:,2])) + (ky*transpose(pjy[:,3]-pjy[:,2])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,3]+pjx[:,2])) +  (ky*transpose(pjy[:,3]+pjy[:,2])) )).* ( (ky*transpose(pjx[:,3]-pjx[:,2]))  - (kx*transpose(pjy[:,3]-pjy[:,2])) )+ sinc.( (kx*transpose(pjx[:,4]-pjx[:,3])) + (ky*transpose(pjy[:,4]-pjy[:,3])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,4]+pjx[:,3])) +  (ky*transpose(pjy[:,4]+pjy[:,3])) )).* ( (ky*transpose(pjx[:,4]-pjx[:,3]))  - (kx*transpose(pjy[:,4]-pjy[:,3])) ) + sinc.( (kx*transpose(pjx[:,1]-pjx[:,4])) + (ky*transpose(pjy[:,1]-pjy[:,4])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,1]+pjx[:,4])) +  (ky*transpose(pjy[:,1]+pjy[:,4])) )).* ( (ky*transpose(pjx[:,1]-pjx[:,4]))  - (kx*transpose(pjy[:,1]-pjy[:,4])) )))./((kx.*kx+ky.*ky)));
+  return polyft;
+end
+
+
+
+
+
 function mod360(x)
   return mod.(mod.(x.+180,360).+360, 360) .- 180
 end
@@ -109,7 +120,7 @@ function cvis_to_v2(cvis, indx)
   v2_model = abs2.(cvis[indx]);
 end
 
-function cvis_to_t3(cvis, indx1, indx2, indx3; T=Float32)
+function cvis_to_t3(cvis, indx1, indx2, indx3; T=Float64)
   t3 = cvis[indx1].*cvis[indx2].*cvis[indx3];
   t3amp = abs.(t3);
   t3phi = angle.(t3)*T(180/pi);
@@ -202,7 +213,7 @@ end
 return f;
 end
 
-function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[], verbose=false, T=Float32)
+function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[], verbose=false, T=Float64)
   T = eltype(x)
   #g[:] .= T(0);
   nepochs = length(data)
@@ -377,7 +388,7 @@ end
 
 using OptimPackNextGen
 
-function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf32, maxiter = 100, regularizers =[])
+function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf, maxiter = 100, regularizers =[])
   x_sol = [];
   crit_imaging = (x,g)->spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers, epochs_weights=  epochs_weights, verbose = verbose);
   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verbose, lower=lower, upper=upper, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
@@ -402,6 +413,27 @@ function image_reconstruct_oi_chi2_fg(x, data, stars;  verbose = verbose)
   g = similar(x);
   crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=[], epochs_weights= [], verbose = verbose);
   return crit,g
+end
+
+function multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4, maxiter=500, reg_weight=1e-5, reg_type="tv2", verbose=true, kwargs...)
+  tmap = nothing
+  stars = nothing
+  for n in n_start:n_end
+    tessels = tessellation_healpix(n)
+    stars = create_star_multiepochs(tessels, star_params, tepochs)
+    if tmap === nothing
+      tmap = parametric_temperature_map(star_params, stars[1])
+    else
+      tmap = vec(repeat(tmap, 1, 4)')  # upsample from previous level
+    end
+    setup_oi!(data, stars)
+    regularizers = [[reg_type, reg_weight, tv_neighbours_healpix(n), 1:length(tmap)]]
+    if verbose
+      println("Multi-resolution: HEALPix level n=$n, npix=$(nside2npix(2^n))")
+    end
+    tmap = image_reconstruct_oi(tmap, data, stars; maxiter=maxiter, regularizers=regularizers, verbose=verbose, kwargs...)
+  end
+  return tmap, stars
 end
 
 

@@ -129,7 +129,7 @@ ax.set_aspect("equal")
 PyPlot.draw()
 end
 
-function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5, colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="black") 
+function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5, colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="black", flipx=false) 
   # this plots the temperature map onto the projected 2D image plane (= observer view)
   set_oiplot_defaults()
   patches = pyimport("matplotlib.patches")
@@ -145,7 +145,11 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   ax.set_facecolor(facecolor)
   axis("equal")
   axis_max = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))+pad;
-  ax.set_xlim([axis_max,-axis_max]);
+  if flipx==false
+    ax.set_xlim([axis_max,-axis_max]);
+  else
+    ax.set_xlim([-axis_max,axis_max]);
+  end
   ax.set_ylim([-axis_max,axis_max]);
   projmap = tmap[star.index_quads_visible];
   if intensity == true

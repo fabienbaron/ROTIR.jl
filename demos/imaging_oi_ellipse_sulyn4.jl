@@ -1,13 +1,11 @@
-include("../src/ROTIR.jl"); using Main.ROTIR
-include("../src/oitools-ext.jl")
-
-using BenchmarkTools; 
+using ROTIR
 # LOAD DATA
 oifitsfiles=["./data/SU_Lyn.oifits"]
-nepochs, tepochs, data = readoifits_multiepochs(oifitsfiles,filter_bad_data=true);
+data_all = readoifits_multiepochs(oifitsfiles; filter_bad_data=true, T=Float32);
+data = data_all[1, :]; # select first wavelength bin, all epochs
+nepochs = length(data)
+tepochs = Float32.([d.mean_mjd for d in data])
 tepochs = tepochs .- tepochs[1]; # First epoch set as t=0
-data = dataF32.(data)
-tepochs = Float32.(tepochs)
 
 # To use a Healpix scheme
 n=3; 

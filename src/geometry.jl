@@ -131,7 +131,7 @@ function rot_vertex(angle_r1, angle_r2, angle_r3) # new rotational matrix
 end
   
 
-function compute_radii(tessels::tessellation, star_params, t; T=Float32) 
+function compute_radii(tessels::tessellation, star_params, t; T=Float64) 
   npix = tessels.npix
   xyz = [];
   r = [];
@@ -155,7 +155,7 @@ function compute_radii(tessels::tessellation, star_params, t; T=Float32)
   return r, xyz
 end
 
-function rotate_star(xyz, star_params, t; T=Float32)
+function rotate_star(xyz, star_params, t; T=Float64)
   # TODO: reimplement differential rotation for compatible surfaces (see old ROTIR)
   npix = size(xyz,1)
   compound_rotation = rot_vertex( T(2pi)*t/star_params.rotation_period, star_params.inclination*T(pi/180.), star_params.position_angle*T(pi/180.));
@@ -163,7 +163,7 @@ function rotate_star(xyz, star_params, t; T=Float32)
 end
 
 
-function compute_ldmap(μ,star_params; T=Float32)
+function compute_ldmap(μ,star_params; T=Float64)
   # Limb-darkening map
   if (star_params.ldtype == 1) # 1: quadratic
     ldmap = T(1.0) .- star_params.ld1*(T(1.0) .-μ) 
@@ -175,7 +175,7 @@ function compute_ldmap(μ,star_params; T=Float32)
 end
 
 # Generate geometry and ld map from tesselation and stellar parameters
-@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float32)
+@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float64)
   npix = tessels.npix;
   # Compute radii 
   r, xyz = compute_radii(tessels, star_params, t);
