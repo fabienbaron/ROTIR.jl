@@ -6,28 +6,32 @@ function poly_to_cvis(x, polyflux, polyft)
 end
 
 function poly_to_cvis(x, star)
-   flux = dot(star.polyflux, x[star.index_quads_visible]); # get the total flux
-   return star.polyft * x[star.index_quads_visible] / flux;
+   indx = star.index_quads_visible
+   xw = x[indx] .* star.vis_weights[indx]
+   flux = dot(star.polyflux, xw); # get the total flux
+   return star.polyft * xw / flux;
 end
 
 function poly_to_flux(x, star)
-   flux = dot(star.polyflux,x[star.index_quads_visible]); # get the total flux
+   indx = star.index_quads_visible
+   xw = x[indx] .* star.vis_weights[indx]
+   flux = dot(star.polyflux, xw); # get the total flux
    return flux;
 end
 
 @views function setup_oi!(data, stars)
   nepochs = size(data,1);
   T = eltype(stars[1].vertices_xyz);
-  #polyflux = Array{Array{T,1}}(undef,nepochs);
-  #polyft = Array{Array{Complex{T},2}}(undef,nepochs);
   if nepochs>1
   Threads.@threads for i=1:nepochs
-       stars[i].polyflux = setup_polyflux_single(stars[i])
-       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i]);
+       indx = stars[i].index_quads_visible
+       stars[i].polyflux = setup_polyflux_single(stars[i].projx[indx,:], stars[i].projy[indx,:])
+       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i].projx[indx,:], stars[i].projy[indx,:]);
      end
   else # single epoch, thread over calculation
-    stars[1].polyflux = setup_polyflux_single(stars[1])
-    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1]);
+    indx = stars[1].index_quads_visible
+    stars[1].polyflux = setup_polyflux_single(stars[1].projx[indx,:], stars[1].projy[indx,:])
+    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1].projx[indx,:], stars[1].projy[indx,:]);
   end
 end
 
@@ -37,18 +41,17 @@ end
   polyflux = Array{Array{T,1}}(undef,nepochs);
   polyft = Array{Array{Complex{T},2}}(undef,nepochs);
   Threads.@threads for i=1:nepochs
-       polyflux[i] = setup_polyflux_single(star_epoch_geom[i])
-       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i]);
+       indx = star_epoch_geom[i].index_quads_visible
+       polyflux[i] = setup_polyflux_single(star_epoch_geom[i].projx[indx,:], star_epoch_geom[i].projy[indx,:])
+       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i].projx[indx,:], star_epoch_geom[i].projy[indx,:]);
      end
   return polyflux, polyft
 end
 
-@views function setup_polyflux_single(star_epoch_geom)
-  # Polyflux is the weight of each pixel, proportional to the surface
-  pjx = star_epoch_geom.projx;
-  pjy = star_epoch_geom.projy;
-  T = eltype(star_epoch_geom.vertices_xyz);
-  polyflux =T(0.5)*(
+@views function setup_polyflux_single(pjx, pjy)
+  # Polyflux is the projected area of each pixel (shoelace formula)
+  T = eltype(pjx);
+  polyflux = T(0.5)*(
     pjx[:,1].*pjy[:,2]
   - pjx[:,2].*pjy[:,1]
   + pjx[:,2].*pjy[:,3]
@@ -64,9 +67,7 @@ function stcis(x1,x2,y1,y2,kx,ky)
   return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-π*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
 end
 
-@views function setup_polyft_single_alt(uv, star_epoch_geom; T=Float64)
-  pjx = star_epoch_geom.projx
-  pjy = star_epoch_geom.projy
+@views function setup_polyft_single_alt(uv, pjx, pjy; T=Float64)
   kx =  uv[1,:] * T(-pi / (180*3600000))
   ky =  uv[2,:] * T( pi / (180*3600000))
   x = [Array(pjx[:,i])' for i in 1:4]
@@ -89,10 +90,7 @@ end
   return polyft
 end
 
-@views function setup_polyft_single(uv, star_epoch_geom; T=Float64)
-  # Polyflux is the weight of each pixel, proportional to the surface
-  pjx = star_epoch_geom.projx;
-  pjy = star_epoch_geom.projy;
+@views function setup_polyft_single(uv, pjx, pjy; T=Float64)
   kx =  uv[1,:] * T(-pi / (180*3600000));
   ky =  uv[2,:] * T( pi / (180*3600000));
   # note: check definition sinc(x) = sin(pi*x)/(pi*x)
@@ -179,18 +177,24 @@ end
   npix = star.npix;
   T = eltype(x);
   indx = star.index_quads_visible
+  w = star.vis_weights[indx]  # soft visibility weights for visible pixels
+  xw = x[indx] .* w           # weighted pixel values
   cvis_model = poly_to_cvis(x, star);
   v2_model = cvis_to_v2(cvis_model, data.indx_v2);
   t3_model, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);
   chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
   chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
   chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);
+  # Gradient w.r.t. weighted pixels (xw), computed via polyft^T @ adjoint_signal
   g_v2 = real(transpose(star.polyft[data.indx_v2,:])*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2])));
   g_t3amp = real(transpose(star.polyft[data.indx_t3_1,:]) *(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_2,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_3,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
   g_t3phi = T(360/pi)*imag(transpose(star.polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
   gsum = g_v2 + g_t3amp + g_t3phi;
   flux = poly_to_flux(x, star);
-  g[indx] = (gsum .- dot(x[indx],gsum)*star.polyflux / flux ) / flux; # gradient correction to take into account the non-normalization
+  # Gradient w.r.t. x: chain rule through soft visibility weights
+  # gsum is ∂χ²/∂(xw), so ∂χ²/∂x = w .* ∂χ²/∂(xw) (after flux normalization)
+  g_normalized = (gsum .- dot(xw, gsum) * star.polyflux / flux) / flux;
+  g[indx] = w .* g_normalized;
   if verbose == true
     println("V2: ", chi2_v2/data.nv2, "\tT3A: ", chi2_t3amp/data.nt3amp, "\tT3P: ", chi2_t3phi/data.nt3phi,"\tFlux: ", flux)
   end

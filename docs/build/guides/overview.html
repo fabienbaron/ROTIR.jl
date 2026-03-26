@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Overview · ROTIR</title><meta name="title" content="Overview · ROTIR"/><meta property="og:title" content="Overview · ROTIR"/><meta property="twitter:title" content="Overview · ROTIR"/><meta name="description" content="Documentation for ROTIR."/><meta property="og:description" content="Documentation for ROTIR."/><meta property="twitter:description" content="Documentation for ROTIR."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../index.html">ROTIR</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../index.html">Home</a></li><li><a class="tocitem" href="../install.html">Installation</a></li><li><span class="tocitem">Guides</span><ul><li class="is-active"><a class="tocitem" href="overview.html">Overview</a><ul class="internal"><li><a class="tocitem" href="#Concepts"><span>Concepts</span></a></li><li><a class="tocitem" href="#Minimal-workflow"><span>Minimal workflow</span></a></li><li><a class="tocitem" href="#Data-flow-diagram"><span>Data flow diagram</span></a></li></ul></li><li><a class="tocitem" href="tessellation.html">Tessellation</a></li><li><a class="tocitem" href="surfaces.html">Surface Types</a></li><li><a class="tocitem" href="reconstruction.html">Image Reconstruction</a></li><li><a class="tocitem" href="multires.html">Multi-resolution</a></li><li><a class="tocitem" href="plotting.html">Plotting</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../api/tessellation.html">Tessellation</a></li><li><a class="tocitem" href="../api/geometry.html">Geometry &amp; Surfaces</a></li><li><a class="tocitem" href="../api/chi2.html">Chi-squared &amp; Imaging</a></li><li><a class="tocitem" href="../api/fused_polyft.html">Fused Polyft</a></li><li><a class="tocitem" href="../api/shape_gradient.html">Shape Gradients</a></li><li><a class="tocitem" href="../api/orbits.html">Orbits</a></li><li><a class="tocitem" href="../api/plotting.html">Plotting</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Guides</a></li><li class="is-active"><a href="overview.html">Overview</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href="overview.html">Overview</a></li></ul></nav><div class="docs-right"><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Overview"><a class="docs-heading-anchor" href="#Overview">Overview</a><a id="Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Overview" title="Permalink"></a></h1><p>ROTIR reconstructs temperature maps on the surface of stars using optical interferometry data. This page explains the core concepts and the typical workflow.</p><h2 id="Concepts"><a class="docs-heading-anchor" href="#Concepts">Concepts</a><a id="Concepts-1"></a><a class="docs-heading-anchor-permalink" href="#Concepts" title="Permalink"></a></h2><p><strong>Tessellation.</strong> The stellar surface is divided into pixels (quadrilateral patches) using either a HEALPix scheme or a longitude/latitude grid. Each pixel has 4 corner vertices and a center, stored in both Cartesian and spherical coordinates on a unit sphere.</p><p><strong>Surface geometry.</strong> The unit-sphere tessellation is scaled to the physical stellar shape: a sphere, triaxial ellipsoid, rapid rotator (centrifugally distorted), or Roche-lobe-filling star in a binary. The geometry also determines gravity darkening via the von Zeipel law.</p><p><strong>Rotation and projection.</strong> For each observing epoch, the star is rotated according to its spin period, inclination, and position angle, then projected onto the observer&#39;s sky plane. Pixels facing away from the observer are masked (with a smooth sigmoid transition for gradient-based optimization).</p><p><strong>Polygon Fourier transform.</strong> Each projected pixel is a quadrilateral. Its Fourier transform contribution at each UV frequency is computed analytically using the polygon FT formula (edge-based sinc integrals). The total complex visibility is the flux-weighted sum over all visible pixels.</p><p><strong>Reconstruction.</strong> The temperature map is optimized to minimize the chi-squared between model and observed interferometric quantities (V², closure phase, triple amplitude), subject to regularization. ROTIR uses the VMLMB quasi-Newton optimizer with analytical gradients.</p><h2 id="Minimal-workflow"><a class="docs-heading-anchor" href="#Minimal-workflow">Minimal workflow</a><a id="Minimal-workflow-1"></a><a class="docs-heading-anchor-permalink" href="#Minimal-workflow" title="Permalink"></a></h2><pre><code class="language-julia hljs">using ROTIR
+
+# 1. Load multi-epoch OIFITS data
+oifitsfiles = [&quot;epoch1.oifits&quot;, &quot;epoch2.oifits&quot;, &quot;epoch3.oifits&quot;]
+data_all = readoifits_multiepochs(oifitsfiles)
+data = data_all[1, :]                            # first wavelength bin, all epochs
+tepochs = [d.mean_mjd for d in data]
+tepochs = tepochs .- tepochs[1]                  # relative MJDs
+
+# 2. Create tessellation
+n = 3                                            # HEALPix level (npix = 768)
+tessels = tessellation_healpix(n)
+
+# 3. Define stellar parameters
+star_params = (
+    surface_type    = 2,        # 0=sphere, 1=ellipsoid, 2=rapid rotator, 3=Roche
+    rpole           = 1.37,     # polar radius (mas)
+    tpole           = 4800.0,   # polar temperature (K)
+    ldtype          = 3,        # limb darkening: 1=linear, 2=quadratic, 3=Hestroffer
+    ld1             = 0.23,     # first LD coefficient
+    ld2             = 0.0,      # second LD coefficient
+    inclination     = 78.0,     # degrees
+    position_angle  = 24.0,     # degrees
+    rotation_period = 54.8,     # days
+    beta            = 0.08,     # von Zeipel exponent
+    frac_escapevel  = 0.9,      # fractional rotational velocity (rapid rotator)
+    B_rot           = 0.0,      # differential rotation coefficient
+)
+
+# 4. Build geometry for all epochs
+stars = create_star_multiepochs(tessels, star_params, tepochs)
+
+# 5. Compute starting temperature map (von Zeipel)
+tmap_start = parametric_temperature_map(star_params, stars[1])
+
+# 6. Set up the visibility matrix
+setup_oi!(data, stars)
+
+# 7. Set up regularization
+regularizers = [[&quot;tv2&quot;, 1e-5, tv_neighbours_healpix(n), 1:length(tmap_start)]]
+
+# 8. Reconstruct
+tmap = image_reconstruct_oi(tmap_start, data, stars;
+                             maxiter=500, regularizers=regularizers, verbose=true)
+
+# 9. Plot
+plot2d_allepochs(tmap, stars)
+plot_mollweide(tmap, stars[1])</code></pre><h2 id="Data-flow-diagram"><a class="docs-heading-anchor" href="#Data-flow-diagram">Data flow diagram</a><a id="Data-flow-diagram-1"></a><a class="docs-heading-anchor-permalink" href="#Data-flow-diagram" title="Permalink"></a></h2><pre><code class="nohighlight hljs">OIFITS files
+    |
+    v
+readoifits_multiepochs()  --&gt;  Vector{OIdata}  (one per epoch)
+    |
+    v
+tessellation_healpix(n)   --&gt;  tessellation     (unit sphere grid)
+    |
+    v
+create_star_multiepochs() --&gt;  Vector{stellar_geometry}
+    |                           (rotated, projected, visibility-masked)
+    v
+setup_oi!()               --&gt;  polyflux, polyft matrices stored in stars
+    |
+    v
+image_reconstruct_oi()    --&gt;  temperature map (Vector, length npix)
+    |
+    v
+plot2d / plot_mollweide   --&gt;  visualization</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../install.html">« Installation</a><a class="docs-footer-nextpage" href="tessellation.html">Tessellation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 26 March 2026 19:46">Thursday 26 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -17,6 +17,8 @@ mutable struct stellar_geometry{T} # typically one per epoch, rotation and proje
   projx::Array{T,2}
   projy::Array{T,2}
   ldmap::Array{T,1}   # Limb-darkening map
+  vis_weights::Array{T,1}  # Soft visibility weights (sigmoid of normals_z), length npix
+  sig_args::Array{T,1}     # Sigmoid arguments (κ * normals_z), for gradient computation
   center_offsets::Array{T,1} # Center of mass within star
   polyflux::Array{T,1}
   polyft::Matrix{Complex{T}}
@@ -175,35 +177,40 @@ function compute_ldmap(μ,star_params; T=Float64)
 end
 
 # Generate geometry and ld map from tesselation and stellar parameters
-@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float64)
+@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float64, κ=T(50))
   npix = tessels.npix;
-  # Compute radii 
+  # Compute radii
   r, xyz = compute_radii(tessels, star_params, t);
-  
-  # Compute rotation
-  xyz = rotate_star(xyz, star_params, t); 
 
-  # Determine visible pixels based on whether their normals point toward us (z>0)
+  # Compute rotation
+  xyz = rotate_star(xyz, star_params, t);
+
+  # Determine normals via cross product of quad diagonals
   vecAC = xyz[:, 3, :]-xyz[:, 1, :];
   vecBD = xyz[:, 4, :]-xyz[:, 2, :];
-  normals_tmp = [ vecAC[:,2].*vecBD[:,3] - vecAC[:,3].*vecBD[:,2] vecAC[:,3].*vecBD[:,1] - vecAC[:,1].*vecBD[:,3] vecAC[:,1].*vecBD[:,2] - vecAC[:,2].*vecBD[:,1]];  
+  normals_tmp = [ vecAC[:,2].*vecBD[:,3] - vecAC[:,3].*vecBD[:,2] vecAC[:,3].*vecBD[:,1] - vecAC[:,1].*vecBD[:,3] vecAC[:,1].*vecBD[:,2] - vecAC[:,2].*vecBD[:,1]];
   normals = normals_tmp./sqrt.(sum(abs2, normals_tmp, dims=2))
-  index_quads_visible = findall(normals[:,3].>0);
+
+  # Soft visibility: sigmoid weights replace hard mask
+  vis_weights, sig_args = soft_visibility(normals[:,3], κ=κ)
+
+  # Hard index kept for backward compat (pixels with significant visibility)
+  vis_threshold = T(1e-4)
+  index_quads_visible = findall(vis_weights .> vis_threshold);
   nquads_visible = length(index_quads_visible);
-  # projx = vertices_xyz[:, 1:4, 1]; 
-  # projy = vertices_xyz[:, 1:4, 2];
-  # μ = normals[:,3].*max.(normals[:,3], 0.)
-  # 2D the projection onto the (x,y) observing plane
-  projx = xyz[index_quads_visible, 1:4, 1];
-  projy = xyz[index_quads_visible, 1:4, 2];
-  # Limb-darkening map
+
+  # Project ALL pixels onto the (x,y) observing plane (needed for soft visibility gradients)
+  projx = xyz[:, 1:4, 1];
+  projy = xyz[:, 1:4, 2];
+
+  # Limb-darkening map (uses abs(μ) for all pixels)
   μ = abs.(normals[:,3].*max.(normals[:,3], 0))
   ldmap = compute_ldmap(μ,star_params)
   spherical = copy(tessels.unit_spherical);
   spherical[:,:,1] = r
   # Single star
   center = T.([0.0,0.0,0.0]);
-  return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, center, T[], zeros(Complex{T}, 0, 0), t);
+  return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible, nquads_visible, projx, projy, ldmap, vis_weights, sig_args, center, T[], zeros(Complex{T}, 0, 0), t);
 end
 
 function create_binary(star1::tessellation, star2::tessellation, binary_params::binaryparameters, t)
