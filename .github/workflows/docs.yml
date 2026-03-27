@@ -18,6 +18,7 @@ jobs:
             ~/.julia/packages
             ~/.julia/compiled
             ~/.julia/registries
+            ~/.julia/conda
           key: docs-julia-${{ hashFiles('docs/Project.toml', 'Project.toml') }}
           restore-keys: docs-julia-
       - name: Install dependencies
