@@ -23,6 +23,7 @@ makedocs(;
             "Tessellation"            => "guides/tessellation.md",
             "Surface Types"           => "guides/surfaces.md",
             "Image Reconstruction"    => "guides/reconstruction.md",
+            "Single-Epoch Imaging"    => "guides/single_epoch.md",
             "Multi-resolution"        => "guides/multires.md",
             "Plotting"                => "guides/plotting.md",
         ],
