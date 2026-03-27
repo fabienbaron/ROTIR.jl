@@ -222,7 +222,7 @@ end
   vis_weights, sig_args = soft_visibility(normals[:,3], κ=κ)
 
   # Hard index kept for backward compat (pixels with significant visibility)
-  vis_threshold = T(1e-4)
+  vis_threshold = T(0.01)
   index_quads_visible = findall(vis_weights .> vis_threshold);
   nquads_visible = length(index_quads_visible);
 

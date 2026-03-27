@@ -1,32 +1,52 @@
 using ROTIR
 using DelimitedFiles, PyPlot, PyCall
+import Statistics: mean
 
 # =============================================================================
 # 1. LOAD SPICA OIFITS DATA
 # =============================================================================
-# The merged OIFITS file contains 11 epochs from 2007, 2012, and 2015 campaigns
+# The merged OIFITS file contains epochs from 2007, 2012, and 2015 campaigns
 oifitsfile = "./data/2007_2012_2015.Spica.oifits"
 data_all = readoifits(oifitsfile)[1,1]
 
-# Known observation MJDs (from spica_data_sort.jl)
-observed_mjds = [54221.0, 54228.0, 54232.0,           # 2007 May (CHARA/MIRC 3-tel)
-                 56087.0, 56088.0, 56089.0, 56090.0,   # 2012 Jun (CHARA/MIRC 5-tel)
-                 57128.0, 57129.0, 57130.0, 57131.0]    # 2015 Apr (CHARA/MIRC 5+6-tel)
-nepochs = length(observed_mjds)
+# Automatically identify epochs from MJD gaps in the data
+all_v2_mjds = sort(data_all.v2_mjd)
+gap_threshold = 0.5  # days — observations separated by > half a day are different epochs
+jumps = findall(diff(all_v2_mjds) .> gap_threshold)
+epoch_starts = all_v2_mjds[[1; jumps .+ 1]]
+epoch_ends   = all_v2_mjds[[jumps; length(all_v2_mjds)]]
+nepochs = length(epoch_starts)
 
-# Split into per-epoch data using MJD filtering
+# Split into per-epoch data
 data = Vector{typeof(data_all)}(undef, nepochs)
+epoch_mean_mjd = zeros(nepochs)
 for i in 1:nepochs
-    idx = set_data_filter(data_all; mjd_range=[observed_mjds[i]-0.5, observed_mjds[i]+0.5])
+    idx = set_data_filter(data_all; mjd_range=[epoch_starts[i] - 0.01, epoch_ends[i] + 0.01])
     data[i] = filter_data(data_all, idx)
-    println("Epoch $i: MJD=$(observed_mjds[i]), nV2=$(data[i].nv2), nT3=$(data[i].nt3phi)")
+    epoch_mean_mjd[i] = mean(data[i].v2_mjd)
+    println("Epoch $i: MJD=$(round(epoch_mean_mjd[i], digits=4)), nV2=$(data[i].nv2), nT3=$(data[i].nt3phi)")
 end
 
 # =============================================================================
 # 2. SPICA PARAMETERS
 # =============================================================================
+# Orbital elements from Aufdenberg+2015
+P_orb    = 4.0145     # days
+a_orb    = 1.54       # mas (semi-major axis of relative orbit)
+e_orb    = 0.123
+T0_orb   = 2454189.40 # JD (time of periastron)
+q_binary = 0.6188     # M2/M1
+i_orb    = 116.0      # degrees (>90 = retrograde)
+Omega    = 309.938     # degrees (longitude of ascending node)
+omega    = 255.0       # degrees (argument of periapsis, relative orbit)
+
+# Stellar orientation (spin aligned with orbital angular momentum, tidally locked)
+inc_star = 180.0 - i_orb   # prograde equivalent viewing angle = 64°
+pa_star  = Omega - 180.0    # position angle of spin axis on sky = 129.938°
+
 # Star parameters as NamedTuples (for create_star / parametric_temperature_map)
 # Angular diameters from Aufdenberg+2015: primary ~0.93 mas, secondary ~0.57 mas
+# Inclination/PA don't affect sphere shape but are used for graticules and decorations
 star1_params = (
     surface_type    = 0,           # Sphere
     radius          = 0.93/2,      # mas (angular radius)
@@ -34,9 +54,9 @@ star1_params = (
     ldtype          = 3,           # Hestroffer power law
     ld1             = 0.15,
     ld2             = 0.0,
-    inclination     = 0.0,         # irrelevant for sphere
-    position_angle  = 0.0,
-    rotation_period = 100.0        # arbitrary (sphere has no rotation effect)
+    inclination     = inc_star,
+    position_angle  = pa_star,
+    rotation_period = P_orb        # tidally locked
 )
 
 star2_params = (
@@ -46,28 +66,27 @@ star2_params = (
     ldtype          = 3,
     ld1             = 0.15,
     ld2             = 0.0,
-    inclination     = 0.0,
-    position_angle  = 0.0,
-    rotation_period = 100.0
+    inclination     = inc_star,
+    position_angle  = pa_star,
+    rotation_period = P_orb
 )
 
 # Binary orbital parameters (starparameters struct required by binaryparameters)
 # Fields: rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta_vZ, B_rot, inclination, position_angle, rotation_offset, rotation_period
-star1p = starparameters(0.93/2, 25300.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, 0.0, 0.0, 0.0, 100.0)
-star2p = starparameters(0.57/2, 20585.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, 0.0, 0.0, 0.0, 100.0)
+star1p = starparameters(0.93/2, 25300.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, inc_star, pa_star, 0.0, P_orb)
+star2p = starparameters(0.57/2, 20585.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, inc_star, pa_star, 0.0, P_orb)
 
-# Orbital elements from Aufdenberg+2015 / old demos
 # omega = argument of periapsis of the *relative orbit* (= secondary's, astrometric convention)
 bparams = binaryparameters(star1p, star2p,
     77.0,          # d: distance (pc)
-    116.0,         # i: orbital inclination (degrees; >90 = retrograde)
-    309.938,       # Omega: longitude of ascending node (degrees)
-    255.0,         # omega: argument of periapsis (degrees)
-    4.0145,        # P: orbital period (days)
-    1.54,          # a: semi-major axis (mas)
-    0.123,         # e: eccentricity
-    2454189.40,    # T0: time of periastron (JD)
-    0.6188,        # q: mass ratio M2/M1
+    i_orb,         # i: orbital inclination (degrees; >90 = retrograde)
+    Omega,         # Omega: longitude of ascending node (degrees)
+    omega,         # omega: argument of periapsis (degrees)
+    P_orb,         # P: orbital period (days)
+    a_orb,         # a: semi-major axis (mas)
+    e_orb,         # e: eccentricity
+    T0_orb,        # T0: time of periastron (JD)
+    q_binary,      # q: mass ratio M2/M1
     [1.0, 1.0],    # fillout factor (unused for spheres)
     0.0,           # dP: period change
     0.0            # domega: apsidal motion
@@ -104,8 +123,8 @@ offsets = zeros(nepochs, 2)
 model_obs = Vector{NamedTuple}(undef, nepochs)
 
 for i in 1:nepochs
-    # Convert MJD to JD for orbital computation
-    tepoch_jd = observed_mjds[i] + 2400000.5
+    # Use precise mean MJD from the data (not the rounded filter value)
+    tepoch_jd = epoch_mean_mjd[i] + 2400000.5
 
     # Get secondary offset in ROTIR coordinates (West, North) in mas
     offset_x, offset_y = orbit_to_rotir_offset(bparams, tepoch_jd)
@@ -123,17 +142,29 @@ for i in 1:nepochs
     global total_chi2 += chi2_epoch
 
     sep = sqrt(offset_x^2 + offset_y^2)
-    println("Epoch $i (MJD $(observed_mjds[i])): sep=$(round(sep,digits=3)) mas, chi2r=$(round(chi2_epoch/(data[i].nv2+data[i].nt3amp+data[i].nt3phi), digits=2))")
+    println("Epoch $i (MJD $(round(epoch_mean_mjd[i], digits=4))): sep=$(round(sep,digits=3)) mas, chi2r=$(round(chi2_epoch/(data[i].nv2+data[i].nt3amp+data[i].nt3phi), digits=2))")
 end
 ndata_total = sum(d.nv2 + d.nt3amp + d.nt3phi for d in data)
 println("\nTotal chi2 = $(round(total_chi2, digits=1)), reduced = $(round(total_chi2/ndata_total, digits=2))")
 
 # =============================================================================
-# 5. PLOT: BINARY IMAGE (first epoch)
+# 5. PLOT: BINARY IMAGE (epoch 6 = widest separation)
 # =============================================================================
-tepoch1_jd = observed_mjds[1] + 2400000.5
-plot2d_binary(tmap1, tmap2, stars1[1], stars2[1], bparams, tepoch1_jd,
-    figtitle="Spica Binary (spheres) — Epoch 1")
+i_epoch = 6
+tepoch_jd = epoch_mean_mjd[i_epoch] + 2400000.5
+plot2d_binary(tmap1, tmap2, stars1[i_epoch], stars2[i_epoch], bparams, tepoch_jd,
+    intensity=true, graticules=true, compass=true,
+    inclination1=inc_star, position_angle1=pa_star,
+    inclination2=inc_star, position_angle2=pa_star,
+    figtitle="Spica Binary (spheres) — Epoch $i_epoch")
+
+# Debug: plot each component separately
+plot2d(tmap1, stars1[i_epoch], intensity=true, graticules=true, rotation_axis=true, rotation_arrow=true, compass=true,
+    inclination=inc_star, position_angle=pa_star,
+    figtitle="Primary (sphere)")
+plot2d(tmap2, stars2[i_epoch], intensity=true, graticules=true, rotation_axis=true, rotation_arrow=true, compass=true,
+    inclination=inc_star, position_angle=pa_star,
+    figtitle="Secondary (sphere)")
 
 # =============================================================================
 # 6. PLOT: ORBITAL DIAGRAM
@@ -161,7 +192,7 @@ ax1.add_patch(c_pri)
 
 # Mark observed epochs with secondary disk at correct scale
 for i in 1:nepochs
-    t_jd = observed_mjds[i] + 2400000.5
+    t_jd = epoch_mean_mjd[i] + 2400000.5
     x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, t_jd)
     east = y2 - y1; north = x2 - x1
     c_sec = patches_mpl.Circle((east, north), rsec, facecolor="lightskyblue",
@@ -175,7 +206,7 @@ ax1.set_xlabel("East offset (mas)")
 ax1.set_ylabel("North offset (mas)")
 ax1.set_title("Spica Binary Orbit (secondary relative to primary)")
 ax1.grid(true, alpha=0.3)
-tight_layout()
+
 
 # =============================================================================
 # 7. PLOT: RADIAL VELOCITIES
@@ -191,6 +222,5 @@ plot_rv(bparams, K1=123.9, K2=198.8, γ=0.0,
 # =============================================================================
 for i in 1:nepochs
     plot_residuals(data[i], model_obs[i], figsize=(12, 8))
-    suptitle("Epoch $i — MJD $(observed_mjds[i])", fontsize=14)
-    tight_layout(rect=[0, 0, 1, 0.96])
+    suptitle("Epoch $i — MJD $(round(epoch_mean_mjd[i], digits=4))", fontsize=14)
 end
