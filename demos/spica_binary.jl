@@ -187,36 +187,4 @@ tight_layout()
 # =============================================================================
 # 7. PLOT: V2 AND T3PHI MODEL VS DATA
 # =============================================================================
-fig3, (ax3a, ax3b) = subplots(1, 2, figsize=(14, 5))
-
-for i in 1:nepochs
-    tepoch_jd = observed_mjds[i] + 2400000.5
-    offset_x, offset_y = orbit_to_rotir_offset(bparams, tepoch_jd)
-    phase = binary_phase_shift(data[i].uv, offset_x, offset_y)
-    cvis = binary_cvis(tmap1, stars1[i], tmap2, stars2[i], phase)
-
-    v2_model = cvis_to_v2(cvis, data[i].indx_v2)
-    _, _, t3phi_model = cvis_to_t3(cvis, data[i].indx_t3_1, data[i].indx_t3_2, data[i].indx_t3_3)
-
-    ax3a.scatter(data[i].v2, v2_model, s=5, alpha=0.5)
-    ax3b.scatter(data[i].t3phi, t3phi_model, s=5, alpha=0.5)
-end
-
-# V2 plot
-ax3a.plot([0, 1], [0, 1], "k--", alpha=0.3)
-ax3a.set_xlabel("V2 data")
-ax3a.set_ylabel("V2 model")
-ax3a.set_title("Squared Visibilities")
-ax3a.set_xlim(0, 1)
-ax3a.set_ylim(0, 1)
-
-# T3PHI plot
-ax3b.plot([-180, 180], [-180, 180], "k--", alpha=0.3)
-ax3b.set_xlabel("T3PHI data (deg)")
-ax3b.set_ylabel("T3PHI model (deg)")
-ax3b.set_title("Closure Phases")
-ax3b.set_xlim(-180, 180)
-ax3b.set_ylim(-180, 180)
-
-tight_layout()
-println("\nDone.")
+# Use OITOOLS plot_vs_model() to do that -- if does not exist, need to implement in OITOOLS 

@@ -81,10 +81,10 @@ export projected_vertices_and_derivs, shape_chi2_fg!, joint_reconstruct_oi
 
 # Plotting
 export plot2d, plot2d_wireframe, plot2d_allepochs
-export plot3d, plot3d_vertices
+export plot3d
 export plot_mollweide
-export draw_compass, draw_rotation_axis
-export plot_rv
+export draw_compass, draw_rotation_axis, draw_rotation_arrow, draw_graticules
+export plot_rv, plot2d_binary
 export sometimes_visible, never_visible, invisible_neighbours, with_invisible_neighbours, without_invisible_neighbours
 
 # Utilities
