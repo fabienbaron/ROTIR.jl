@@ -103,9 +103,9 @@ plot_mollweide(tmap, stars[1])
 |:------:|:-------------:|
 | ![Sphere](docs/src/assets/surface_sphere.png) | ![Rapid rotator](docs/src/assets/surface_rapid_rotator.png) |
 
-| Annotated plot | Mollweide projection |
+| Roche lobe | Mollweide projection |
 |:--------------:|:--------------------:|
-| ![Annotated](docs/src/assets/plot_decorated.png) | ![Mollweide](docs/src/assets/plot_mollweide.png) |
+| ![Roche lobe](docs/src/assets/surface_roche.png) | ![Mollweide](docs/src/assets/plot_mollweide.png) |
 
 See the [full documentation](https://fabienbaron.github.io/ROTIR.jl/dev/guides/surfaces/) for all surface types and plotting options.
 
