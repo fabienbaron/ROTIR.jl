@@ -52,19 +52,36 @@ function draw_compass(ax, axis_max; size_frac=0.12, fontsize=12, color="white")
 end
 
 """
-    draw_rotation_axis(ax, star; arrow_frac=0.3, color="cyan", linewidth=1.5)
+    draw_rotation_axis(ax, star; inclination=NaN, position_angle=NaN,
+        arrow_frac=0.3, color="cyan", linewidth=1.5, offset_west=0.0, offset_north=0.0)
 
 Draw the projected stellar rotation axis on a 2D sky-plane plot.
 Shows the pole-to-pole line extended beyond the limb, with an arrow at the north pole.
 Parts behind the star (z < 0) are drawn dashed.
+
+When `inclination` (degrees from LOS) and `position_angle` (degrees, N through E) are given,
+the axis is computed analytically. Otherwise it is estimated from the tessellation vertices.
 """
-function draw_rotation_axis(ax, star; arrow_frac=0.3, color="cyan", linewidth=1.5)
-    north = star.vertices_xyz[1, 1, 1:3]
-    south = star.vertices_xyz[end, 3, 1:3]
+function draw_rotation_axis(ax, star; arrow_frac=0.3, color="cyan", linewidth=1.5,
+    offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN)
+    if !isnan(inclination) && !isnan(position_angle)
+        # Analytical: spin axis direction in ROTIR projected frame (West, North, toward_obs)
+        inc_rad = inclination * π / 180
+        PA_rad  = position_angle * π / 180
+        spin = [-sin(PA_rad) * sin(inc_rad), cos(PA_rad) * sin(inc_rad), cos(inc_rad)]
+        R = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))
+        north = R .* spin
+        south = -R .* spin
+    else
+        # Fallback: average first/last ring pixel centers (vertex 5 = center)
+        np = star.npix
+        north = vec(mean(star.vertices_xyz[1:min(4,np), 5, :], dims=1))
+        south = vec(mean(star.vertices_xyz[max(1,np-3):np, 5, :], dims=1))
+    end
     delta = north .- south
     north_tip = north .+ arrow_frac .* delta
     south_tip = south .- arrow_frac .* delta
-    # Project to 2D sky: East = -xyz[1] (proj_west), North = xyz[2] (proj_north)
+    # Project to 2D sky: East = -(xyz[1]+offset_west), North = xyz[2]+offset_north
     points = hcat(south_tip, south, north, north_tip)  # 3×4
     for j in 1:3
         p1 = points[:, j]
@@ -72,11 +89,14 @@ function draw_rotation_axis(ax, star; arrow_frac=0.3, color="cyan", linewidth=1.
         z_avg = (p1[3] + p2[3]) / 2
         ls = z_avg > 0 ? "-" : "--"
         zord = z_avg > 0 ? 11 : 1
-        ax.plot([-p1[1], -p2[1]], [p1[2], p2[2]], ls, color=color, linewidth=linewidth, zorder=zord)
+        ax.plot([-(p1[1]+offset_west), -(p2[1]+offset_west)],
+                [p1[2]+offset_north, p2[2]+offset_north],
+                ls, color=color, linewidth=linewidth, zorder=zord)
     end
     # Arrow head at north tip
     zord_tip = north_tip[3] > 0 ? 11 : 1
-    ax.annotate("", xy=(-north_tip[1], north_tip[2]), xytext=(-north[1], north[2]),
+    ax.annotate("", xy=(-(north_tip[1]+offset_west), north_tip[2]+offset_north),
+        xytext=(-(north[1]+offset_west), north[2]+offset_north),
         arrowprops=Dict("arrowstyle" => "-|>", "color" => color, "lw" => linewidth),
         zorder=zord_tip)
 end
@@ -90,7 +110,7 @@ A 270° ellipse centered along the pole, solid in front (z>0), dashed behind.
 Prograde rotation = counter-clockwise around north pole.
 """
 function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.15, offset_frac=0.4,
-    color="cyan", linewidth=1.5, npoints=200)
+    color="cyan", linewidth=1.5, npoints=200, offset_west=0.0, offset_north=0.0)
     north = star.vertices_xyz[1, 1, 1:3]
     south = star.vertices_xyz[end, 3, 1:3]
     axis = north .- south
@@ -105,7 +125,7 @@ function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.15, offset_frac=0
     # 270° arc (prograde = CCW around north pole in 3D)
     θ = collect(range(0, 3π/2, length=npoints))
     pts = hcat([center .+ r .* (cos(t) .* e1 .+ sin(t) .* e2) for t in θ]...)
-    x2d = -pts[1, :]; y2d = pts[2, :]; z = pts[3, :]
+    x2d = -(pts[1, :] .+ offset_west); y2d = pts[2, :] .+ offset_north; z = pts[3, :]
     # Solid in front, dashed behind, using NaN to break the line
     front = z .> 0
     xf = copy(x2d); xf[.!front] .= NaN; yf = copy(y2d); yf[.!front] .= NaN
@@ -126,7 +146,8 @@ Draw latitude/longitude lines on the star surface by finding contour crossings
 in the tessellation. Works for any surface type (sphere, ellipsoid, Roche lobe).
 Uses the body-frame spherical coordinates from `vertices_spherical`.
 """
-function draw_graticules(ax, star; nlat=5, nlon=8, color="gray", linewidth=0.5, alpha=0.5, front_only=true)
+function draw_graticules(ax, star; nlat=5, nlon=8, color="gray", linewidth=0.5, alpha=0.5, front_only=true,
+    offset_west=0.0, offset_north=0.0)
     visible = star.index_quads_visible
     quad_edges = ((1,2), (2,3), (3,4), (4,1))
     function _contour_segments(field_idx, targets; periodic=false)
@@ -153,7 +174,8 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="gray", linewidth=0.5, 
                     z_avg = (p1[3] + p2[3]) / 2
                     if !front_only || z_avg > 0
                         zord = z_avg > 0 ? 10 : 1
-                        ax.plot([-p1[1], -p2[1]], [p1[2], p2[2]], "-",
+                        ax.plot([-(p1[1]+offset_west), -(p2[1]+offset_west)],
+                                [p1[2]+offset_north, p2[2]+offset_north], "-",
                             color=color, linewidth=linewidth, alpha=alpha, zorder=zord)
                     end
                 end
@@ -222,7 +244,8 @@ end
 
 function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5,
     colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="black", flipx=false,
-    compass=true, rotation_axis=false, rotation_arrow=false, graticules=false)
+    compass=true, rotation_axis=false, rotation_arrow=false, graticules=false,
+    inclination=NaN, position_angle=NaN)
   # Plot temperature map onto the projected 2D image plane (= observer view)
   # Convention: East left, North up (astronomical standard)
   set_oiplot_defaults()
@@ -237,7 +260,7 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   ax = gca();
   title(figtitle)
   ax.set_facecolor(facecolor)
-  axis("equal")
+  ax.set_aspect("equal", adjustable="box")
   axis_max = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))+pad;
   if flipx==false
     ax.set_xlim([axis_max,-axis_max]);
@@ -259,9 +282,10 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
   compass_color = background == "black" ? "white" : "black"
   if compass; draw_compass(ax, axis_max, color=compass_color); end
-  if rotation_axis; draw_rotation_axis(ax, star); end
+  if rotation_axis; draw_rotation_axis(ax, star, inclination=inclination, position_angle=position_angle); end
   if rotation_arrow; draw_rotation_arrow(ax, star); end
-  if graticules; draw_graticules(ax, star); end
+  grat_color = background == "black" ? "white" : "black"
+  if graticules; draw_graticules(ax, star, color=grat_color, linewidth=0.8, alpha=0.4); end
   cmap=ColorMap(colormap)
   projmap ./= maximum(projmap)  # TODO: this is for intensity -- we will have to rewrite it properly for temperature
   norm = matplotlib.colors.Normalize(vmin=minimum(projmap), vmax=maximum(projmap))
@@ -273,13 +297,15 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
 """
     plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch; ...)
 
-Plot a binary system on the 2D sky plane with correct occlusion.
+Plot a binary system on the 2D sky plane with correct occlusion and orbital offset.
+`tepoch` is the observation time in JD; the secondary's offset relative to the primary
+is computed from the orbital elements in `bparams`.
 The farther star (larger z = receding) is drawn behind the nearer one.
-Stars must have been created with `create_binary` (projections include orbital offsets).
 """
 function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
     plotmesh=false, colormap="gist_heat", pad=1.0, background="black",
-    compass=true, rotation_axis=false, rotation_arrow=false, graticules=false, figtitle="")
+    compass=true, rotation_axis=false, rotation_arrow=false, graticules=false, figtitle="",
+    inclination1=NaN, position_angle1=NaN, inclination2=NaN, position_angle2=NaN)
   set_oiplot_defaults()
   patches = pyimport("matplotlib.patches")
   axdiv = pyimport("mpl_toolkits.axes_grid1.axes_divider")
@@ -289,14 +315,21 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   ax = gca()
   title(figtitle)
   ax.set_facecolor(facecolor)
-  axis("equal")
-  # Axis limits encompassing both stars
-  all_x = vcat(vec(star1.vertices_xyz[:,:,1]), vec(star2.vertices_xyz[:,:,1]))
-  all_y = vcat(vec(star1.vertices_xyz[:,:,2]), vec(star2.vertices_xyz[:,:,2]))
-  axis_max = max(maximum(abs.(all_x)), maximum(abs.(all_y))) + pad
+  ax.set_aspect("equal", adjustable="box")
+  # Compute orbital offset of secondary relative to primary (West, North) in mas
+  offset_west, offset_north = orbit_to_rotir_offset(bparams, tepoch)
+  # Axis limits encompassing both stars at their orbital positions
+  # Star 1 at origin, star 2 offset by (offset_west, offset_north)
+  # Plot coords: x = -proj_west (East left), y = proj_north (North up)
+  r1 = maximum(sqrt.(star1.vertices_xyz[:,:,1].^2 .+ star1.vertices_xyz[:,:,2].^2))
+  r2 = maximum(sqrt.(star2.vertices_xyz[:,:,1].^2 .+ star2.vertices_xyz[:,:,2].^2))
+  east_offset  = -offset_west  # East = -West
+  north_offset = offset_north
+  axis_max = max(r1, r2 + abs(east_offset), r2 + abs(north_offset),
+                 abs(east_offset) + r2, abs(north_offset) + r2) + pad
   ax.set_xlim([axis_max, -axis_max])
   ax.set_ylim([-axis_max, axis_max])
-  # Shared color normalization
+  # Shared color normalization across both stars
   projmap1 = tmap1[star1.index_quads_visible]
   projmap2 = tmap2[star2.index_quads_visible]
   tmin = min(minimum(projmap1), minimum(projmap2))
@@ -308,15 +341,17 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   _, _, z1, _, _, z2 = binary_orbit_abs(bparams, tepoch)
   zord1 = z1 > z2 ? 2 : 3
   zord2 = z1 > z2 ? 3 : 2
+  # Star 1 at origin
   for i=1:star1.nquads_visible
     ec = plotmesh ? "lightgrey" : colours1[i]
     p = patches.Polygon(hcat(-star1.proj_west[i,:], star1.proj_north[i,:]),
       closed=true, edgecolor=ec, facecolor=colours1[i], fill=true, rasterized=false, zorder=zord1)
     ax.add_patch(p)
   end
+  # Star 2 shifted by orbital offset
   for i=1:star2.nquads_visible
     ec = plotmesh ? "lightgrey" : colours2[i]
-    p = patches.Polygon(hcat(-star2.proj_west[i,:], star2.proj_north[i,:]),
+    p = patches.Polygon(hcat(-(star2.proj_west[i,:] .+ offset_west), star2.proj_north[i,:] .+ offset_north),
       closed=true, edgecolor=ec, facecolor=colours2[i], fill=true, rasterized=false, zorder=zord2)
     ax.add_patch(p)
   end
@@ -324,9 +359,21 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
   compass_color = background == "black" ? "white" : "black"
   if compass; draw_compass(ax, axis_max, color=compass_color); end
-  if rotation_axis; draw_rotation_axis(ax, star1); draw_rotation_axis(ax, star2); end
-  if rotation_arrow; draw_rotation_arrow(ax, star1); draw_rotation_arrow(ax, star2); end
-  if graticules; draw_graticules(ax, star1); draw_graticules(ax, star2); end
+  if rotation_axis
+    draw_rotation_axis(ax, star1, inclination=inclination1, position_angle=position_angle1)
+    draw_rotation_axis(ax, star2, offset_west=offset_west, offset_north=offset_north,
+        inclination=inclination2, position_angle=position_angle2)
+  end
+  if rotation_arrow
+    draw_rotation_arrow(ax, star1)
+    draw_rotation_arrow(ax, star2, offset_west=offset_west, offset_north=offset_north)
+  end
+  grat_color = background == "black" ? "white" : "black"
+  if graticules
+    draw_graticules(ax, star1, color=grat_color, linewidth=0.8, alpha=0.4)
+    draw_graticules(ax, star2, offset_west=offset_west, offset_north=offset_north,
+        color=grat_color, linewidth=0.8, alpha=0.4)
+  end
   # Colorbar
   cmap = ColorMap(colormap)
   norm_cb = matplotlib.colors.Normalize(vmin=tmin, vmax=tmax)

@@ -1,4 +1,4 @@
-using ROTIR
+using ROTIR, BenchmarkTools
 # LOAD DATA
 oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_And_prepped.oifits",
 "./data/2011Sep10.lam_And_prepped.oifits","./data/2011Sep14.lam_And_prepped.oifits",

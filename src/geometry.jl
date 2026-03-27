@@ -135,7 +135,12 @@ include("tessellation_latlong.jl");
 include("geometry_rochelobe.jl");
 include("geometry_rapidrotator.jl")
 include("geometry_ellipsoid.jl");
-function rot_vertex(angle_r1, angle_r2, angle_r3) # new rotational matrix
+# ZXZ Euler rotation matrix: R = R_z(-a1) * R_x(a2) * R_z(-a3)
+# For rotate_star (right multiply: xyz * R):
+#   angle_r1 = ψ (rotation phase), angle_r2 = inclination, angle_r3 = PA
+#   Spin axis = R[3,:] = [-sin(inc)*sin(PA), sin(inc)*cos(PA), cos(inc)]
+#   i.e. the projected pole is at position angle PA from North toward East.
+function rot_vertex(angle_r1, angle_r2, angle_r3)
   c1 = cos(angle_r1)
   s1 = sin(angle_r1)
   c2 = cos(angle_r2)
@@ -149,7 +154,7 @@ function rot_vertex(angle_r1, angle_r2, angle_r3) # new rotational matrix
 end
   
 
-function compute_radii(tessels::tessellation, star_params, t; T=Float64) 
+function compute_radii(tessels::tessellation, star_params, t; secondary=false, T=Float64)
   npix = tessels.npix
   xyz = [];
   r = [];
@@ -167,7 +172,8 @@ function compute_radii(tessels::tessellation, star_params, t; T=Float64)
   elseif star_params.surface_type == 3
     # Star params are actually binary parameters
     D = T(compute_separation(star_params, t))
-    r = update_roche_radii(tessels, star_params, D, use_fillout_factor = star_params.fillout_factor_primary>-1) 
+    ff = secondary ? star_params.fillout_factor_secondary : star_params.fillout_factor_primary
+    r = update_roche_radii(tessels, star_params, D, use_fillout_factor = ff>-1, secondary=secondary)
     xyz = r.*tessels.unit_xyz;
   end
   return r, xyz
@@ -175,8 +181,13 @@ end
 
 function rotate_star(xyz, star_params, t; T=Float64)
   # TODO: reimplement differential rotation for compatible surfaces (see old ROTIR)
+  # Right multiply: xyz * R where R = rot_vertex(ψ, inc, PA)
+  #   ψ  = rotation phase (spinning surface features)
+  #   inc = inclination (tilt spin axis from line of sight)
+  #   PA  = position angle (orient projected spin axis on sky, N through E)
+  # Spin axis direction: R[3,:] = [-sin(inc)*sin(PA), sin(inc)*cos(PA), cos(inc)]
   npix = size(xyz,1)
-  compound_rotation = rot_vertex( T(2pi)*t/star_params.rotation_period, star_params.inclination*T(pi/180.), star_params.position_angle*T(pi/180.));
+  compound_rotation = rot_vertex(T(2pi)*t/star_params.rotation_period, star_params.inclination*T(pi/180.), star_params.position_angle*T(pi/180.));
   return reshape(reshape(xyz,(npix*5,3))*compound_rotation, (npix,5,3));
 end
 
@@ -196,7 +207,7 @@ end
 @views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float64, κ=T(50))
   npix = tessels.npix;
   # Compute radii
-  r, xyz = compute_radii(tessels, star_params, t);
+  r, xyz = compute_radii(tessels, star_params, t; secondary=secondary);
 
   # Compute rotation
   xyz = rotate_star(xyz, star_params, t);

@@ -37,8 +37,10 @@ export oblate_const
 # Geometry: Roche lobe
 export update_roche_radii, get_surface_potential, update_roche_geom
 export compute_potential_primary, compute_potential_secondary, solve_radius
-export compute_dpotential_primary_L1, solve_R_L1, newton_raphson
-export radius_eggleton, radius_leahy
+export solve_R_L1, solve_R_L2, solve_R_L3, solve_lagrange_points
+export newton_raphson, brent_root
+export radius_eggleton, radius_leahy, rpole_to_fillout
+export roche_volume, roche_area, roche_equivalent_radius, romberg_integrate
 
 # Geometry: rapid rotators
 export temperature_map_vonZeipel_rapid_rotator, calc_grelmap_vZ

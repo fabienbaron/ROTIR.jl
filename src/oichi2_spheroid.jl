@@ -254,9 +254,9 @@ function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_w
   return f;
 end
 
-function parametric_temperature_map(parameters, star) # dispatches parametric 
+function parametric_temperature_map(parameters, star; secondary=false) # dispatches parametric
   if star.surface_type == 3
-    return temperature_map_vonZeipel_roche_single(parameters,star, star.t);
+    return temperature_map_vonZeipel_roche_single(parameters, star, star.t, secondary=secondary);
   elseif star.surface_type == 2
     return temperature_map_vonZeipel_rapid_rotator(parameters,star);
   elseif star.surface_type == 1

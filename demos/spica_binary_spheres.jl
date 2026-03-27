@@ -1,5 +1,5 @@
 using ROTIR
-using DelimitedFiles, PyPlot
+using DelimitedFiles, PyPlot, PyCall
 
 # =============================================================================
 # 1. LOAD SPICA OIFITS DATA
@@ -129,10 +129,18 @@ ndata_total = sum(d.nv2 + d.nt3amp + d.nt3phi for d in data)
 println("\nTotal chi2 = $(round(total_chi2, digits=1)), reduced = $(round(total_chi2/ndata_total, digits=2))")
 
 # =============================================================================
-# 5. PLOT: ORBITAL DIAGRAM
+# 5. PLOT: BINARY IMAGE (first epoch)
+# =============================================================================
+tepoch1_jd = observed_mjds[1] + 2400000.5
+plot2d_binary(tmap1, tmap2, stars1[1], stars2[1], bparams, tepoch1_jd,
+    figtitle="Spica Binary (spheres) — Epoch 1")
+
+# =============================================================================
+# 6. PLOT: ORBITAL DIAGRAM
 # =============================================================================
 fig1, ax1 = subplots(1, 1, figsize=(8, 8))
-ax1.set_aspect("equal")
+ax1.set_aspect("equal", adjustable="box")
+patches_mpl = pyimport("matplotlib.patches")
 
 # Full orbit curve
 tepochs_orbit = bparams.T0 .+ collect(range(0.0, stop=bparams.P, length=500))
@@ -145,15 +153,23 @@ for (j, t) in enumerate(tepochs_orbit)
 end
 ax1.plot(orbit_x, orbit_y, "b-", linewidth=1, alpha=0.5)
 
-# Mark observed epochs
+# Draw primary at origin (filled circle with correct angular radius)
+rpri = bparams.star1.rpole  # angular radius in mas
+rsec = bparams.star2.rpole
+c_pri = patches_mpl.Circle((0, 0), rpri, facecolor="gold", edgecolor="black", linewidth=0.5, zorder=5)
+ax1.add_patch(c_pri)
+
+# Mark observed epochs with secondary disk at correct scale
 for i in 1:nepochs
     t_jd = observed_mjds[i] + 2400000.5
     x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, t_jd)
-    ax1.plot(y2-y1, x2-x1, "ro", markersize=8)
-    ax1.annotate("$i", (y2-y1, x2-x1), textcoords="offset points", xytext=(5,5), fontsize=8)
+    east = y2 - y1; north = x2 - x1
+    c_sec = patches_mpl.Circle((east, north), rsec, facecolor="lightskyblue",
+        edgecolor="black", linewidth=0.5, zorder=4, alpha=0.8)
+    ax1.add_patch(c_sec)
+    ax1.annotate("$i", (east, north), textcoords="offset points", xytext=(5,5), fontsize=8)
 end
 
-ax1.plot(0, 0, "k*", markersize=15)  # Primary at origin
 ax1.invert_xaxis()  # East to the left (astronomical convention)
 ax1.set_xlabel("East offset (mas)")
 ax1.set_ylabel("North offset (mas)")
@@ -162,7 +178,7 @@ ax1.grid(true, alpha=0.3)
 tight_layout()
 
 # =============================================================================
-# 6. PLOT: RADIAL VELOCITIES
+# 7. PLOT: RADIAL VELOCITIES
 # =============================================================================
 data_rv1 = readdlm("./data/all_rv_1_ORIG.txt")
 data_rv2 = readdlm("./data/all_rv_2_ORIG.txt")
@@ -171,7 +187,7 @@ plot_rv(bparams, K1=123.9, K2=198.8, γ=0.0,
     rv_data1=data_rv1, rv_data2=data_rv2, figtitle="Spica Radial Velocities")
 
 # =============================================================================
-# 7. PLOT: V2 AND T3PHI MODEL VS DATA (per epoch)
+# 8. PLOT: V2 AND T3PHI MODEL VS DATA (per epoch)
 # =============================================================================
 for i in 1:nepochs
     plot_residuals(data[i], model_obs[i], figsize=(12, 8))
