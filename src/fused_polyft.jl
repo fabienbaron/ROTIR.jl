@@ -2,27 +2,27 @@
 # Eliminates the dense (Nk × Npix) polyft matrix by computing visibilities on-the-fly.
 #
 # Pass 1 (forward):  Accumulates complex visibilities F[k] = Σ_p polyft[k,p] * xw[p]
-# Pass 2 (adjoint):  Accumulates ∂χ²/∂xw[p] and optionally ∂χ²/∂projx, ∂χ²/∂projy
+# Pass 2 (adjoint):  Accumulates ∂χ²/∂xw[p] and optionally ∂χ²/∂proj_west, ∂χ²/∂proj_north
 #
 # Adapted from planet_deconv's shape_gradient.jl for interferometric (sparse UV) use.
 
 """
-    compute_polyflux_and_cvis!(F, polyflux, kx, ky, k2_inv_im, projx, projy, xw)
+    compute_polyflux_and_cvis!(F, polyflux, kx, ky, k2_inv_im, proj_west, proj_north, xw)
 
 Forward pass: compute complex visibilities F[k] and pixel areas polyflux[p].
 - `F`: output, length nuv — complex visibilities at each UV point
 - `polyflux`: output, length npix — projected pixel areas (shoelace formula)
 - `kx, ky`: UV frequencies (length nuv), pre-scaled to radians
 - `k2_inv_im`: -im/(2π(kx²+ky²)) for each UV point (length nuv)
-- `projx, projy`: projected quad vertices (npix × 4)
+- `proj_west, proj_north`: projected quad vertices (npix × 4)
 - `xw`: weighted pixel values (npix) = x .* vis_weights
 """
 @views function compute_polyflux_and_cvis!(F::Vector{Complex{T}}, polyflux::Vector{T},
     kx::Vector{T}, ky::Vector{T}, k2_inv_im::Vector{Complex{T}},
-    projx::AbstractMatrix{T}, projy::AbstractMatrix{T}, xw::Vector{T}) where T
+    proj_west::AbstractMatrix{T}, proj_north::AbstractMatrix{T}, xw::Vector{T}) where T
 
     nuv = length(kx)
-    npix = size(projx, 1)
+    npix = size(proj_west, 1)
     F .= zero(Complex{T})
 
     @inbounds for p in 1:npix
@@ -31,20 +31,20 @@ Forward pass: compute complex visibilities F[k] and pixel areas polyflux[p].
 
         # Shoelace area for this pixel
         pf = T(0.5) * (
-            projx[p,1]*projy[p,2] - projx[p,2]*projy[p,1] +
-            projx[p,2]*projy[p,3] - projx[p,3]*projy[p,2] +
-            projx[p,3]*projy[p,4] - projx[p,4]*projy[p,3] +
-            projx[p,4]*projy[p,1] - projx[p,1]*projy[p,4])
+            proj_west[p,1]*proj_north[p,2] - proj_west[p,2]*proj_north[p,1] +
+            proj_west[p,2]*proj_north[p,3] - proj_west[p,3]*proj_north[p,2] +
+            proj_west[p,3]*proj_north[p,4] - proj_west[p,4]*proj_north[p,3] +
+            proj_west[p,4]*proj_north[p,1] - proj_west[p,1]*proj_north[p,4])
         polyflux[p] = pf
 
         # Accumulate FT contribution from 4 edges of the quad
         for e in 1:4
             j1 = e
             j2 = mod1(e+1, 4)
-            dx = projx[p,j2] - projx[p,j1]
-            dy = projy[p,j2] - projy[p,j1]
-            cx = projx[p,j2] + projx[p,j1]
-            cy = projy[p,j2] + projy[p,j1]
+            dx = proj_west[p,j2] - proj_west[p,j1]
+            dy = proj_north[p,j2] - proj_north[p,j1]
+            cx = proj_west[p,j2] + proj_west[p,j1]
+            cy = proj_north[p,j2] + proj_north[p,j1]
 
             for k in 1:nuv
                 kdd = kx[k]*dx + ky[k]*dy        # k·d (dot product with edge diff)
@@ -60,7 +60,7 @@ Forward pass: compute complex visibilities F[k] and pixel areas polyflux[p].
 end
 
 """
-    compute_adjoint_cvis!(grad_xw, adj, kx, ky, k2_inv_im, projx, projy, polyflux)
+    compute_adjoint_cvis!(grad_xw, adj, kx, ky, k2_inv_im, proj_west, proj_north, polyflux)
 
 Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
 - `grad_xw`: output, length npix — ∂χ²/∂(xw[p])
@@ -70,10 +70,10 @@ Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
 @views function compute_adjoint_cvis!(grad_xw::Vector{T},
     adj::Vector{Complex{T}}, kx::Vector{T}, ky::Vector{T},
     k2_inv_im::Vector{Complex{T}},
-    projx::AbstractMatrix{T}, projy::AbstractMatrix{T}, polyflux::Vector{T}) where T
+    proj_west::AbstractMatrix{T}, proj_north::AbstractMatrix{T}, polyflux::Vector{T}) where T
 
     nuv = length(kx)
-    npix = size(projx, 1)
+    npix = size(proj_west, 1)
     grad_xw .= zero(T)
 
     @inbounds for p in 1:npix
@@ -82,10 +82,10 @@ Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
         for e in 1:4
             j1 = e
             j2 = mod1(e+1, 4)
-            dx = projx[p,j2] - projx[p,j1]
-            dy = projy[p,j2] - projy[p,j1]
-            cx = projx[p,j2] + projx[p,j1]
-            cy = projy[p,j2] + projy[p,j1]
+            dx = proj_west[p,j2] - proj_west[p,j1]
+            dy = proj_north[p,j2] - proj_north[p,j1]
+            cx = proj_west[p,j2] + proj_west[p,j1]
+            cy = proj_north[p,j2] + proj_north[p,j1]
 
             for k in 1:nuv
                 kdd = kx[k]*dx + ky[k]*dy
@@ -103,22 +103,22 @@ Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
 end
 
 """
-    compute_adjoint_vertices!(grad_projx, grad_projy, adj, kx, ky, k2_inv_im,
-                               projx, projy, xw)
+    compute_adjoint_vertices!(grad_proj_west, grad_proj_north, adj, kx, ky, k2_inv_im,
+                               proj_west, proj_north, xw)
 
-Adjoint pass for vertex positions: compute ∂χ²/∂projx and ∂χ²/∂projy.
+Adjoint pass for vertex positions: compute ∂χ²/∂proj_west and ∂χ²/∂proj_north.
 Used for shape gradient computation.
-- `grad_projx, grad_projy`: output (npix × 4) — vertex position gradients
+- `grad_proj_west, grad_proj_north`: output (npix × 4) — vertex position gradients
 """
-@views function compute_adjoint_vertices!(grad_projx::Matrix{T}, grad_projy::Matrix{T},
+@views function compute_adjoint_vertices!(grad_proj_west::Matrix{T}, grad_proj_north::Matrix{T},
     adj::Vector{Complex{T}}, kx::Vector{T}, ky::Vector{T},
     k2_inv_im::Vector{Complex{T}},
-    projx::AbstractMatrix{T}, projy::AbstractMatrix{T}, xw::Vector{T}, polyflux::Vector{T}) where T
+    proj_west::AbstractMatrix{T}, proj_north::AbstractMatrix{T}, xw::Vector{T}, polyflux::Vector{T}) where T
 
     nuv = length(kx)
-    npix = size(projx, 1)
-    grad_projx .= zero(T)
-    grad_projy .= zero(T)
+    npix = size(proj_west, 1)
+    grad_proj_west .= zero(T)
+    grad_proj_north .= zero(T)
 
     @inbounds for p in 1:npix
         xw_p = xw[p]
@@ -139,10 +139,10 @@ Used for shape gradient computation.
         for e in 1:4
             j1 = e
             j2 = mod1(e+1, 4)
-            dx = projx[p,j2] - projx[p,j1]
-            dy = projy[p,j2] - projy[p,j1]
-            cx = projx[p,j2] + projx[p,j1]
-            cy = projy[p,j2] + projy[p,j1]
+            dx = proj_west[p,j2] - proj_west[p,j1]
+            dy = proj_north[p,j2] - proj_north[p,j1]
+            cx = proj_west[p,j2] + proj_west[p,j1]
+            cy = proj_north[p,j2] + proj_north[p,j1]
 
             acc_j1x = zero(T)
             acc_j1y = zero(T)
@@ -193,10 +193,10 @@ Used for shape gradient computation.
                 acc_j2y += contrib_j2y
             end
 
-            grad_projx[p, j1] += acc_j1x
-            grad_projx[p, j2] += acc_j2x
-            grad_projy[p, j1] += acc_j1y
-            grad_projy[p, j2] += acc_j2y
+            grad_proj_west[p, j1] += acc_j1x
+            grad_proj_west[p, j2] += acc_j2x
+            grad_proj_north[p, j1] += acc_j1y
+            grad_proj_north[p, j2] += acc_j2y
         end
     end
     return nothing
@@ -232,8 +232,8 @@ Drop-in replacement for spheroid_chi2_fg.
     indx = star.index_quads_visible
     w = star.vis_weights[indx]
     xw = x[indx] .* w
-    pjx = star.projx[indx, :]
-    pjy = star.projy[indx, :]
+    pjx = star.proj_west[indx, :]
+    pjy = star.proj_north[indx, :]
     nvis = length(indx)
 
     # Precompute UV frequencies

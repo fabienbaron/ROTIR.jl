@@ -1,3 +1,19 @@
+# =====================================================================
+# ROTIR Coordinate Conventions
+# =====================================================================
+# After projection via rot_vertex and create_star:
+#   proj_west  = projected coordinate pointing West  (mas)
+#   proj_north = projected coordinate pointing North (mas)
+#
+# The interferometric sky frame has u=East, v=North (OIFITS standard).
+# The polygon FT (setup_polyft_single) uses:
+#   kx = u * (-π/C)    ← minus compensates West vs East
+#   ky = v * ( π/C)
+# so the net FT matches the standard exp(-2πi(u·East + v·North)).
+#
+# For plotting: East = -proj_west, North = proj_north
+# =====================================================================
+
 mutable struct tessellation{T}
   tessellation_type::Int64 # 0: Healpix, 1: Longitude/Latitude
   npix::Int64
@@ -14,8 +30,8 @@ mutable struct stellar_geometry{T} # typically one per epoch, rotation and proje
   normals::Array{T,2}
   index_quads_visible::Array{Int64,1}
   nquads_visible::Int64
-  projx::Array{T,2}
-  projy::Array{T,2}
+  proj_west::Array{T,2}   # Projected West coordinate of quad vertices (mas)
+  proj_north::Array{T,2}  # Projected North coordinate of quad vertices (mas)
   ldmap::Array{T,1}   # Limb-darkening map
   vis_weights::Array{T,1}  # Soft visibility weights (sigmoid of normals_z), length npix
   sig_args::Array{T,1}     # Sigmoid arguments (κ * normals_z), for gradient computation
@@ -63,8 +79,8 @@ function Base.display(x::stellar_geometry)
   println("vertices_xyz          : (x,y,z) coordinates of the vertices")
   println("vertices_spherical    : (r,θ,ϕ) coordinates of the vertices")
   println("normals               : coordinates of the vertex normals")
-  println("projx                 : projected x vertex coordinates")
-  println("projy                 : projected y vertex coordinates") 
+  println("proj_west             : projected West vertex coordinates (mas)")
+  println("proj_north            : projected North vertex coordinates (mas)")
   println("ldmap                 : limb-darkening map")
   if x.polyft == []
   println("polyflux              : temperature to flux vector (not defined yet)")
@@ -103,8 +119,8 @@ end
 #  # quads_visible::Array{Bool,1} not necessary anymore
 #   index_quads_visible::Array{Int64,1}
 #   nquads_visible::Int64
-#   projx::Array{Float64,2}
-#   projy::Array{Float64,2}
+#   proj_west::Array{Float64,2}
+#   proj_north::Array{Float64,2}
 #   # Limb-darkening map
 #   ldmap::Array{Float64,1}
 #   # Center of mass within star
@@ -199,9 +215,10 @@ end
   index_quads_visible = findall(vis_weights .> vis_threshold);
   nquads_visible = length(index_quads_visible);
 
-  # Project ALL pixels onto the (x,y) observing plane (needed for soft visibility gradients)
-  projx = xyz[:, 1:4, 1];
-  projy = xyz[:, 1:4, 2];
+  # Project ALL pixels onto the observing plane (needed for soft visibility gradients)
+  # proj_west = xyz component 1 (West on sky), proj_north = xyz component 2 (North on sky)
+  proj_west = xyz[:, 1:4, 1];
+  proj_north = xyz[:, 1:4, 2];
 
   # Limb-darkening map (uses abs(μ) for all pixels)
   μ = abs.(normals[:,3].*max.(normals[:,3], 0))
@@ -210,7 +227,7 @@ end
   spherical[:,:,1] = r
   # Single star
   center = T.([0.0,0.0,0.0]);
-  return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible, nquads_visible, projx, projy, ldmap, vis_weights, sig_args, center, T[], zeros(Complex{T}, 0, 0), t);
+  return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible, nquads_visible, proj_west, proj_north, ldmap, vis_weights, sig_args, center, T[], zeros(Complex{T}, 0, 0), t);
 end
 
 function create_binary(star1::tessellation, star2::tessellation, binary_params::binaryparameters, t)
@@ -264,7 +281,7 @@ function rotate_single_star(base_geom, star_params, orbit_incl, long_ascending_n
 
   # TODO: Compute the rest as usual including normals, mu, ldmap ,visible parts
   vertices_spherical = copy(base_geom.vertices_spherical)
-  return stellar_geometry(npix, vertices_xyz_rot, vertices_spherical, normals, index_quads_visible,  nquads_visible, projx,  projy, ldmap, offsets);
+  return stellar_geometry(npix, vertices_xyz_rot, vertices_spherical, normals, index_quads_visible,  nquads_visible, proj_west,  proj_north, ldmap, offsets);
  end
 
 function never_visible(star_epoch_geom)

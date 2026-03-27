@@ -34,7 +34,7 @@ interferometric observables:
 | 1. Tessellate unit sphere | `tessellation_healpix(n)` or `tessellation_latlong(ntheta, nphi)` |
 | 2. Apply surface geometry | `create_star(tessels, star_params, t)` |
 | 3. Rotate to observer frame | Euler rotation by (phase, inclination, PA) |
-| 4. Project to sky plane | Projected quad vertices `(projx, projy)` |
+| 4. Project to sky plane | Projected quad vertices `(proj_west, proj_north)` |
 | 5. Compute visibility matrix | `setup_oi!(data, stars)` |
 | 6. Temperature to observables | `observables(tmap, star, data)` |
 | 7. Chi-squared + gradient | `spheroid_chi2_fg(tmap, g, star, data)` |

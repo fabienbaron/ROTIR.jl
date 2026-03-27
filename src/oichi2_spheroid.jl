@@ -25,13 +25,13 @@ end
   if nepochs>1
   Threads.@threads for i=1:nepochs
        indx = stars[i].index_quads_visible
-       stars[i].polyflux = setup_polyflux_single(stars[i].projx[indx,:], stars[i].projy[indx,:])
-       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i].projx[indx,:], stars[i].projy[indx,:]);
+       stars[i].polyflux = setup_polyflux_single(stars[i].proj_west[indx,:], stars[i].proj_north[indx,:])
+       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i].proj_west[indx,:], stars[i].proj_north[indx,:]);
      end
   else # single epoch, thread over calculation
     indx = stars[1].index_quads_visible
-    stars[1].polyflux = setup_polyflux_single(stars[1].projx[indx,:], stars[1].projy[indx,:])
-    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1].projx[indx,:], stars[1].projy[indx,:]);
+    stars[1].polyflux = setup_polyflux_single(stars[1].proj_west[indx,:], stars[1].proj_north[indx,:])
+    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1].proj_west[indx,:], stars[1].proj_north[indx,:]);
   end
 end
 
@@ -42,8 +42,8 @@ end
   polyft = Array{Array{Complex{T},2}}(undef,nepochs);
   Threads.@threads for i=1:nepochs
        indx = star_epoch_geom[i].index_quads_visible
-       polyflux[i] = setup_polyflux_single(star_epoch_geom[i].projx[indx,:], star_epoch_geom[i].projy[indx,:])
-       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i].projx[indx,:], star_epoch_geom[i].projy[indx,:]);
+       polyflux[i] = setup_polyflux_single(star_epoch_geom[i].proj_west[indx,:], star_epoch_geom[i].proj_north[indx,:])
+       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i].proj_west[indx,:], star_epoch_geom[i].proj_north[indx,:]);
      end
   return polyflux, polyft
 end

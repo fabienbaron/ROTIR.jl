@@ -92,14 +92,14 @@ function setup_di(star_epoch_geom; ld = true)
     nepochs = length(star_epoch_geom);
     polyflux = zeros(Float64, nepochs, star_epoch_geom[1].npix);
     for i=1:nepochs
-        polyflux[i,star_epoch_geom[i].index_quads_visible] =0.5*(star_epoch_geom[i].projx[:,1].*star_epoch_geom[i].projy[:,2]
-        - star_epoch_geom[i].projx[:,2].*star_epoch_geom[i].projy[:,1]
-        + star_epoch_geom[i].projx[:,2].*star_epoch_geom[i].projy[:,3]
-        - star_epoch_geom[i].projx[:,3].*star_epoch_geom[i].projy[:,2]
-        + star_epoch_geom[i].projx[:,3].*star_epoch_geom[i].projy[:,4]
-        - star_epoch_geom[i].projx[:,4].*star_epoch_geom[i].projy[:,3]
-        + star_epoch_geom[i].projx[:,4].*star_epoch_geom[i].projy[:,1]
-        - star_epoch_geom[i].projx[:,1].*star_epoch_geom[i].projy[:,4]);
+        polyflux[i,star_epoch_geom[i].index_quads_visible] =0.5*(star_epoch_geom[i].proj_west[:,1].*star_epoch_geom[i].proj_north[:,2]
+        - star_epoch_geom[i].proj_west[:,2].*star_epoch_geom[i].proj_north[:,1]
+        + star_epoch_geom[i].proj_west[:,2].*star_epoch_geom[i].proj_north[:,3]
+        - star_epoch_geom[i].proj_west[:,3].*star_epoch_geom[i].proj_north[:,2]
+        + star_epoch_geom[i].proj_west[:,3].*star_epoch_geom[i].proj_north[:,4]
+        - star_epoch_geom[i].proj_west[:,4].*star_epoch_geom[i].proj_north[:,3]
+        + star_epoch_geom[i].proj_west[:,4].*star_epoch_geom[i].proj_north[:,1]
+        - star_epoch_geom[i].proj_west[:,1].*star_epoch_geom[i].proj_north[:,4]);
         if ld == true
           polyflux[i,:] .*= star_epoch_geom[i].ldmap;
         end

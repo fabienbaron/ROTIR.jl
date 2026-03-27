@@ -7,12 +7,14 @@ include("oistars.jl");
 include("soft_visibility.jl");
 include("geometry.jl");
 include("oichi2_spheroid.jl");
+include("oichi2_binary.jl");
 include("fused_polyft.jl");
 include("shape_gradient.jl");
 include("oiplot_spheroid.jl");
 
 # Re-export OITOOLS functions so users only need `using ROTIR`
 export OIdata, readoifits, readoifits_multiepochs, readfits, writefits
+export set_data_filter, filter_data
 
 # Tessellation
 export tessellation
@@ -63,6 +65,9 @@ export image_reconstruct_oi, image_reconstruct_oi_crit, image_reconstruct_oi_chi
 export multires_reconstruct_oi
 export cvis_to_v2, poly_to_cvis, poly_to_flux, cvis_to_t3
 
+# Binary forward model
+export binary_phase_shift, binary_cvis, binary_chi2_f, orbit_to_rotir_offset
+
 # Soft visibility
 export sigmoid, dsigmoid, soft_visibility
 
@@ -78,6 +83,8 @@ export projected_vertices_and_derivs, shape_chi2_fg!, joint_reconstruct_oi
 export plot2d, plot2d_wireframe, plot2d_allepochs
 export plot3d, plot3d_vertices
 export plot_mollweide
+export draw_compass, draw_rotation_axis
+export plot_rv
 export sometimes_visible, never_visible, invisible_neighbours, with_invisible_neighbours, without_invisible_neighbours
 
 # Utilities

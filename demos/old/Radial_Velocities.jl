@@ -52,8 +52,7 @@ t2 = data2[:,1]
 ϕ2 = mod.(t2.- binary_parameters.T0, binary_parameters.P)/binary_parameters.P
 rv2 = data2[:,2]
 
-#fig = figure("Radial Velocities DATA", figsize=(10,10),facecolor = "White")
-scatter(ϕ1,-rv1, label ="RV1 data")
-scatter(ϕ2, -rv2, label ="RV2 data")
+scatter(ϕ1, rv1, label ="RV1 data")
+scatter(ϕ2, rv2, label ="RV2 data")
 legend()
 

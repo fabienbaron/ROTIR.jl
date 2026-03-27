@@ -94,8 +94,8 @@ Surface type 1 (Ellipsoid): θ = [rx, ry, rz, inc (deg), PA (deg)]    → nparam
 Surface type 2 (Rapid Rot): θ = [rpole, ω, inc (deg), PA (deg)]      → nparams=4
 
 Returns:
-- `projx, projy`: (npix, 4) projected vertex coordinates
-- `dprojx_dθ, dprojy_dθ`: (npix, 4, nparams) vertex derivatives
+- `proj_west, proj_north`: (npix, 4) projected vertex coordinates
+- `dproj_west_dθ, dproj_north_dθ`: (npix, 4, nparams) vertex derivatives
 - `normals_z`: (npix,) z-component of face normals
 - `dnz_dθ`: (npix, nparams) derivative of normalized normals_z w.r.t. θ
 """
@@ -162,8 +162,8 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
     xyz_full = reshape(reshape(su_full, npix*5, 3) * R, npix, 5, 3)
 
     # Projected coordinates (vertices 1:4 only)
-    projx = xyz_full[:, 1:4, 1]  # (npix, 4)
-    projy = xyz_full[:, 1:4, 2]  # (npix, 4)
+    proj_west = xyz_full[:, 1:4, 1]  # (npix, 4)
+    proj_north = xyz_full[:, 1:4, 2]  # (npix, 4)
 
     # ─── Normals ─────────────────────────────────────────────────────────────
     vecAC = xyz_full[:, 3, :] - xyz_full[:, 1, :]  # (npix, 3)
@@ -177,17 +177,17 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
 
     # ─── Vertex derivatives ──────────────────────────────────────────────────
     u = tessels.unit_xyz[:, 1:4, :]  # (npix, 4, 3)
-    dprojx_dθ = zeros(T, npix, 4, nparams)
-    dprojy_dθ = zeros(T, npix, 4, nparams)
+    dproj_west_dθ = zeros(T, npix, 4, nparams)
+    dproj_north_dθ = zeros(T, npix, 4, nparams)
     dnz_dθ = zeros(T, npix, nparams)
 
     for j in 1:nparams
         if stype == 1  # Ellipsoid
             if j <= 3
                 # ∂proj/∂r_j: xyz = su * R, su_j = r_j * u_j
-                # ∂projx/∂r_j = R[j,1] * u_j,  ∂projy/∂r_j = R[j,2] * u_j
-                dprojx_dθ[:, :, j] = R[j,1] .* u[:, :, j]
-                dprojy_dθ[:, :, j] = R[j,2] .* u[:, :, j]
+                # ∂proj_west/∂r_j = R[j,1] * u_j,  ∂proj_north/∂r_j = R[j,2] * u_j
+                dproj_west_dθ[:, :, j] = R[j,1] .* u[:, :, j]
+                dproj_north_dθ[:, :, j] = R[j,2] .* u[:, :, j]
                 # For dnz: dverts_full[:,:,c] = R[j,c] * unit_xyz[:,:,j]
                 dverts = zeros(T, npix, 5, 3)
                 for c in 1:3
@@ -195,13 +195,13 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
                 end
             elseif j == 4  # inc
                 dxyz = reshape(reshape(su_full, npix*5, 3) * dR_di, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             else  # PA
                 dxyz = reshape(reshape(su_full, npix*5, 3) * dR_dp, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             end
 
@@ -210,8 +210,8 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
                 # ∂r/∂rpole = f(ω sinθ), so ∂su/∂rpole = (r/rpole) * unit_xyz = su/rpole
                 dsu = su_full ./ rpole
                 dxyz = reshape(reshape(dsu, npix*5, 3) * R, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             elseif j == 2  # ω
                 # ∂r/∂ω = rpole * f'(ωsinθ) * sinθ
@@ -230,18 +230,18 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
                     dsu[p, v, 3] = dr_dω * tessels.unit_xyz[p, v, 3]
                 end
                 dxyz = reshape(reshape(dsu, npix*5, 3) * R, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             elseif j == idx_inc  # inc
                 dxyz = reshape(reshape(su_full, npix*5, 3) * dR_di, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             else  # PA
                 dxyz = reshape(reshape(su_full, npix*5, 3) * dR_dp, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             end
 
@@ -249,18 +249,18 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
             if j == 1  # radius
                 dsu = tessels.unit_xyz
                 dxyz = reshape(reshape(dsu, npix*5, 3) * R, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             elseif j == idx_inc
                 dxyz = reshape(reshape(su_full, npix*5, 3) * dR_di, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             else  # PA
                 dxyz = reshape(reshape(su_full, npix*5, 3) * dR_dp, npix, 5, 3)
-                dprojx_dθ[:, :, j] = dxyz[:, 1:4, 1]
-                dprojy_dθ[:, :, j] = dxyz[:, 1:4, 2]
+                dproj_west_dθ[:, :, j] = dxyz[:, 1:4, 1]
+                dproj_north_dθ[:, :, j] = dxyz[:, 1:4, 2]
                 dverts = dxyz
             end
         end
@@ -276,7 +276,7 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
         dnz_dθ[:, j] = dnz ./ nn - nz_comp .* n_dot_dn ./ nn3
     end
 
-    return projx, projy, dprojx_dθ, dprojy_dθ, normals_z, dnz_dθ
+    return proj_west, proj_north, dproj_west_dθ, dproj_north_dθ, normals_z, dnz_dθ
 end
 
 # ─── Shape chi2 + gradient ────────────────────────────────────────────────────
@@ -327,7 +327,7 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         data = data_epochs[ep]
 
         # Compute projected vertices + derivatives
-        projx, projy, dprojx_dθ, dprojy_dθ, nz, dnz_dθ =
+        proj_west, proj_north, dproj_west_dθ, dproj_north_dθ, nz, dnz_dθ =
             projected_vertices_and_derivs(tessels, star_params, t, nparams=nparams)
 
         # Soft visibility
@@ -348,8 +348,8 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         k2_inv_im = precompute_k2_inv_im(kx, ky)
 
         # Forward pass
-        pjx = projx[indx, :]
-        pjy = projy[indx, :]
+        pjx = proj_west[indx, :]
+        pjy = proj_north[indx, :]
         F = Vector{Complex{T}}(undef, nuv)
         polyflux_local = Vector{T}(undef, nvis)
         compute_polyflux_and_cvis!(F, polyflux_local, kx, ky, k2_inv_im, pjx, pjy, xw)
@@ -405,9 +405,9 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         grad_xmap[indx] .+= vis_w[indx] .* grad_xw
 
         # Adjoint pass for vertex position gradients (non-DC Fourier terms)
-        grad_projx = Matrix{T}(undef, nvis, 4)
-        grad_projy = Matrix{T}(undef, nvis, 4)
-        compute_adjoint_vertices!(grad_projx, grad_projy, adj_F, kx, ky, k2_inv_im, pjx, pjy, xw, polyflux_local)
+        grad_proj_west = Matrix{T}(undef, nvis, 4)
+        grad_proj_north = Matrix{T}(undef, nvis, 4)
+        compute_adjoint_vertices!(grad_proj_west, grad_proj_north, adj_F, kx, ky, k2_inv_im, pjx, pjy, xw, polyflux_local)
 
         # Flux correction for vertex gradients: ∂χ²/∂flux * ∂flux/∂vertex
         # flux = Σ_p xw_p * polyflux_p, where polyflux_p = shoelace area
@@ -418,18 +418,18 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
             for j in 1:4
                 jp = mod1(j+1, 4)
                 jm = mod1(j-1, 4)
-                grad_projx[li, j] += fa_xw * T(0.5) * (pjy[li, jp] - pjy[li, jm])
-                grad_projy[li, j] += fa_xw * T(0.5) * (pjx[li, jm] - pjx[li, jp])
+                grad_proj_west[li, j] += fa_xw * T(0.5) * (pjy[li, jp] - pjy[li, jm])
+                grad_proj_north[li, j] += fa_xw * T(0.5) * (pjx[li, jm] - pjx[li, jp])
             end
         end
 
-        # Chain rule via vertex positions: ∂χ²/∂θ_j = Σ_p,v (∂χ²/∂projx * ∂projx/∂θ + ∂χ²/∂projy * ∂projy/∂θ)
+        # Chain rule via vertex positions: ∂χ²/∂θ_j = Σ_p,v (∂χ²/∂proj_west * ∂proj_west/∂θ + ∂χ²/∂proj_north * ∂proj_north/∂θ)
         for j in 1:nparams
             s = zero(T)
             for (li, pi) in enumerate(indx)
                 for v in 1:4
-                    s += grad_projx[li, v] * dprojx_dθ[pi, v, j]
-                    s += grad_projy[li, v] * dprojy_dθ[pi, v, j]
+                    s += grad_proj_west[li, v] * dproj_west_dθ[pi, v, j]
+                    s += grad_proj_north[li, v] * dproj_north_dθ[pi, v, j]
                 end
             end
             grad_θ[j] += s

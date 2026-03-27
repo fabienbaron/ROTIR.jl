@@ -27,12 +27,12 @@ unit-sphere vertices.
 |----------|-------------|
 | `projected_vertices_and_derivs(tessels, star_params, t; nparams)` | Compute projected vertices and their analytical derivatives w.r.t. shape parameters |
 
-Returns `(projx, projy, dprojx_dtheta, dprojy_dtheta, normals_z, dnz_dtheta)`:
+Returns `(proj_west, proj_north, dproj_west_dtheta, dproj_north_dtheta, normals_z, dnz_dtheta)`:
 
 | Output | Shape | Description |
 |--------|-------|-------------|
-| `projx`, `projy` | (npix, 4) | Projected quad vertex coordinates |
-| `dprojx_dtheta`, `dprojy_dtheta` | (npix, 4, nparams) | Vertex derivatives w.r.t. shape parameters |
+| `proj_west`, `proj_north` | (npix, 4) | Projected quad vertex coordinates |
+| `dproj_west_dtheta`, `dproj_north_dtheta` | (npix, 4, nparams) | Vertex derivatives w.r.t. shape parameters |
 | `normals_z` | (npix,) | Normalized z-component of face normals |
 | `dnz_dtheta` | (npix, nparams) | Normal z-component derivatives |
 
@@ -55,7 +55,7 @@ The derivative computation is surface-type-specific:
 
 The gradient chain has three components:
 
-1. **Vertex positions**: `d(chi2)/d(theta) = sum_p sum_v (d(chi2)/d(projx) * d(projx)/d(theta) + ...)`
+1. **Vertex positions**: `d(chi2)/d(theta) = sum_p sum_v (d(chi2)/d(proj_west) * d(proj_west)/d(theta) + ...)`
 2. **Flux normalization**: shoelace area derivatives for the flux correction term
 3. **Soft visibility**: `d(chi2)/d(theta) += d(chi2)/d(w) * d(sigmoid)/d(kappa*nz) * kappa * d(nz)/d(theta)`
 

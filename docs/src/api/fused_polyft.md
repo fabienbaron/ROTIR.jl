@@ -8,7 +8,7 @@ O(Nuv * Npix).
 
 | Function | Description |
 |----------|-------------|
-| `compute_polyflux_and_cvis!(F, polyflux, kx, ky, k2_inv_im, projx, projy, xw)` | Compute complex visibilities `F[k]` and polygon areas `polyflux[p]` simultaneously |
+| `compute_polyflux_and_cvis!(F, polyflux, kx, ky, k2_inv_im, proj_west, proj_north, xw)` | Compute complex visibilities `F[k]` and polygon areas `polyflux[p]` simultaneously |
 | `precompute_k2_inv_im(kx, ky)` | Precompute `-im / (2*pi*(kx^2 + ky^2))` for all UV points |
 
 ### Forward pass details
@@ -32,8 +32,8 @@ The polygon area uses the shoelace formula:
 
 | Function | Description |
 |----------|-------------|
-| `compute_adjoint_cvis!(grad_xw, adj, kx, ky, k2_inv_im, projx, projy, polyflux)` | Backpropagate adjoint signal to pixel value gradients |
-| `compute_adjoint_vertices!(grad_projx, grad_projy, adj, kx, ky, k2_inv_im, projx, projy, xw, polyflux)` | Backpropagate adjoint signal to vertex position gradients |
+| `compute_adjoint_cvis!(grad_xw, adj, kx, ky, k2_inv_im, proj_west, proj_north, polyflux)` | Backpropagate adjoint signal to pixel value gradients |
+| `compute_adjoint_vertices!(grad_proj_west, grad_proj_north, adj, kx, ky, k2_inv_im, proj_west, proj_north, xw, polyflux)` | Backpropagate adjoint signal to vertex position gradients |
 
 The adjoint pass recomputes the same edge contributions as the forward pass but
 accumulates the gradient signal instead of visibilities. The vertex adjoint

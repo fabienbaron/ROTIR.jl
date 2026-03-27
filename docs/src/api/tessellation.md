@@ -5,7 +5,7 @@
 | Type | Description |
 |------|-------------|
 | `tessellation{T}` | Base tessellation on unit sphere: `npix`, `unit_xyz` (npix,5,3), `unit_spherical` (npix,5,3), `tessellation_type` (0=HEALPix, 1=lon/lat) |
-| `stellar_geometry{T}` | Rotated/projected geometry for one epoch: vertices, normals, visibility mask, projx/projy, polyflux, polyft |
+| `stellar_geometry{T}` | Rotated/projected geometry for one epoch: vertices, normals, visibility mask, proj_west/proj_north, polyflux, polyft |
 
 ## HEALPix
 

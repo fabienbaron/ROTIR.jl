@@ -63,30 +63,61 @@ function binary_orbit_rel_alt(bparameters,tepoch::Float64)
     return 0.0, 0.0, 0.0, x, y, z
 end
 
-# Solve absolute binary orbit
+"""
+    binary_orbit_abs(bparameters, tepoch) -> (x1, y1, z1, x2, y2, z2)
+
+Compute absolute positions of both stars in the observer's sky frame.
+
+Convention: `bparameters.ω` is the argument of periapsis of the **relative orbit**
+(= secondary's orbit around the primary), the standard astrometric convention.
+At periastron (υ=0), the secondary is in the ω-direction from the center of mass.
+"""
 function binary_orbit_abs(bparameters,tepoch::Float64)
     Ω = bparameters.Ω*pi/180.0; # longitude of ascending node
     i = bparameters.i*pi/180.0;
-    ω = bparameters.ω*pi/180.0; # argument of periapsis
+    ω = bparameters.ω*pi/180.0; # argument of periapsis (of relative orbit / secondary)
     q = bparameters.q;
     a = bparameters.a;
     e = bparameters.e;
     υ = compute_true_anomaly(bparameters, tepoch);
-    D = a*(1.0 - e^2)./(1.0 .+ e* cos.(υ));  
+    D = a*(1.0 - e^2)./(1.0 .+ e* cos.(υ));
     # distance of objects from the center of mass
     r1 = D / (1/q+1);
     r2 = D / (1+q);
     L1, M1, N1, L2, M2, N2 = compute_coeff(Ω, i, ω);
-    x1, y1, z1 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ, r1);
+    # Secondary at true anomaly υ (its periapsis is at υ=0),
+    # primary on the opposite side (υ+π)
+    x2, y2, z2 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ, r2);
     if ((υ .>= 0.0) & (υ .<= pi))
-        x2, y2, z2 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ .+pi, r2);
+        x1, y1, z1 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ .+pi, r1);
     else
-        x2, y2, z2 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ .-pi, r2);
+        x1, y1, z1 = compute_xyz_abs(L1, M1, N1, L2, M2, N2, υ .-pi, r1);
     end
     return x1, y1, z1, x2, y2, z2
 end
 
-# compute xyz absolute positions
+# =====================================================================
+# Orbital Coordinate Convention
+# =====================================================================
+# compute_xyz_abs/rel return positions in the observer's frame:
+#   x = North (Dec increasing)
+#   y = East  (RA increasing)
+#   z = -toward_observer (positive = receding)
+#
+# To convert to ROTIR's projected frame:
+#   proj_west  = -y_orbit   (West = -East)
+#   proj_north =  x_orbit   (North = North)
+# See orbit_to_rotir_offset() in oichi2_binary.jl.
+# =====================================================================
+
+"""
+    compute_xyz_abs(L1, M1, N1, L2, M2, N2, nu, r_star) -> (north, east, z)
+
+Returns absolute position in the observer's sky frame:
+- x (north): declination direction
+- y (east): right ascension direction
+- z: line-of-sight (positive = receding from observer)
+"""
 function compute_xyz_abs(L1, M1, N1, L2, M2, N2, nu, r_star)
     astro_north = (L1.*r_star.*cos.(nu) .+ L2.*r_star.*sin.(nu));
     astro_east  = (M1.*r_star.*cos.(nu) .+ M2.*r_star.*sin.(nu));
@@ -156,41 +187,9 @@ function compute_true_anomaly(bparameters,tepoch)
     # Supposedly avoids numerical issues when the arguments are near ± π, as the two tangents
     # in the classic equation become infinite. 
      β = e/(1+sqrt(1-e^2))
-     υ = E .+ 2*atan.((β*sin.(E)) ./ (1 .-  β*cos.(E)))    
-    #υ = 2*atan.(sqrt((1+e)/(1-e))*tan.(E/2));    
+     υ = E .+ 2*atan.((β*sin.(E)) ./ (1 .-  β*cos.(E)))
     return υ
 end
-
-# epool = collect(range(0,1.0,length=1000))
-# E= collect(range(0,2*pi,length=1000))
-# [norm((E .+ 2*atan.((e/(1+sqrt(1-e^2))*sin.(E)) ./ (1 .-  e/(1+sqrt(1-e^2))*cos.(E))))-(2*atan.(sqrt((1+e)/(1-e))*tan.(E/2)))) for e in epool]
-# epool = collect(range(0,0.999999,length=1000))
-# Epool= collect(range(0,2*pi,length=1000))
-# [norm((E .+ 2*atan.((e/(1+sqrt(1-e^2))*sin.(E)) ./ (1 .-  e/(1+sqrt(1-e^2))*cos.(E))))-(2*atan.(sqrt((1+e)/(1-e))*tan.(E/2)))) for e in epool]
-# [norm((E .+ 2*atan.((e/(1+sqrt(1-e^2))*sin.(E)) ./ (1 .-  e/(1+sqrt(1-e^2))*cos.(E))))-(2*atan.(sqrt((1+e)/(1-e))*tan.(E/2)))) for e in epool]
-
-# function binary_orbit_vel(bparameters,tepoch::Vector{Float64})
-#     Omega = bparameters.long_ascending_node*pi/180.; # longitude of ascending node
-#     inclination = bparameters.orbit_incl*pi/180.;
-#     omega = bparameters.arg_pariapsis*pi/180.; # argument of periapsis
-#     a = bparameters.separation;
-#     P = bparameters.P;
-#     ecc = bparameters.e;
-#     # mean angular velocity (mean motion)
-#     n = 2.0 * pi / P;
-#     E = compute_eccentric_anomaly(bparameters, tepoch);
-#     # velocities
-#     L1, M1, N1, L2, M2, N2 = compute_coeff(Omega, inclination, omega);
-#     velx = n*(a*sqrt(1.0 - ecc^2)*L2*cos.(E) - a*L1*sin.(E)); # in mas/day
-#     vely = n*(a*sqrt(1.0 - ecc^2)*M2*cos.(E) - a*M1*sin.(E));
-#     velz = n*(a*sqrt(1.0 - ecc^2)*N2*cos.(E) - a*N1*sin.(E));
-#     #distance = bparameters.distance; # in parsecs
-#     # conversion to km/s
-#     velx *= (pi/1000.0/3600.0/180.0)*3.0857e16/(86400.0);
-#     vely *= (pi/1000.0/3600.0/180.0)*3.0857e16/(86400.0);
-#     velz *= (pi/1000.0/3600.0/180.0)*3.0857e16/(86400.0);
-#     return velx, vely, velz
-# end
 
 function compute_masses(bparameters)
     G = 6.67408e-11; # m^3/kg/s^2
@@ -206,13 +205,23 @@ function compute_masses(bparameters)
     return m1, m2
 end
 
+"""
+    binary_RV(bparameters, tepoch; K1, K2, γ) -> (Vrad1, Vrad2)
+
+Compute radial velocities for both stars of a binary system.
+Positive = receding (redshift), following the standard spectroscopic convention.
+
+Convention: `bparameters.ω` is the argument of periapsis of the **relative orbit**
+(= secondary's). The primary's argument of periapsis is ω + π.
+"""
 function binary_RV(bparameters, tepoch::Union{Float64, Vector{Float64}}; K1::Float64, K2::Float64, γ::Float64)
-    ω = bparameters.ω*pi/180.0; # argument of periapsis
+    ω = bparameters.ω*pi/180.0; # argument of periapsis (of relative orbit / secondary)
     e = bparameters.e;
     υ = compute_true_anomaly(bparameters, tepoch)
-    #calculate radial velocity
-    Vrad1 = γ + K1 * (cos.(υ  .+ ω) .+ e * cos(ω))
-    Vrad2 = γ + K2 * (cos.(υ .+ (ω .+pi)) .+ e * cos(ω .+ pi))
+    # Primary uses ω+π (its own argument of periapsis)
+    Vrad1 = γ + K1 * (cos.(υ .+ (ω .+ pi)) .+ e * cos(ω .+ pi))
+    # Secondary uses ω directly
+    Vrad2 = γ + K2 * (cos.(υ .+ ω) .+ e * cos(ω))
     return Vrad1, Vrad2
 end
 

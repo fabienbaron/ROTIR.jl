@@ -6,8 +6,8 @@
 |----------|-------------|
 | `setup_oi!(data, stars)` | Precompute polyflux and polyft matrices for all epochs (threaded) |
 | `setup_polygon_ft(data, star)` | Return `(polyflux, polyft)` arrays for all epochs |
-| `setup_polyflux_single(projx, projy)` | Shoelace polygon areas for one epoch |
-| `setup_polyft_single(uv, projx, projy)` | Complex visibility matrix (nuv x npix) for one epoch |
+| `setup_polyflux_single(proj_west, proj_north)` | Shoelace polygon areas for one epoch |
+| `setup_polyft_single(uv, proj_west, proj_north)` | Complex visibility matrix (nuv x npix) for one epoch |
 
 ## Forward model
 
