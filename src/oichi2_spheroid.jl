@@ -132,12 +132,21 @@ end
 #   return t4, t4amp, t4phi
 # end
 
+"""
+    cvis_to_obs(cvis, data) -> (v2, t3amp, t3phi)
+
+Convert complex visibilities to interferometric observables (V2, T3amp, T3phi).
+Common step for both single-star and binary forward models.
+"""
+function cvis_to_obs(cvis, data)
+  v2_model = cvis_to_v2(cvis, data.indx_v2);
+  _, t3amp_model, t3phi_model = cvis_to_t3(cvis, data.indx_t3_1, data.indx_t3_2, data.indx_t3_3);
+  return v2_model, t3amp_model, t3phi_model
+end
+
 function observables(x, star, data)
   cvis_model = poly_to_cvis(x, star);
-  # compute observables from all cvis
-  v2_model = cvis_to_v2(cvis_model, data.indx_v2);
-  _, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);
-  return v2_model, t3amp_model, t3phi_model
+  return cvis_to_obs(cvis_model, data)
 end
 
 function chi2s(x, star, data; verbose::Bool = true)

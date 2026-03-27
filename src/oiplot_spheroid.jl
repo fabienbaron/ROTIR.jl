@@ -1,19 +1,20 @@
 using PyPlot,PyCall, LaTeXStrings, Statistics
 
 function set_oiplot_defaults()
-    PyDict(pyimport("matplotlib")."rcParams")["font.family"]=["serif"]
-    PyDict(pyimport("matplotlib")."rcParams")["font.size"]=[14]
-    PyDict(pyimport("matplotlib")."rcParams")["xtick.major.size"]=[6]
-    PyDict(pyimport("matplotlib")."rcParams")["ytick.major.size"]=[6]
-    PyDict(pyimport("matplotlib")."rcParams")["xtick.minor.size"]=[6]
-    PyDict(pyimport("matplotlib")."rcParams")["ytick.minor.size"]=[6]
-    PyDict(pyimport("matplotlib")."rcParams")["xtick.major.width"]=[1]
-    PyDict(pyimport("matplotlib")."rcParams")["ytick.major.width"]=[1]
-    PyDict(pyimport("matplotlib")."rcParams")["xtick.minor.width"]=[1]
-    PyDict(pyimport("matplotlib")."rcParams")["ytick.minor.width"]=[1]
-    PyDict(pyimport("matplotlib")."rcParams")["lines.markeredgewidth"]=[1]
-    PyDict(pyimport("matplotlib")."rcParams")["legend.numpoints"]=[1]
-    PyDict(pyimport("matplotlib")."rcParams")["legend.handletextpad"]=[0.3]
+    rc = PyDict(pyimport("matplotlib")."rcParams")
+    rc["font.family"] = "serif"
+    rc["font.size"] = 14
+    rc["xtick.major.size"] = 6
+    rc["ytick.major.size"] = 6
+    rc["xtick.minor.size"] = 6
+    rc["ytick.minor.size"] = 6
+    rc["xtick.major.width"] = 1
+    rc["ytick.major.width"] = 1
+    rc["xtick.minor.width"] = 1
+    rc["ytick.minor.width"] = 1
+    rc["lines.markeredgewidth"] = 1
+    rc["legend.numpoints"] = 1
+    rc["legend.handletextpad"] = 0.3
 end
 
 const global oiplot_colors=["black", "gold","chartreuse","blue","red", "pink","lightgray","darkorange","darkgreen","aqua",

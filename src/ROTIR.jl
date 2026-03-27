@@ -15,6 +15,7 @@ include("oiplot_spheroid.jl");
 # Re-export OITOOLS functions so users only need `using ROTIR`
 export OIdata, readoifits, readoifits_multiepochs, readfits, writefits
 export set_data_filter, filter_data
+export plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_residuals
 
 # Tessellation
 export tessellation
@@ -56,8 +57,8 @@ export binary_orbit_rel, binary_orbit_abs, binary_RV, binary_proj_plane
 
 # OI chi2 and reconstruction
 export setup_oi!, setup_polygon_ft, setup_polyflux_single, setup_polyft_single, setup_polyft_single_alt
-export observables, chi2s, mod360
-export spheroid_chi2_f, spheroid_chi2_fg, spheroid_chi2_fg_alt
+export observables, cvis_to_obs, chi2s, mod360
+export spheroid_chi2_f, spheroid_chi2_fg
 export spheroid_chi2_allepochs_fg, spheroid_chi2_allepochs_f
 export spheroid_total_variation, spheroid_crit_multiepochs_fg
 export spheroid_l2_fg, spheroid_harmon_bias_fg, spheroid_regularization
@@ -66,7 +67,7 @@ export multires_reconstruct_oi
 export cvis_to_v2, poly_to_cvis, poly_to_flux, cvis_to_t3
 
 # Binary forward model
-export binary_phase_shift, binary_cvis, binary_chi2_f, orbit_to_rotir_offset
+export binary_phase_shift, binary_cvis, binary_observables, binary_chi2_f, orbit_to_rotir_offset
 
 # Soft visibility
 export sigmoid, dsigmoid, soft_visibility

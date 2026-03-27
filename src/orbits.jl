@@ -219,9 +219,9 @@ function binary_RV(bparameters, tepoch::Union{Float64, Vector{Float64}}; K1::Flo
     e = bparameters.e;
     υ = compute_true_anomaly(bparameters, tepoch)
     # Primary uses ω+π (its own argument of periapsis)
-    Vrad1 = γ + K1 * (cos.(υ .+ (ω .+ pi)) .+ e * cos(ω .+ pi))
+    Vrad1 = γ .+ K1 .* (cos.(υ .+ (ω + pi)) .+ e * cos(ω + pi))
     # Secondary uses ω directly
-    Vrad2 = γ + K2 * (cos.(υ .+ ω) .+ e * cos(ω))
+    Vrad2 = γ .+ K2 .* (cos.(υ .+ ω) .+ e * cos(ω))
     return Vrad1, Vrad2
 end
 

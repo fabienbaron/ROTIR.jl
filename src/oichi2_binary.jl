@@ -57,14 +57,23 @@ function binary_cvis(x1, star1, x2, star2, phase_shift)
 end
 
 """
+    binary_observables(x1, star1, x2, star2, data, phase_shift) -> (v2, t3amp, t3phi)
+
+Compute model observables (V2, T3amp, T3phi) for a binary system.
+Uses `cvis_to_obs` (shared with single-star path) for the cvis→observables step.
+"""
+function binary_observables(x1, star1, x2, star2, data, phase_shift)
+    cvis = binary_cvis(x1, star1, x2, star2, phase_shift)
+    return cvis_to_obs(cvis, data)
+end
+
+"""
     binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose=false) -> Float
 
 Compute chi-squared for a binary model against interferometric data.
 """
 function binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose::Bool=false)
-    cvis = binary_cvis(x1, star1, x2, star2, phase_shift)
-    v2_model = cvis_to_v2(cvis, data.indx_v2)
-    _, t3amp_model, t3phi_model = cvis_to_t3(cvis, data.indx_t3_1, data.indx_t3_2, data.indx_t3_3)
+    v2_model, t3amp_model, t3phi_model = binary_observables(x1, star1, x2, star2, data, phase_shift)
     chi2_v2 = sum(abs2, (v2_model .- data.v2) ./ data.v2_err)
     chi2_t3amp = sum(abs2, (t3amp_model .- data.t3amp) ./ data.t3amp_err)
     chi2_t3phi = sum(abs2, mod360(t3phi_model .- data.t3phi) ./ data.t3phi_err)

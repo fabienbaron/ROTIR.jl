@@ -52,10 +52,12 @@ star2_params = (
 )
 
 # Binary orbital parameters (starparameters struct required by binaryparameters)
-star1p = starparameters(star1_params.radius, star1_params.tpole, 0.0, 3, 0.15, 0.0, 0.205, 0.0, 0.0, 0.0, 0.0, 100.0)
-star2p = starparameters(star2_params.radius, star2_params.tpole, 0.0, 3, 0.15, 0.0, 0.205, 0.0, 0.0, 0.0, 0.0, 100.0)
+# Fields: rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta_vZ, B_rot, inclination, position_angle, rotation_offset, rotation_period
+star1p = starparameters(0.93/2, 25300.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, 0.0, 0.0, 0.0, 100.0)
+star2p = starparameters(0.57/2, 20585.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, 0.0, 0.0, 0.0, 100.0)
 
 # Orbital elements from Aufdenberg+2015 / old demos
+# omega = argument of periapsis of the *relative orbit* (= secondary's, astrometric convention)
 bparams = binaryparameters(star1p, star2p,
     77.0,          # d: distance (pc)
     116.0,         # i: orbital inclination (degrees; >90 = retrograde)
@@ -99,6 +101,7 @@ tmap2 = parametric_temperature_map(star2_params, stars2[1])
 println("\n=== Binary Forward Model ===")
 total_chi2 = 0.0
 offsets = zeros(nepochs, 2)
+model_obs = Vector{NamedTuple}(undef, nepochs)
 
 for i in 1:nepochs
     # Convert MJD to JD for orbital computation
@@ -111,15 +114,19 @@ for i in 1:nepochs
     # Compute phase shift for this epoch's UV coverage
     phase = binary_phase_shift(data[i].uv, offset_x, offset_y)
 
+    # Compute model observables
+    v2_model, t3amp_model, t3phi_model = binary_observables(tmap1, stars1[i], tmap2, stars2[i], data[i], phase)
+    model_obs[i] = (v2=v2_model, t3amp=t3amp_model, t3phi=t3phi_model, visamp=Float64[], visphi=Float64[])
+
     # Compute chi2
-    chi2_epoch = binary_chi2_f(tmap1, stars1[i], tmap2, stars2[i], data[i], phase, verbose=true)
-    total_chi2 += chi2_epoch
+    chi2_epoch = binary_chi2_f(tmap1, stars1[i], tmap2, stars2[i], data[i], phase)
+    global total_chi2 += chi2_epoch
 
     sep = sqrt(offset_x^2 + offset_y^2)
-    println("Epoch $i (MJD $(observed_mjds[i])): offset=($(round(offset_x,digits=3)), $(round(offset_y,digits=3))) mas, sep=$(round(sep,digits=3)) mas, chi2=$chi2_epoch")
+    println("Epoch $i (MJD $(observed_mjds[i])): sep=$(round(sep,digits=3)) mas, chi2r=$(round(chi2_epoch/(data[i].nv2+data[i].nt3amp+data[i].nt3phi), digits=2))")
 end
 ndata_total = sum(d.nv2 + d.nt3amp + d.nt3phi for d in data)
-println("\nTotal chi2 = $total_chi2, reduced = $(total_chi2/ndata_total)")
+println("\nTotal chi2 = $(round(total_chi2, digits=1)), reduced = $(round(total_chi2/ndata_total, digits=2))")
 
 # =============================================================================
 # 5. PLOT: ORBITAL DIAGRAM
@@ -160,31 +167,14 @@ tight_layout()
 data_rv1 = readdlm("./data/all_rv_1_ORIG.txt")
 data_rv2 = readdlm("./data/all_rv_2_ORIG.txt")
 
-K1 = 123.9  # km/s
-K2 = 198.8  # km/s
-gamma = 0.0 # systemic velocity (km/s)
-
-phases_plot = collect(range(0, 1, length=500))
-tepochs_rv = bparams.T0 .+ phases_plot .* bparams.P
-rv1_model, rv2_model = binary_RV(bparams, tepochs_rv, K1=K1, K2=K2, γ=gamma)
-
-phi1 = mod.(data_rv1[:,1] .- bparams.T0, bparams.P) ./ bparams.P
-phi2 = mod.(data_rv2[:,1] .- bparams.T0, bparams.P) ./ bparams.P
-
-fig2, ax2 = subplots(1, 1, figsize=(10, 6))
-ax2.plot(phases_plot, rv1_model, "b-", linewidth=2, label="Primary model")
-ax2.plot(phases_plot, rv2_model, "r-", linewidth=2, label="Secondary model")
-ax2.scatter(phi1, data_rv1[:,2], color="blue", marker="o", s=30, label="Primary data", zorder=5)
-ax2.scatter(phi2, data_rv2[:,2], color="red", marker="s", s=30, label="Secondary data", zorder=5)
-ax2.set_xlabel("Orbital Phase")
-ax2.set_ylabel("Radial Velocity (km/s)")
-ax2.set_xlim(0, 1)
-ax2.legend()
-ax2.set_title("Spica Radial Velocities")
-ax2.grid(true, alpha=0.3)
-tight_layout()
+plot_rv(bparams, K1=123.9, K2=198.8, γ=0.0,
+    rv_data1=data_rv1, rv_data2=data_rv2, figtitle="Spica Radial Velocities")
 
 # =============================================================================
-# 7. PLOT: V2 AND T3PHI MODEL VS DATA
+# 7. PLOT: V2 AND T3PHI MODEL VS DATA (per epoch)
 # =============================================================================
-# Use OITOOLS plot_vs_model() to do that -- if does not exist, need to implement in OITOOLS 
+for i in 1:nepochs
+    plot_residuals(data[i], model_obs[i], figsize=(12, 8))
+    suptitle("Epoch $i — MJD $(observed_mjds[i])", fontsize=14)
+    tight_layout(rect=[0, 0, 1, 0.96])
+end
