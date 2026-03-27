@@ -28,7 +28,8 @@ jobs:
             Pkg.Registry.add(RegistrySpec(url="https://github.com/emmt/EmmtRegistry"))
             Pkg.add(url="https://github.com/fabienbaron/OITOOLS.jl.git")
             Pkg.develop(PackageSpec(path=pwd()))
-            Pkg.instantiate()'
+            Pkg.instantiate()
+            Pkg.build("PyCall")'
       - name: Build and deploy docs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
