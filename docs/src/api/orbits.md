@@ -21,6 +21,12 @@ computes positions, separations, and radial velocities.
 | `binary_orbit_abs(bparams, tepoch)` | Absolute orbit of both components w.r.t. center of mass: returns `(x1, y1, z1, x2, y2, z2)` |
 | `binary_proj_plane(bparams, tepochs)` | Project orbit into observer plane: returns `(x, y, rho, theta)` |
 
+## Coordinate conversion
+
+| Function | Description |
+|----------|-------------|
+| `orbit_to_rotir_offset(bparams, tepoch)` | Convert orbital position (North, East) to ROTIR's (West, North) projected frame; returns `(offset_x, offset_y)` in mas |
+
 ## Separation
 
 | Function | Description |

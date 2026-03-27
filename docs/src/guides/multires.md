@@ -73,21 +73,21 @@ tessels = tessellation_healpix(n)
 stars = create_star_multiepochs(tessels, star_params, tepochs)
 tmap = parametric_temperature_map(star_params, stars[1])
 setup_oi!(data, stars)
-regularizers = [["tv2", 1e-5, tv_neighbours_healpix(n), 1:length(tmap)]]
+regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap)]]
 tmap = image_reconstruct_oi(tmap, data, stars; maxiter=500, regularizers=regularizers)
 
 # Upsample to level n=3
 tmap, stars = upsample_map_stars(tmap, stars, star_params, tepochs)
 setup_oi!(data, stars)
 n = 3
-regularizers = [["tv2", 1e-5, tv_neighbours_healpix(n), 1:length(tmap)]]
+regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap)]]
 tmap = image_reconstruct_oi(tmap, data, stars; maxiter=500, regularizers=regularizers)
 
 # Upsample to level n=4
 tmap, stars = upsample_map_stars(tmap, stars, star_params, tepochs)
 setup_oi!(data, stars)
 n = 4
-regularizers = [["tv2", 1e-5, tv_neighbours_healpix(n), 1:length(tmap)]]
+regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap)]]
 tmap = image_reconstruct_oi(tmap, data, stars; maxiter=500, regularizers=regularizers)
 ```
 

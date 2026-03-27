@@ -95,7 +95,7 @@ function draw_rotation_axis(ax, star; arrow_frac=0.3, color="black", linewidth=1
     end
     ax.annotate("", xy=(-(north_tip[1]+offset_west), north_tip[2]+offset_north),
         xytext=(-(north[1]+offset_west), north[2]+offset_north),
-        arrowprops=Dict("arrowstyle" => "-|>", "color" => color, "lw" => linewidth),
+        arrowprops=Dict("arrowstyle" => "-|>", "color" => color, "lw" => linewidth, "linestyle" => "--"),
         zorder=6)
 end
 

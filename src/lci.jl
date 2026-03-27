@@ -43,7 +43,7 @@ function setup_regularization_matrices(star_epoch_geom)
   A[visible_pixels].=1.0/length(visible_pixels); # A*x    <=> mean(x[visible_pixels])
   C = (Diagonal(ones(npix)).-A); ;# C*x    <=> x.-mean(x[visible_pixels])
   # Total variation
-  neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse = tv_neighbours_healpix(npix2n(npix));
+  neighbors,south_neighbors,west_neighbors,south_neighbors_reverse,west_neighbors_reverse = tv_neighbors_healpix(npix2n(npix));
   ∇s = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, south_neighbors, -1.0);
   ∇w = sparse(1:npix, 1:npix, 1.0) + sparse(1:npix, west_neighbors, -1.0);
   return C, ∇s, ∇w

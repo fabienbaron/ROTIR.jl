@@ -450,7 +450,7 @@ function multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4,
       tmap = vec(repeat(tmap, 1, 4)')  # upsample from previous level
     end
     setup_oi!(data, stars)
-    regularizers = [[reg_type, reg_weight, tv_neighbours_healpix(n), 1:length(tmap)]]
+    regularizers = [[reg_type, reg_weight, tv_neighbors_healpix(n), 1:length(tmap)]]
     if verbose
       println("Multi-resolution: HEALPix level n=$n, npix=$(nside2npix(2^n))")
     end

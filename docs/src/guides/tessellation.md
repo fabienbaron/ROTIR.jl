@@ -64,7 +64,7 @@ HEALPix pixels have 8 neighbors (6 or 7 at special locations). The neighbor
 structure is used for total variation regularization:
 
 ```julia
-tv_info = tv_neighbours_healpix(n)
+tv_info = tv_neighbors_healpix(n)
 ```
 
 This returns a tuple containing the sparse difference matrix and Hessian used
@@ -72,7 +72,7 @@ by the TV regularization terms. For reconstructions where some pixels are never
 visible, use:
 
 ```julia
-tv_info = tv_neighbours_healpix_visible(n, stars)
+tv_info = tv_neighbors_healpix_visible(n, stars)
 ```
 
 This excludes invisible pixels from the regularization, preventing artifacts at
@@ -95,7 +95,7 @@ All rings have the same number of pixels (`nphi`), giving a total of
 Neighbor information for total variation:
 
 ```julia
-tv_info = tv_neighbours_longlat(ntheta, nphi)
+tv_info = tv_neighbors_longlat(ntheta, nphi)
 ```
 
 ### Spots

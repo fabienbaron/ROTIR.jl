@@ -32,10 +32,10 @@ tmap_start = 1000*ones(Float32, stars[1].npix)
 setup_oi!(data, stars)
 
 # # SETUP REGULARIZATION
-# regularizers_1 = [["tv", 0.1, tv_neighbours_healpix(n),1:length(tmap_start)]];
+# regularizers_1 = [["tv", 0.1, tv_neighbors_healpix(n),1:length(tmap_start)]];
 # tmap_1 =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 500, lower=1000, regularizers = regularizers_1, verbose = true);
 
-# regularizers_2 = [["tv", 0.1, tv_neighbours_healpix_visible(n, stars),1:length(tmap_start)]];
+# regularizers_2 = [["tv", 0.1, tv_neighbors_healpix_visible(n, stars),1:length(tmap_start)]];
 # tmap_2 =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 500, lower=1000, regularizers = regularizers_2, verbose = true);
 
 # plot2d(tmap_1, stars[1])

@@ -39,7 +39,7 @@ tmap_start = parametric_temperature_map(star_params, stars[1])
 # --- 4. Regularization -------------------------------------------------------
 # TV2 (quadratic total variation) encourages smooth maps while preserving
 # large-scale structure — good for resolving spots on a slow rotator.
-regularizers = [["tv2", 1e-4, tv_neighbours_healpix(n), 1:length(tmap_start)]]
+regularizers = [["tv2", 1e-4, tv_neighbors_healpix(n), 1:length(tmap_start)]]
 
 # --- 5. Reconstruct ----------------------------------------------------------
 tmap = image_reconstruct_oi(tmap_start, data, stars,

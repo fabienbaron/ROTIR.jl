@@ -31,7 +31,7 @@ export plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_resid
 export tessellation
 export tessellation_healpix, tessellation_latlong
 export nside2npix, npix2n
-export healpix_round_star, healpix_ellipsoid_star, tv_neighbours_healpix, tv_neighbours_healpix_visible
+export healpix_round_star, healpix_ellipsoid_star, tv_neighbors_healpix, tv_neighbors_healpix_visible
 export latlong_round_star, latlong_ellipsoid_star, tv_neighbors_longlat, latlong_rochelobe
 export upsample_map_stars, downsample_map_stars
 
@@ -98,7 +98,7 @@ export plot3d
 export plot_mollweide
 export draw_compass, draw_rotation_axis, draw_rotation_arrow, draw_graticules
 export plot_rv, plot2d_binary
-export sometimes_visible, never_visible, invisible_neighbours, with_invisible_neighbours, without_invisible_neighbours
+export sometimes_visible, never_visible, invisible_neighbors, with_invisible_neighbors, without_invisible_neighbors
 
 # Utilities
 export make_circ_spot, make_spot_move

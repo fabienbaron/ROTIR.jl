@@ -85,16 +85,16 @@ Parameters are passed as a `NamedTuple`. Required fields depend on `surface_type
 | `update_roche_radii(tessels, params, D)` | Solve Roche potential for radii at all vertices |
 | `get_surface_potential(rpole, D, q, async_ratio)` | Potential at the pole |
 | `update_roche_geom(star, params, D)` | Full Roche geometry update |
-| `compute_potential_primary(r, D, theta, phi, q, async)` | Roche potential and derivatives for primary |
-| `compute_potential_secondary(r, D, theta, phi, q, async)` | Roche potential and derivatives for secondary |
-| `solve_radius(r0, pot, D, theta, phi, q, async, func)` | Find r such that potential = pot (Halley's method) |
-| `solve_R_L1(r0, D, q, async, func)` | Find L1 Lagrange point |
-| `compute_gravity_primary(r, theta, phi, D, q, async)` | Local gravity vector for primary |
-| `compute_gravity_secondary(r, theta, phi, D, q, async)` | Local gravity vector for secondary |
+| `compute_potential_primary(r, D, theta, phi, q, async_ratio)` | Roche potential and derivatives for primary |
+| `compute_potential_secondary(r, D, theta, phi, q, async_ratio)` | Roche potential and derivatives for secondary |
+| `solve_radius(r0, pot, D, theta, phi, q, async_ratio, func)` | Find r such that potential = pot (Halley's method) |
+| `solve_R_L1(r0, D, q, async_ratio, func)` | Find L1 Lagrange point |
+| `compute_gravity_primary(r, theta, phi, D, q, async_ratio)` | Local gravity vector for primary |
+| `compute_gravity_secondary(r, theta, phi, D, q, async_ratio)` | Local gravity vector for secondary |
 | `radius_equivalent_eggleton(q)` | Eggleton (1983) Roche lobe radius approximation |
 | `radius_leahy(q)` | Leahy & Leahy (2015) Roche lobe radius |
-| `filllout_to_rpole(fillout, D, q, async)` | Convert fillout factor to polar radius |
-| `rpole_to_fillout(rpole, D, q, async)` | Convert polar radius to fillout factor |
+| `fillout_to_rpole(fillout, D, q, async_ratio)` | Convert fillout factor to polar radius |
+| `rpole_to_fillout(rpole, D, q, async_ratio)` | Convert polar radius to fillout factor |
 | `max_rpole(D, params)` | Maximum polar radius before L1 overflow |
 
 ## Rotation
@@ -110,6 +110,6 @@ Parameters are passed as a `NamedTuple`. Required fields depend on `surface_type
 |----------|-------------|
 | `sometimes_visible(stars)` | Pixels visible in at least one epoch |
 | `never_visible(stars)` | Pixels never visible across all epochs |
-| `invisible_neighbours(n, stars)` | Invisible pixels adjacent to visible ones |
-| `with_invisible_neighbours(n, stars)` | Visible pixels that border invisible |
-| `without_invisible_neighbours(n, stars)` | Interior visible pixels |
+| `invisible_neighbors(n, stars)` | Invisible pixels adjacent to visible ones |
+| `with_invisible_neighbors(n, stars)` | Visible pixels that border invisible |
+| `without_invisible_neighbors(n, stars)` | Interior visible pixels |

@@ -83,7 +83,7 @@ setup_oi!(data, stars)
 
 # Set up quadratic total-variation regularization to enforce smooth temperature maps
 # while preserving sharp boundaries; weight 1e-5 applied to all pixels
-regularizers = [["tv2", 1e-5, tv_neighbours_healpix(3), 1:length(tmap_start)]]
+regularizers = [["tv2", 1e-5, tv_neighbors_healpix(3), 1:length(tmap_start)]]
 
 # Run the reconstruction: iteratively adjusts pixel temperatures to fit
 # the interferometric observables (V², closure phases, triple amplitudes)

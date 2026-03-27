@@ -427,7 +427,7 @@ for (phase, label) in [(0.0, "periastron"), (0.25, ""), (0.5, "apastron"), (0.75
     ax2.add_patch(c_sec)
     ax2.plot(east, north, "ko", markersize=5, zorder=6)
     if label != ""
-        ax2.annotate(label, (east, north), textcoords="offset points", xytext=(8, 8), fontsize=9)
+        ax2.annotate(label, (east, north), textcoords="offset points", xytext=(8, 8), fontsize=9, zorder=10)
     end
 end
 
@@ -449,8 +449,8 @@ orbital_text = join([
     L"q = 0.6188",
     L"T_0 = 2454189.4 \; \mathrm{JD}",
 ], "\n")
-ax2.text(0.98, 0.98, orbital_text, transform=ax2.transAxes,
-    fontsize=11, verticalalignment="top", horizontalalignment="right",
+ax2.text(0.02, 0.98, orbital_text, transform=ax2.transAxes,
+    fontsize=11, verticalalignment="top", horizontalalignment="left",
     bbox=Dict("boxstyle" => "round,pad=0.4", "facecolor" => "wheat", "alpha" => 0.85),
     family="serif", zorder=10)
 

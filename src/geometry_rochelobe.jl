@@ -64,7 +64,7 @@ function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secon
 end
 end
 
-function filllout_to_rpole(fillout, D, q, async_ratio; secondary = false)
+function fillout_to_rpole(fillout, D, q, async_ratio; secondary = false)
     # Note we expect calls to this with q = M2/M1 for primary, and = M1/M2 for secondary
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     # Finds which (dimensionless) rpole corresponds to the fillout
@@ -93,7 +93,7 @@ function max_rpole(D, roche_parameters; secondary = false)
     a = roche_parameters.a;
     q = roche_parameters.q;
     async_ratio = roche_parameters.rotation_period/roche_parameters.P
-    return filllout_to_rpole(1.0, D, q, async_ratio)*a;
+    return fillout_to_rpole(1.0, D, q, async_ratio)*a;
 end
 
 

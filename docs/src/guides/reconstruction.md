@@ -53,7 +53,7 @@ setup_oi!(data, stars)
 
 # Set up quadratic total-variation regularization to enforce smooth maps
 # Format: ["type", weight, neighbor_info, pixel_range]
-regularizers = [["tv2", 1e-5, tv_neighbours_healpix(n), 1:length(tmap_start)]]
+regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap_start)]]
 
 # Run the reconstruction: iteratively adjusts pixel temperatures to fit
 # the interferometric observables (V², closure phases, triple amplitudes)
@@ -74,8 +74,8 @@ is a vector specifying the type, weight, and any additional arguments:
 | `"mean"` | `["mean", mu]` | Mean constraint |
 | `"bias"` | `["bias", mu, B]` | Harmonic bias for asymmetric brightening |
 
-The `tv_info` argument comes from `tv_neighbours_healpix(n)` or
-`tv_neighbours_longlat(ntheta, nphi)`.
+The `tv_info` argument comes from `tv_neighbors_healpix(n)` or
+`tv_neighbors_longlat(ntheta, nphi)`.
 
 ## Evaluating the fit
 
@@ -220,7 +220,7 @@ tmap_start = parametric_temperature_map(star_params, stars[1])
 
 # Quadratic total-variation regularization — use a higher weight than multi-epoch
 # since a single snapshot has sparser UV coverage and needs more regularization
-regularizers = [["tv2", 1e-4, tv_neighbours_healpix(n), 1:length(tmap_start)]]
+regularizers = [["tv2", 1e-4, tv_neighbors_healpix(n), 1:length(tmap_start)]]
 
 # Run the reconstruction
 tmap = image_reconstruct_oi(tmap_start, data, stars;

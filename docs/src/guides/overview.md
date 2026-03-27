@@ -73,7 +73,7 @@ tmap_start = parametric_temperature_map(star_params, stars[1])
 setup_oi!(data, stars)
 
 # 7. Set up regularization
-regularizers = [["tv2", 1e-5, tv_neighbours_healpix(n), 1:length(tmap_start)]]
+regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap_start)]]
 
 # 8. Reconstruct
 tmap = image_reconstruct_oi(tmap_start, data, stars;

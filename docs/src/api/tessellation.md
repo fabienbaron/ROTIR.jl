@@ -14,8 +14,8 @@
 | `tessellation_healpix(n; T=Float64)` | Create HEALPix tessellation with nside=2^n, npix=12*nside^2 |
 | `nside2npix(nside)` | Convert nside to number of pixels |
 | `npix2n(npix)` | Convert npix to resolution parameter n |
-| `tv_neighbours_healpix(n; T=Float64)` | Sparse difference matrix and Hessian for TV regularization |
-| `tv_neighbours_healpix_visible(n, stars; T=Float64)` | TV neighbors excluding always-invisible pixels |
+| `tv_neighbors_healpix(n; T=Float64)` | Sparse difference matrix and Hessian for TV regularization |
+| `tv_neighbors_healpix_visible(n, stars; T=Float64)` | TV neighbors excluding always-invisible pixels |
 | `upsample_map_stars(tmap, stars, star_params, tepochs)` | Double resolution (each pixel splits into 4) |
 | `downsample_map_stars(tmap, stars, star_params, tepochs)` | Halve resolution (average groups of 4) |
 
@@ -36,5 +36,5 @@
 | `pix2vec_nest(nside, ipix)` | Pixel index to 3D unit vectors (center + 4 vertices) |
 | `ang2pix_nest(nside, theta, phi)` | (colatitude, longitude) to pixel index |
 | `vec2ang(vector)` | 3D vector to (colatitude, longitude) |
-| `neighbours_nest(nside, ipix)` | Find 8 neighbors of a pixel in nested scheme |
-| `all_neighbours_nest(n)` | Neighbors for all pixels |
+| `neighbors_nest(nside, ipix)` | Find 8 neighbors of a pixel in nested scheme |
+| `all_neighbors_nest(n)` | Neighbors for all pixels |

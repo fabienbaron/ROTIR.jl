@@ -318,28 +318,28 @@ function sometimes_visible(star_epoch_geom)
   return findall(sometimes.==true)
 end
 
-function invisible_neighbours(n, stars)
+function invisible_neighbors(n, stars)
   # all invisible tessels that neighbor visible tessels
   # this should be all tessels just beyond the limb 
   # they will affect TV values!
-  nlist = tv_neighbours_healpix(n)[1]
+  nlist = tv_neighbors_healpix(n)[1]
   return intersect(unique(vcat(nlist[sometimes_visible(stars)]...)), never_visible(stars))
 end
 
-function with_invisible_neighbours(n, stars)
+function with_invisible_neighbors(n, stars)
   # all visible tessels who have at least an invisible neighbor
   # they should be the limb tessels
-  nlist = tv_neighbours_healpix(n)[1]
-  return intersect(unique(vcat(nlist[invisible_neighbours(n, stars)]...)),sometimes_visible(stars) )
+  nlist = tv_neighbors_healpix(n)[1]
+  return intersect(unique(vcat(nlist[invisible_neighbors(n, stars)]...)),sometimes_visible(stars) )
   return 
 end
 
-function without_invisible_neighbours(n, stars)
+function without_invisible_neighbors(n, stars)
   # all visible tessels who have at least an invisible neighbor
   # they should be the limb tessels
-  nlist = tv_neighbours_healpix(n)[1]
+  nlist = tv_neighbors_healpix(n)[1]
   npix= length(nlist)
-  invisible = invisible_neighbours(n, stars)
+  invisible = invisible_neighbors(n, stars)
   return findall(.!prod.([nlist[i] .∉ Ref(invisible) for i=1:npix]))
 end
 

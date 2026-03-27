@@ -176,7 +176,7 @@ Two ways to specify the surface:
    A value of 1.0 means the star exactly fills its Roche lobe.
 
 Conversion functions:
-- `filllout_to_rpole(fillout, D, q, async_ratio)`
+- `fillout_to_rpole(fillout, D, q, async_ratio)`
 - `rpole_to_fillout(rpole, D, q, async_ratio)`
 - `max_rpole(D, roche_parameters)` -- maximum polar radius (L1 point)
 

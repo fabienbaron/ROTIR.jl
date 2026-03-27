@@ -115,6 +115,16 @@ is too large to fit in memory.
 | `spheroid_l2_fg(x, g, tvinfo)` | Quadratic total variation (TV2) |
 | `spheroid_harmon_bias_fg(x, g, B)` | Harmonic bias regularization |
 
+## Binary forward model
+
+| Function | Description |
+|----------|-------------|
+| `orbit_to_rotir_offset(bparams, tepoch_jd)` | Convert orbital position to ROTIR's (West, North) projected frame; returns `(offset_x, offset_y)` in mas |
+| `binary_phase_shift(uv, offset_x, offset_y)` | Per-baseline phase shift from binary separation |
+| `binary_cvis(x1, star1, x2, star2, phase_shift)` | Combined complex visibilities for both stars, flux-normalized |
+| `binary_observables(x1, star1, x2, star2, data, phase_shift)` | Returns `(v2, t3amp, t3phi)` for a binary model |
+| `binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose)` | Binary chi-squared (value only) |
+
 ## Parametric fitting
 
 | Function | Description |

@@ -24,9 +24,9 @@ function tessellation_healpix(n::Int64; T=Float32)
   return tessellation(0, npix, unit_xyz, unit_spherical);
 end
 
-function all_neighbours_nest(n)
+function all_neighbors_nest(n)
 nside = 2^n;
-neighbors = [neighbours_nest(nside, i) for i=1:nside2npix(nside)];
+neighbors = [neighbors_nest(nside, i) for i=1:nside2npix(nside)];
 return neighbors
 end
 
@@ -558,15 +558,15 @@ end
   return ipnest
   end
   
-  function neighbours_nest(nside::Int64, ipix::Int64)
+  function neighbors_nest(nside::Int64, ipix::Int64)
     #       Find nearest neighbors pixels in Nested scheme
     #       This is a simplified version -- nside > 1 and nside < 2^13
-    #       The neighbours are ordered in the following way:
+    #       The neighbors are ordered in the following way:
     #       First pixel is the one to the south (the one west of the south
     #        direction is taken for the pixels which don't have a southern neighbour). From
-    #       then on the neighbours are ordered in the clockwise direction
+    #       then on the neighbors are ordered in the clockwise direction
     #       (from outside the sphere) about the pixel with number ipix.
-    #       number of neighbours: usually 8, sometimes 7 (for 8 pixels) or 6 (for Nside=1)
+    #       number of neighbors: usually 8, sometimes 7 (for 8 pixels) or 6 (for Nside=1)
     npix = nside2npix(nside);
     ipix0 = ipix-1; # we remove one for julia <-> IDL
     nsidesq = div(npix, 12);
@@ -928,11 +928,11 @@ end
 
 using SparseArrays
 
-function tv_neighbours_healpix(n;T=Float32)
+function tv_neighbors_healpix(n;T=Float32)
 # COO (coordinate) construction — O(nnz) instead of O(npix × nnz)
 # Uses triplet accumulation followed by a single sparse() call,
 # avoiding costly element-wise CSC insertion.
-neighbors = all_neighbours_nest(n)
+neighbors = all_neighbors_nest(n)
 npix = nside2npix(2^n)
 
 # Pre-count total entries: each pixel has nn off-diagonals + 1 diagonal
@@ -961,10 +961,10 @@ return neighbors,[],[],[],[], ∇, H
 end
 
 
-function tv_neighbours_healpix_visible(n, stars;T=Float32)
-  # Same as the default tv_neighbours but
+function tv_neighbors_healpix_visible(n, stars;T=Float32)
+  # Same as the default tv_neighbors but
   # here the difference matrix is set so that only visible pixels are regularized
-  neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
+  neighbors = all_neighbors_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]
   invis = never_visible(stars)
   vis = sometimes_visible(stars)
 

@@ -68,13 +68,13 @@ on the sky plane. East is to the left following the astronomical convention.
 To render the binary on the sky at a specific epoch, use `plot2d_binary`:
 
 ```julia
-# Create star geometries
+# Create star geometries (using star1, star2 from above)
 tessels1 = tessellation_healpix(3)
 tessels2 = tessellation_healpix(2)
-star1_geom = create_star(tessels1, star1_params, 0.0)
-star2_geom = create_star(tessels2, star2_params, 0.0)
-tmap1 = parametric_temperature_map(star1_params, star1_geom)
-tmap2 = parametric_temperature_map(star2_params, star2_geom)
+star1_geom = create_star(tessels1, star1, 0.0)
+star2_geom = create_star(tessels2, star2, 0.0)
+tmap1 = parametric_temperature_map(star1, star1_geom)
+tmap2 = parametric_temperature_map(star2, star2_geom)
 
 # Plot at a specific Julian Date
 fig, ax = plot2d_binary(tmap1, tmap2, star1_geom, star2_geom, bparams, tepoch_jd;

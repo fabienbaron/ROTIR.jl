@@ -516,7 +516,7 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
         setup_oi!(data, stars)
 
         # Step 2: Optimize xmap with fixed geometry
-        regularizers = [["tv2", reg_weight, tv_neighbours_healpix(n), 1:npix]]
+        regularizers = [["tv2", reg_weight, tv_neighbors_healpix(n), 1:npix]]
         xmap = image_reconstruct_oi(xmap, data, stars, maxiter=maxiter_xmap,
                                      regularizers=regularizers, verbose=verbose)
 
