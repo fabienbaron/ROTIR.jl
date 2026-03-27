@@ -16,6 +16,9 @@ jobs:
         run: |
           julia --project=docs -e '
             using Pkg
+            Pkg.Registry.add("General")
+            Pkg.Registry.add(RegistrySpec(url="https://github.com/emmt/EmmtRegistry"))
+            Pkg.add(url="https://github.com/fabienbaron/OITOOLS.jl.git")
             Pkg.develop(PackageSpec(path=pwd()))
             Pkg.instantiate()'
       - name: Build and deploy docs
