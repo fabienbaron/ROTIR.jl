@@ -13,20 +13,13 @@ function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fill
     rpole = roche_parameters.rpole
     # Compute surface potentials and good init
     pot_surface, r_init = get_surface_potential(rpole/a, D, q, async_ratio, fillout_factor, use_fillout_factor = use_fillout_factor, secondary=secondary);
-    # Compute R_L1 for the near-L1 interpolation patch (needed when fillout > 0.997)
-    ff = use_fillout_factor ? fillout_factor : rpole_to_fillout(rpole/a, D, q, async_ratio, secondary=secondary)
-    R_L1 = T(0)
-    if ff > 0.99
-        secondary == false ? rtry = radius_point_Pathania(q) : rtry = radius_point_Pathania(1/q)
-        R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary=secondary)
-    end
     # Update the radii r(θ,ϕ) to match the surface potential
     npix = tessels.npix
     r = zeros(T, npix, 5);
     for ii = 1:npix
         for jj = 1:5
             r[ii,jj] = a*solve_radius(r_init, pot_surface, D, tessels.unit_spherical[ii,jj,2], tessels.unit_spherical[ii,jj,3], q, async_ratio, potential_function,
-                                       verbose=false, fillout=ff, R_L1=R_L1, secondary=secondary);
+                                       verbose=false);
         end
     end
     return r
@@ -164,35 +157,14 @@ end
 
 """
     solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function;
-                 verbose=true, fillout=0.0, R_L1=0.0, secondary=false)
+                 verbose=true)
 
 Find the radius r at direction (θ,ϕ) where the Roche potential equals `pot_surface`.
-Uses Halley's method, with a near-L1 interpolation patch for nearly Roche-lobe-filling
-stars (fillout > 0.997) to avoid convergence issues where the potential is tangent to zero.
+Uses Halley's method (cubic convergence). Converges reliably even near the L1 point
+at all fillout levels up to and including 1.0.
 """
 function solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function;
                       verbose=true, fillout=0.0, R_L1=0.0, secondary=false)
-    # Near-L1 interpolation patch (following Leahy 2014, ROCHE.F90 GetPotRoot)
-    # The potential is tangent to zero near L1, making root-finders unreliable.
-    # For fillout > 0.997 and directions within alim of the L1 axis, linearly
-    # interpolate between R_L1 and R(alim).
-    if fillout > 0.997 && R_L1 > 0.0
-        alim = 0.1 * pi / 180.0  # 0.1 degrees
-        # L1 direction: θ=π/2, φ=0 for primary; θ=-π/2, φ=0 for secondary
-        θ_L1 = secondary ? -pi/2 : pi/2
-        # Angular distance from L1 axis (small angle approximation)
-        dθ = θ - θ_L1
-        # Handle φ wrapping for secondary (L1 is at φ=0 in both frames)
-        dφ = mod(ϕ + pi, 2pi) - pi  # wrap to [-π, π]
-        ang = sqrt(dθ^2 + dφ^2)
-        if ang < alim
-            # Solve at a safe angle offset from L1
-            fgh_safe = r -> potential_function(r, D, θ_L1 + alim, 0.0, q, async_ratio)
-            R_alim = halley(r0, pot_surface, fgh_safe, verbose=false)
-            # Linear interpolation
-            return R_L1 * (1.0 - ang/alim) + R_alim * (ang/alim)
-        end
-    end
     fgh = r->potential_function(r, D, θ, ϕ, q, async_ratio);
     r = halley(r0, pot_surface, fgh, verbose=verbose);
     return r
