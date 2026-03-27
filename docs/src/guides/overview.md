@@ -107,3 +107,10 @@ image_reconstruct_oi()    -->  temperature map (Vector, length npix)
     v
 plot2d / plot_mollweide   -->  visualization
 ```
+
+## Example output
+
+A Mollweide projection of the gravity-darkened temperature map for a rapid
+rotator:
+
+![Mollweide output](../assets/plot_mollweide.png)

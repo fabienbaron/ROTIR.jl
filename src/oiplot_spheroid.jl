@@ -574,11 +574,11 @@ end
 
 function plot_mollweide(tmap, star; kwargs...)
   if star.tessellation_type == 0
-    mollplot_temperature_healpix(tmap,kwargs...)
+    mollplot_temperature_healpix(tmap; kwargs...)
   else
     # Longitude and latitude need to be provided in kwargs
     #... or could we do otherwise and recompute from theta/phi?
-    mollplot_temperature_longlat(tmap,kwargs...)
+    mollplot_temperature_longlat(tmap; kwargs...)
   end
   return
 end

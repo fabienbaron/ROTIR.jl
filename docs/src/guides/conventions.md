@@ -1,4 +1,4 @@
-# Coordinate Conventions
+# Conventions
 
 This page documents the coordinate systems, angle definitions, and sign
 conventions used throughout ROTIR.  All conventions are consistent across
@@ -166,13 +166,9 @@ Vrad = γ + K [cos(ν + ω) + e cos(ω)]
 where `ν` is the true anomaly and `ω` the argument of periapsis (with a
 π offset between primary and secondary).
 
-## Comparison with other codes
+## Annotated example
 
-| Convention | ROTIR | ellc |
-|------------|-------|------|
-| Sky axes | East left, North up (absolute) | u, v relative to orbit (no absolute N/E) |
-| Inclination 0° | Pole-on / face-on | Edge-on (maximum eclipse) |
-| Position angle | Fixed spin-axis PA (N through E) | Phase-dependent orbital angle |
-| Ascending node Ω | Explicit parameter | Not parameterized |
-| z toward observer | +z (geometry) | +w |
-| RV positive | Receding | Receding |
+The following figure shows a sphere at inclination 45°, position angle 45°, with
+the spin axis, rotation arrow, graticules, and E/N compass all displayed:
+
+![Conventions annotated](../assets/conventions_annotated.png)

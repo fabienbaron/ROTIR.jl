@@ -10,7 +10,8 @@ end
   arg = ω*sin.(tessels.unit_spherical[:,:,2]);
   r = rpole * f_rapid_rot(arg);
   # Fix for ω sin(θ) → 0 (poles): f_rapid_rot is 0/0, limit is 1 → r = rpole
-  r[abs.(arg) .< 1e-12] .= rpole;
+  # Tolerance must exceed Float32 epsilon (~1.2e-7) to catch sin(Float32(π)) ≈ -8.7e-8
+  r[abs.(arg) .< 1e-5] .= rpole;
   # Rewrite pole radius values
   if tessels.tessellation_type==1 # Longitude/Latitude
     # Overwrite pole radius values with exact values

@@ -4,11 +4,14 @@ ROTIR discretizes the stellar surface into quadrilateral pixels using one of
 two tessellation schemes. The choice affects pixel uniformity, neighbor
 structure, and multi-resolution capabilities.
 
-## HEALPix scheme
+## HEALPix scheme (nested ordering)
 
 The HEALPix (Hierarchical Equal Area isoLatitude Pixelization) scheme divides
-the sphere into equal-area pixels arranged in a nested hierarchy. This is the
-recommended scheme for most applications.
+the sphere into equal-area pixels arranged in a nested hierarchy. ROTIR uses the
+**nested** HEALPix ordering, which arranges pixels in a hierarchical quad-tree
+structure. This enables efficient multi-resolution operations (each pixel at
+level n splits into 4 children at level n+1). This is the recommended scheme
+for most applications.
 
 ```julia
 n = 3                                   # resolution parameter
@@ -39,6 +42,21 @@ stored in the tessellation as:
 
 where `theta` is the colatitude (0 at north pole, pi at south pole) and `phi` is
 the longitude.
+
+### Visual comparison
+
+HEALPix wireframe at n=3 (768 pixels) compared with a longitude/latitude grid
+(20x40 = 800 pixels):
+
+| HEALPix (nested, n=3) | Lon/Lat (20x40) |
+|:----------------------:|:---------------:|
+| ![HEALPix wireframe](../assets/tess_healpix_wireframe.png) | ![Lon/Lat wireframe](../assets/tess_latlong_wireframe.png) |
+
+Mesh overlay showing pixel edges on a limb-darkened sphere:
+
+| HEALPix (nested, n=3) | Lon/Lat (20x40) |
+|:----------------------:|:---------------:|
+| ![HEALPix mesh](../assets/tess_healpix_mesh.png) | ![Lon/Lat mesh](../assets/tess_latlong_mesh.png) |
 
 ### Neighbors and total variation
 
@@ -90,6 +108,18 @@ tmap = make_circ_spot(tmap, ntheta, nphi, spot_radius, latitude, longitude;
                        bright_frac=0.8)
 tmap = make_spot_move(tmap, ntheta, nphi, period, B_rot, tepochs)
 ```
+
+A cool spot created with `make_circ_spot` on a lon/lat sphere:
+
+![Lon/Lat spot](../assets/tess_latlong_spot.png)
+
+### Resolution levels
+
+HEALPix resolution progression on a rapid rotator (pixel edges shown):
+
+| n=2 (192 px) | n=3 (768 px) | n=4 (3072 px) |
+|:------------:|:------------:|:-------------:|
+| ![n=2](../assets/healpix_n2.png) | ![n=3](../assets/healpix_n3.png) | ![n=4](../assets/healpix_n4.png) |
 
 ## Choosing a scheme
 

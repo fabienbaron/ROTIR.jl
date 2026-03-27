@@ -42,37 +42,78 @@ See the [installation guide](https://fabienbaron.github.io/ROTIR.jl/dev/install/
 ```julia
 using ROTIR
 
-# Load multi-epoch OIFITS data
+# Read OIFITS files — returns a 2D array: data_all[wavelength_bin, epoch]
 data_all = readoifits_multiepochs(["epoch1.oifits", "epoch2.oifits"])
+
+# Select the first wavelength bin across all epochs
 data = data_all[1, :]
+
+# Compute relative epoch times (days since first observation) for tracking rotation
 tepochs = [d.mean_mjd for d in data] .- data[1].mean_mjd
 
-# Create HEALPix tessellation and rapid rotator geometry
+# Tessellate the stellar surface using nested HEALPix with resolution level 3
+# (nside=2^3=8, giving 768 equal-area pixels — increase for finer detail)
 tessels = tessellation_healpix(3)
+
+# Define the stellar model: a rapid rotator (surface_type=2)
 star_params = (
-    surface_type=2, rpole=1.37, tpole=4800.0, ldtype=3, ld1=0.23, ld2=0.0,
-    inclination=78.0, position_angle=24.0, rotation_period=54.8,
-    beta=0.08, frac_escapevel=0.9, B_rot=0.0,
+    surface_type=2,           # 0=sphere, 1=ellipsoid, 2=rapid rotator, 3=Roche lobe
+    rpole=1.37,               # polar radius in milliarcseconds
+    tpole=4800.0,             # polar temperature in Kelvin
+    ldtype=3, ld1=0.23, ld2=0.0,  # Hestroffer power-law limb darkening
+    inclination=78.0,         # inclination in degrees (90°=edge-on)
+    position_angle=24.0,      # position angle of rotation axis on sky (degrees)
+    rotation_period=54.8,     # rotation period in days
+    beta=0.08,                # gravity-darkening exponent (T ∝ g^β: poles hotter, equator cooler)
+    frac_escapevel=0.9,       # rotational velocity as fraction of escape velocity (0–1)
+    B_rot=0.0,                # differential rotation coefficient (0=solid body)
 )
+
+# Build a projected, rotated stellar geometry for each epoch
+# (computes surface shape, normals, visible pixels, and limb darkening)
 stars = create_star_multiepochs(tessels, star_params, tepochs)
+
+# Generate initial temperature map from the von Zeipel gravity-darkening law
+# (serves as the starting point for the optimizer)
 tmap_start = parametric_temperature_map(star_params, stars[1])
+
+# Pre-compute polygon flux and Fourier transform matrices for each epoch
+# (stored in-place in the stars objects for fast χ² evaluation)
 setup_oi!(data, stars)
 
-# Reconstruct temperature map
+# Set up quadratic total-variation regularization to enforce smooth temperature maps
+# while preserving sharp boundaries; weight 1e-5 applied to all pixels
 regularizers = [["tv2", 1e-5, tv_neighbours_healpix(3), 1:length(tmap_start)]]
+
+# Run the reconstruction: iteratively adjusts pixel temperatures to fit
+# the interferometric observables (V², closure phases, triple amplitudes)
 tmap = image_reconstruct_oi(tmap_start, data, stars;
                              maxiter=500, regularizers=regularizers)
 
-# Visualize
+# Plot the visible stellar disk at each epoch (shows rotation of surface features)
 plot2d_allepochs(tmap, stars)
+
+# Plot the full surface as a Mollweide equal-area projection
 plot_mollweide(tmap, stars[1])
 ```
+
+## Gallery
+
+| Sphere | Rapid Rotator |
+|:------:|:-------------:|
+| ![Sphere](docs/src/assets/surface_sphere.png) | ![Rapid rotator](docs/src/assets/surface_rapid_rotator.png) |
+
+| Annotated plot | Mollweide projection |
+|:--------------:|:--------------------:|
+| ![Annotated](docs/src/assets/plot_decorated.png) | ![Mollweide](docs/src/assets/plot_mollweide.png) |
+
+See the [full documentation](https://fabienbaron.github.io/ROTIR.jl/dev/guides/surfaces/) for all surface types and plotting options.
 
 ## Features
 
 - **Multiple surface geometries**: spheres, triaxial ellipsoids, rapid rotators
   (centrifugally distorted), and Roche-lobe-filling stars in binaries
-- **Two tessellation schemes**: HEALPix (equal-area, hierarchical) and
+- **Two tessellation schemes**: nested HEALPix (equal-area, hierarchical) and
   longitude/latitude grids
 - **Multi-epoch reconstruction**: simultaneously fit data from multiple rotation
   phases to recover the full surface map

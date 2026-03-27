@@ -27,6 +27,12 @@ plot2d(tmap, stars[1];
 The projection shows the sky plane in milliarcseconds (East left, North up).
 Only pixels with positive soft visibility weight are rendered.
 
+### Examples
+
+| Plain | Intensity | Fully decorated |
+|:-----:|:---------:|:---------------:|
+| ![Plain](../assets/plot_plain.png) | ![Intensity](../assets/plot_intensity.png) | ![Decorated](../assets/plot_decorated.png) |
+
 ## Multi-epoch 2D
 
 Plot all epochs side by side with a shared color scale:
@@ -53,6 +59,8 @@ Overlay a wireframe of the projected pixel edges:
 ```julia
 plot2d_wireframe(stars[1])
 ```
+
+![Wireframe mesh](../assets/tess_healpix_mesh.png)
 
 ## 3D surface
 
@@ -95,3 +103,5 @@ plot_mollweide(tmap, stars[1];
 The Mollweide projection shows longitude on the x-axis (-180 to 180 degrees)
 and latitude on the y-axis (-90 to 90 degrees), with a graticule at 20-degree
 intervals.
+
+![Mollweide projection](../assets/plot_mollweide.png)

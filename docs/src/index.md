@@ -40,6 +40,17 @@ interferometric observables:
 | 7. Chi-squared + gradient | `spheroid_chi2_fg(tmap, g, star, data)` |
 | 8. Optimize | `image_reconstruct_oi(tmap, data, stars)` |
 
+## Visual examples
+
+A rapid rotator with all plotting annotations (graticules, spin axis, rotation
+arrow, compass):
+
+![Rapid rotator with annotations](assets/plot_decorated.png)
+
+The same star in Mollweide projection showing the full-surface temperature map:
+
+![Mollweide projection](assets/plot_mollweide.png)
+
 !!! note
 
     ROTIR is under active development. The code is being modernized and

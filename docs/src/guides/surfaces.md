@@ -26,6 +26,8 @@ star_params = (
 A sphere has no gravity darkening (uniform temperature from the von Zeipel law
 unless beta > 0 with non-zero rotation).
 
+![Sphere surface](../assets/surface_sphere.png)
+
 ## Triaxial ellipsoid (`surface_type = 1`)
 
 Three independent semi-axes `(rx, ry, rz)` define an ellipsoidal surface. Useful
@@ -51,6 +53,8 @@ star_params = (
 
 The von Zeipel temperature map for an ellipsoid uses `temperature_map_vonZeipel_ellipsoid`,
 which computes the local gravity as `g ~ 1/r^2` in ellipsoidal coordinates.
+
+![Ellipsoid surface](../assets/surface_ellipsoid.png)
 
 ## Rapid rotator (`surface_type = 2`)
 
@@ -105,6 +109,16 @@ The equator-to-pole radius ratio and temperature contrast depend on `omega`:
 | 0.5 | 1.04 | 0.96 |
 | 0.9 | 1.28 | 0.80 |
 | 0.99 | 1.45 | 0.68 |
+
+![Rapid rotator surface](../assets/surface_rapid_rotator.png)
+
+### Oblateness progression
+
+Increasing `frac_escapevel` (omega) from 0 to near-critical rotation:
+
+| omega = 0.0 | omega = 0.5 | omega = 0.9 | omega = 0.99 |
+|:-----------:|:-----------:|:-----------:|:------------:|
+| ![omega=0](../assets/rotator_omega00.png) | ![omega=0.5](../assets/rotator_omega50.png) | ![omega=0.9](../assets/rotator_omega90.png) | ![omega=0.99](../assets/rotator_omega99.png) |
 
 ### Helper functions
 
@@ -165,6 +179,16 @@ Conversion functions:
 - `filllout_to_rpole(fillout, D, q, async_ratio)`
 - `rpole_to_fillout(rpole, D, q, async_ratio)`
 - `max_rpole(D, roche_parameters)` -- maximum polar radius (L1 point)
+
+![Roche lobe surface](../assets/surface_roche.png)
+
+### Fillout factor progression
+
+Increasing fillout factor from 90% to 99% of the Roche lobe:
+
+| 90% | 95% | 98% | 99% |
+|:---:|:---:|:---:|:---:|
+| ![90%](../assets/roche_fill90.png) | ![95%](../assets/roche_fill95.png) | ![98%](../assets/roche_fill98.png) | ![99%](../assets/roche_fill99.png) |
 
 ### Roche lobe radius estimates
 
