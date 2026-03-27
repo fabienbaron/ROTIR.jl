@@ -63,8 +63,7 @@ end
         arrow_frac=0.3, color="black", linewidth=1.5, offset_west=0.0, offset_north=0.0)
 
 Draw the projected stellar rotation axis on a 2D sky-plane plot.
-Shows the pole-to-pole line extended beyond the limb, with an arrow at the north pole.
-Parts behind the star (z < 0) are drawn dashed.
+Shows the pole-to-pole line (dashed) extended beyond the limb, with an arrow at the north pole.
 
 When `inclination` (degrees from LOS) and `position_angle` (degrees, N through E) are given,
 the axis is computed analytically. Otherwise it is estimated from the tessellation vertices.
@@ -90,18 +89,14 @@ function draw_rotation_axis(ax, star; arrow_frac=0.3, color="black", linewidth=1
     for j in 1:3
         p1 = points[:, j]
         p2 = points[:, j+1]
-        z_avg = (p1[3] + p2[3]) / 2
-        ls = z_avg > 0 ? "-" : "--"
-        zord = z_avg > 0 ? 6 : 1
         ax.plot([-(p1[1]+offset_west), -(p2[1]+offset_west)],
                 [p1[2]+offset_north, p2[2]+offset_north],
-                ls, color=color, linewidth=linewidth, zorder=zord)
+                "--", color=color, linewidth=linewidth, zorder=6)
     end
-    zord_tip = north_tip[3] > 0 ? 6 : 1
     ax.annotate("", xy=(-(north_tip[1]+offset_west), north_tip[2]+offset_north),
         xytext=(-(north[1]+offset_west), north[2]+offset_north),
         arrowprops=Dict("arrowstyle" => "-|>", "color" => color, "lw" => linewidth),
-        zorder=zord_tip)
+        zorder=6)
 end
 
 """

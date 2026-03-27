@@ -169,7 +169,7 @@ save_and_close(fig, "tess_latlong_mesh.png")
 # Lon/lat with a temperature spot (unique lon/lat feature)
 ntheta = 20; nphi = 40
 tmap_spot = copy(tmap_ll)
-tmap_spot = make_circ_spot(tmap_spot, ntheta, nphi, 4, 10, 20; bright_frac=0.5)
+tmap_spot = make_circ_spot(tmap_spot, ntheta, nphi, 4, 8, 30; bright_frac=0.3)
 fig, ax = plot2d(tmap_spot, star_ll;
     intensity  = true,
     compass    = true,
