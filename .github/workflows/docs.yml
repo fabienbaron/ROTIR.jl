@@ -12,6 +12,14 @@ jobs:
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1.10'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.julia/packages
+            ~/.julia/compiled
+            ~/.julia/registries
+          key: docs-julia-${{ hashFiles('docs/Project.toml', 'Project.toml') }}
+          restore-keys: docs-julia-
       - name: Install dependencies
         run: |
           julia --project=docs -e '
