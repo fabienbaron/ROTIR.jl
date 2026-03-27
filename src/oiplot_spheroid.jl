@@ -1,9 +1,15 @@
 using PyPlot,PyCall, LaTeXStrings, Statistics
 
 # Suppress matplotlib warning about tight_layout + equal-aspect axes
-pyimport("warnings").filterwarnings("ignore", message=".*tight_layout.*")
+# (deferred to first plot call via set_oiplot_defaults)
+
+const _oiplot_initialized = Ref(false)
 
 function set_oiplot_defaults()
+    if !_oiplot_initialized[]
+        pyimport("warnings").filterwarnings("ignore", message=".*tight_layout.*")
+        _oiplot_initialized[] = true
+    end
     rc = PyDict(pyimport("matplotlib")."rcParams")
     rc["font.family"] = "serif"
     rc["font.size"] = 14
@@ -43,10 +49,11 @@ function draw_compass(ax, axis_max; size_frac=0.12, fontsize=12, color="black")
     margin = 0.20 * axis_max
     cx = -(axis_max - margin)
     cy = -(axis_max - margin)
-    ax.annotate("N", xy=(cx, cy + s), xytext=(cx, cy),
+    gap = 0.15 * s  # small offset so E and N labels don't crowd the corner
+    ax.annotate("N", xy=(cx - gap, cy + s), xytext=(cx - gap, cy),
         arrowprops=Dict("arrowstyle" => "-|>", "lw" => 1.5, "color" => color),
         fontsize=fontsize, color=color, ha="center", va="bottom", fontweight="bold", zorder=8)
-    ax.annotate("E", xy=(cx + s, cy), xytext=(cx, cy),
+    ax.annotate("E", xy=(cx + s, cy - gap), xytext=(cx, cy - gap),
         arrowprops=Dict("arrowstyle" => "-|>", "lw" => 1.5, "color" => color),
         fontsize=fontsize, color=color, ha="right", va="center", fontweight="bold", zorder=8)
 end
@@ -334,6 +341,7 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   cax = divider.append_axes("right", size="5%", pad=0.07)
   cb=colorbar(matplotlib.cm.ScalarMappable(norm=norm_plot,cmap=cmap), cax=cax)
   if pmin < pmax; cb.ax.set_ylim(pmin, pmax); end
+  return fig, ax
   end
 
 """

@@ -19,6 +19,7 @@ makedocs(;
         "Installation" => "install.md",
         "Guides" => [
             "Overview"                => "guides/overview.md",
+            "Conventions"             => "guides/conventions.md",
             "Tessellation"            => "guides/tessellation.md",
             "Surface Types"           => "guides/surfaces.md",
             "Image Reconstruction"    => "guides/reconstruction.md",

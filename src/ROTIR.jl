@@ -1,7 +1,11 @@
 module ROTIR
-using OITOOLS
+import OITOOLS: OIdata,
+    readoifits, readoifits_multiepochs, readfits, writefits,
+    set_data_filter, filter_data,
+    plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_residuals
 using Statistics
 using LinearAlgebra
+using PrecompileTools
 
 include("oistars.jl");
 include("soft_visibility.jl");
@@ -94,5 +98,7 @@ export sometimes_visible, never_visible, invisible_neighbours, with_invisible_ne
 export make_circ_spot, make_spot_move
 export rl1, max_rpole
 export lci_linear_inversion_frame, lci_reconstruct_mutitemporal, rescale_temperature
+
+include("precompile.jl")
 
 end
