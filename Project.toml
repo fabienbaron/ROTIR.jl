@@ -3,7 +3,7 @@ uuid = "1effc416-1cd3-435e-ba3b-8cf647137d25"
 keywords = ["astronomy", "interferometry", "imaging", "stellar surfaces"]
 license = "GPLv3"
 desc = "Regularized imaging of stellar surfaces from optical interferometry, Doppler imaging, and light curves"
-version = "0.1.0"
+version = "0.5.0"
 authors = ["Fabien Baron <fbaron@gsu.edu>"]
 
 [deps]
