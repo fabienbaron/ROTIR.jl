@@ -164,3 +164,111 @@ The shape parameter vector depends on `surface_type`:
 | 0 (Sphere) | `[radius, inclination, PA]` |
 | 1 (Ellipsoid) | `[rx, ry, rz, inclination, PA]` |
 | 2 (Rapid Rotator) | `[rpole, omega, inclination, PA]` |
+
+## Single-epoch imaging
+
+Most ROTIR examples use multiple epochs to exploit stellar rotation, but many
+science cases only have — or need — a single interferometric snapshot:
+
+- **Slow rotators** (Cepheids, supergiants) where the rotation period is much
+  longer than the observing baseline.
+- **Snapshot surveys** where only one night of data is available.
+- **Symmetric stars** where the goal is limb-darkening or diameter fitting
+  rather than surface mapping.
+
+The workflow is identical to multi-epoch imaging, with `tepochs = [0.0f0]`:
+
+```julia
+using ROTIR
+
+# Read a single OIFITS file — returns a 2D array: data_all[wavelength_bin, epoch]
+data_all = readoifits_multiepochs(["polaris.oifits"], T=Float32)
+
+# Select the first wavelength bin (single epoch → data and stars are length-1 arrays)
+data = data_all[1, :]
+
+# Single epoch: no rotation phase, so tepochs is just [0.0]
+tepochs = [0.0f0]
+
+# Tessellate the stellar surface using nested HEALPix with resolution level 4
+# (nside=2^4=16, giving 3072 equal-area pixels)
+n = 4
+tessels = tessellation_healpix(n)
+
+# Define a spherical stellar model (surface_type=0)
+star_params = (
+    surface_type    = 0,       # 0=sphere (no oblateness or tidal distortion)
+    radius          = 1.6,     # angular radius in milliarcseconds
+    tpole           = 6000.0,  # effective temperature in Kelvin
+    ldtype          = 3,       # Hestroffer power-law limb darkening
+    ld1             = 0.24,    # limb-darkening coefficient
+    ld2             = 0.0,     # second coefficient (unused for Hestroffer)
+    inclination     = 90.0,    # pole-on; arbitrary for a sphere
+    position_angle  = 0.0,     # rotation axis PA; arbitrary for a sphere
+    rotation_period = 1.0,     # irrelevant for single epoch (phase = 2π·t/P = 0)
+)
+
+# Build projected, rotated stellar geometry
+# (for a sphere at t=0, this just sets up the surface normals and limb darkening)
+stars = create_star_multiepochs(tessels, star_params, tepochs)
+
+# Pre-compute polygon Fourier transform matrices for fast χ² evaluation
+setup_oi!(data, stars)
+
+# Generate initial temperature map (uniform for a sphere with no gravity darkening)
+tmap_start = parametric_temperature_map(star_params, stars[1])
+
+# Quadratic total-variation regularization — use a higher weight than multi-epoch
+# since a single snapshot has sparser UV coverage and needs more regularization
+regularizers = [["tv2", 1e-4, tv_neighbours_healpix(n), 1:length(tmap_start)]]
+
+# Run the reconstruction
+tmap = image_reconstruct_oi(tmap_start, data, stars;
+    maxiter=500, regularizers=regularizers, verbose=true)
+
+# Evaluate fit quality and plot the result
+chi2 = image_reconstruct_oi_chi2(tmap, data, stars; verbose=true)
+plot2d(tmap, stars[1], intensity=true, compass=true)
+```
+
+### Key differences from multi-epoch
+
+| Aspect | Single epoch | Multi-epoch |
+|--------|-------------|-------------|
+| `tepochs` | `[0.0f0]` | `[0.0f0, 3.5f0, ...]` |
+| Rotation | Not used — `rotation_period` is irrelevant | Drives phase coverage |
+| Inclination/PA | Still define the projected geometry | Same |
+| `stars` array | Length 1 | Length N |
+| `data` array | Length 1 | Length N |
+| UV coverage | Limited to single night | Improves with epochs |
+
+### Choosing parameters for non-rotating targets
+
+For a single-epoch sphere, several parameters are arbitrary:
+
+- **`rotation_period`**: Set to any nonzero value (e.g. `1.0`). It only affects
+  the rotation phase `2π · t / P`, and with `t = 0` this is always zero.
+- **`position_angle`**: For a sphere, PA only rotates the projected
+  coordinate frame. Set it to `0.0` unless you have prior knowledge.
+- **`inclination`**: For a sphere, inclination does not change the projected
+  shape. Set it to `90.0` (equator-on) for interpretability, or to a known
+  value if the star has a measured spin axis.
+
+For non-spherical surfaces (ellipsoid, rapid rotator), inclination and PA
+are physically meaningful even in single-epoch mode — they determine the
+projected shape and limb-darkening pattern.
+
+### Regularization tips for single-epoch data
+
+With only one epoch, UV coverage is sparser than multi-epoch datasets.
+Regularization plays a larger role:
+
+- **`tv2`** (quadratic TV) is a good default — it smooths the map while
+  preserving large-scale structure like hot/cool spots.
+- Increase the regularization weight (e.g. `1e-3` to `1e-2`) compared to
+  multi-epoch reconstructions, since there is less data to constrain the map.
+- **`lower` / `upper` bounds** on pixel values can prevent unphysical
+  temperatures. For example, `lower=3000` for a 6000 K star.
+
+See [`demos/polaris_imaging.jl`](https://github.com/fabienbaron/ROTIR.jl/blob/main/demos/polaris_imaging.jl)
+for a complete single-epoch reconstruction of Polaris.
