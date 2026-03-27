@@ -31,13 +31,7 @@ Pkg.add(url="https://github.com/fabienbaron/OITOOLS.jl.git")
 ## Step 3: Install ROTIR
 
 ```julia
-Pkg.develop(path="/path/to/rotir2")
-```
-
-Or, if ROTIR is registered:
-
-```julia
-Pkg.add("ROTIR")
+Pkg.add(url="https://github.com/fabienbaron/ROTIR.jl.git")
 ```
 
 ## Verify
