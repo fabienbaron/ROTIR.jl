@@ -78,23 +78,19 @@ end
 # end
 
 # von Zeipel law
-@views function temperature_map_vonZeipel_rapid_rotator(stellar_parameters,star; offsets = [0.0,0.0,0.0], GM = 1.0, T=Float64)
+@views function temperature_map_vonZeipel_rapid_rotator(stellar_parameters,star; offsets = [0.0,0.0,0.0], GM = 1.0, T=Float32)
+  p = convert_params(T, stellar_parameters)
   toff= T.(offsets)'
   GM = T(GM)
   r_theta = sqrt.(dropdims(sum(abs2, (star.vertices_xyz[:,5,:] .- toff), dims=2), dims=2));
   theta = star.vertices_spherical[:,5,2];
-  teff_pole = stellar_parameters.tpole;
-  rpole = stellar_parameters.rpole;
-  omega_crit = T(sqrt(8*GM/(27*rpole^3)));
-  omega = stellar_parameters.frac_escapevel*omega_crit;
+  omega_crit = T(sqrt(8*GM/(27*p.rpole^3)));
+  omega = p.frac_escapevel*omega_crit;
   g_r_theta = -GM./(r_theta.^2) + r_theta.*(omega*sin.(theta)).^2;
   g_theta_theta = omega^2*r_theta.*sin.(theta).*cos.(theta);
   g_theta = sqrt.(g_r_theta.^2 + g_theta_theta.^2);
-  #g_rpole = -GM/(rpole.^2); # second term is zero
-  #g_theta_pole = zero(T);
-  #g_pole = sqrt.(g_rpole.^2 + g_theta_pole.^2);
-  g_pole = GM/rpole^2
-  star_map = teff_pole*(g_theta/g_pole).^stellar_parameters.beta
+  g_pole = GM/p.rpole^2
+  star_map = p.tpole*(g_theta/g_pole).^p.beta
   return star_map
 end
 

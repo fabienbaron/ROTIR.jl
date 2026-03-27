@@ -1,4 +1,4 @@
-@views function tessellation_latlong(ntheta,nphi; T=Float64)
+@views function tessellation_latlong(ntheta,nphi; T=Float32)
     npix = ntheta*nphi;
     unit_spherical = zeros(T, npix, 5, 3); # r, theta, phi
     unit_xyz = zeros(T, npix, 5, 3); # x, y, z
@@ -108,7 +108,7 @@ function make_spot_move(temperature_map,ntheta,nphi,period,B,tepoch=[0.0,1.0])
     return vec(temperature_map)
 end
 
-function latlong_harmon(ntheta,nphi,a,b,c)
+function latlong_harmon(ntheta,nphi,a,b,c; T=Float32)
 dtheta = pi/ntheta;
 theta = collect(range(0,stop=pi-dtheta,length=ntheta));
 starting = dtheta/2
@@ -123,8 +123,8 @@ for i = 2:ntheta
 end
 indx_long = Int.(ceil.(nphi*cos.(pi/2 .- arr_long)))
 npix = sum(indx_long);
-unit_spherical = zeros(Float64, npix, 5, 3); # r, theta, phi
-unit_xyz = zeros(Float64, npix, 5, 3); # x, y, z
+unit_spherical = zeros(T, npix, 5, 3); # r, theta, phi
+unit_xyz = zeros(T, npix, 5, 3); # x, y, z
 unit_spherical[:,:,1] .= 1.;
 
 first=0

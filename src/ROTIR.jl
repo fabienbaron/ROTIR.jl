@@ -5,10 +5,16 @@ import OITOOLS: OIdata,
     plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_residuals
 using Statistics
 using LinearAlgebra
+using Printf
 using PrecompileTools
 
 include("oistars.jl");
 include("soft_visibility.jl");
+
+# Convert all AbstractFloat fields of a NamedTuple to type T in one shot.
+# Integer fields (surface_type, ldtype) pass through unchanged.
+convert_params(::Type{T}, p::NamedTuple) where T = NamedTuple{keys(p)}(map(v -> v isa AbstractFloat ? T(v) : v, values(p)))
+
 include("geometry.jl");
 include("oichi2_spheroid.jl");
 include("oichi2_binary.jl");

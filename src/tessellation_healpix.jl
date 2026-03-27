@@ -1,4 +1,4 @@
-function tessellation_healpix(n::Int64; T=Float64)
+function tessellation_healpix(n::Int64; T=Float32)
   # instantiate the base geometry
   nside = 2^n
   npix = nside2npix(nside)
@@ -377,7 +377,7 @@ end
     return ipf + face_num * nside * nside .+ 1
   end
   
-  function pix2vec_nest(nside::Int64, ipix::Array{Int64,1}; T=Float64)
+  function pix2vec_nest(nside::Int64, ipix::Array{Int64,1}; T=Float32)
   #   coordinate of the lowest corner of each face
     jrll = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4] # in unit of nside
     jpll = [1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7] # in unit of nside/2
@@ -490,7 +490,7 @@ end
   end # pix2vec_nest
   
   
-  function pix2ang_nest(nside::Int64, ipix::Array{Int64,1}; T=Float64)
+  function pix2ang_nest(nside::Int64, ipix::Array{Int64,1}; T=Float32)
       jrll = [ 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4 ]
       jpll = [ 1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7 ]
   
@@ -928,7 +928,7 @@ end
 
 using SparseArrays
 
-function tv_neighbours_healpix(n;T=Float64)
+function tv_neighbours_healpix(n;T=Float32)
 # COO (coordinate) construction — O(nnz) instead of O(npix × nnz)
 # Uses triplet accumulation followed by a single sparse() call,
 # avoiding costly element-wise CSC insertion.
@@ -961,7 +961,7 @@ return neighbors,[],[],[],[], ∇, H
 end
 
 
-function tv_neighbours_healpix_visible(n, stars;T=Float64)
+function tv_neighbours_healpix_visible(n, stars;T=Float32)
   # Same as the default tv_neighbours but
   # here the difference matrix is set so that only visible pixels are regularized
   neighbors = all_neighbours_nest(n); #neighbors[ipix] will give the list of all neighbors of pixel [ipix]

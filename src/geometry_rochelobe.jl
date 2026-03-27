@@ -3,7 +3,7 @@ import Base: Math as math
 
 # The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
 #
-function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float64)
+function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float32)
     # if wanting to call this for secondary=true, invert roche_parameters.q;
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     secondary == false ? fillout_factor = roche_parameters.fillout_factor_primary : fillout_factor = roche_parameters.fillout_factor_secondary;
@@ -53,7 +53,7 @@ function update_roche_radii_binary(star1_geom::tessellation, star2_geom::tessell
     return star1_roche_geom, star2_roche_geom
 end
 
-function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false, T=Float64)
+function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false, T=Float32)
   secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
   if (use_fillout_factor == true)
     #
@@ -411,48 +411,41 @@ function temperature_map_vonZeipel_roche_single(parameters, star_geom, t::Array{
     return Tmap
 end
 
-function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=Float64)
-    rpole = parameters.rpole/parameters.a
-    tpole = parameters.tpole
-    r = star_geom.vertices_spherical[:, 5 ,1]/parameters.a
+function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=Float32)
+    p = convert_params(T, parameters)
+    rpole = p.rpole/p.a
+    r = star_geom.vertices_spherical[:, 5 ,1]/p.a
     θ = star_geom.vertices_spherical[:, 5, 2]
     ϕ = star_geom.vertices_spherical[:, 5, 3]
-    D = compute_separation(parameters, t)
-    async_ratio = parameters.rotation_period/parameters.P
-    q = parameters.q
-    β = parameters.beta
+    D = T(compute_separation(p, t))
+    async_ratio = p.rotation_period/p.P
     # Compute gravity
     compute_gravity = compute_gravity_primary;
     if secondary == true
         compute_gravity = compute_gravity_secondary;
     end
-    g_pole = compute_gravity(rpole,T(0),T(0),D,q,async_ratio);
-    gravity_map = compute_gravity(r,θ,ϕ,D,q,async_ratio);
+    g_pole = compute_gravity(rpole,T(0),T(0),D,p.q,async_ratio);
+    gravity_map = compute_gravity(r,θ,ϕ,D,p.q,async_ratio);
     # Computes von Zeipel temperature map directly from the gravity map
-    Teff = tpole*(gravity_map./g_pole).^β;
+    Teff = p.tpole*(gravity_map./g_pole).^p.beta;
     return Teff
 end
 
 function temperature_map_vonZeipel_roche(binary_parameters, star_geom, t; secondary = false)
-    stellar_parameters = binary_parameters.star1
-    if secondary == true
-        stellar_parameters = binary_parameters.star2;
-    end
-    rpole = stellar_parameters.rpole/binary_parameters.a
-    tpole = stellar_parameters.tpole
-    r = star_geom.vertices_spherical[:, 5 ,1]/binary_parameters.a
+    T = eltype(star_geom.vertices_spherical)
+    sp = secondary ? binary_parameters.star2 : binary_parameters.star1
+    rpole = T(sp.rpole/binary_parameters.a)
+    tpole = T(sp.tpole)
+    r = star_geom.vertices_spherical[:, 5 ,1]/T(binary_parameters.a)
     θ = star_geom.vertices_spherical[:, 5, 2]
     ϕ = star_geom.vertices_spherical[:, 5, 3]
-    D = compute_separation(binary_parameters, t)
-    async_ratio = stellar_parameters.rotation_period/binary_parameters.P
-    q = binary_parameters.q
-    β = stellar_parameters.beta
+    D = T(compute_separation(binary_parameters, t))
+    async_ratio = T(sp.rotation_period/binary_parameters.P)
+    q = T(binary_parameters.q)
+    β = T(sp.beta)
     # Compute gravity
-    compute_gravity = compute_gravity_primary;
-    if secondary == true
-        compute_gravity = compute_gravity_secondary;
-    end
-    g_pole = compute_gravity(rpole,0.0,0.0,D,q,async_ratio);
+    compute_gravity = secondary ? compute_gravity_secondary : compute_gravity_primary;
+    g_pole = compute_gravity(rpole,T(0),T(0),D,q,async_ratio);
     gravity_map = compute_gravity(r,θ,ϕ,D,q,async_ratio);
      # Computes von Zeipel temperature map directly from the gravity map
     Teff = tpole*(gravity_map./g_pole).^β;

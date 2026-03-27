@@ -33,12 +33,13 @@ Returns `(weights, sigmoid_args)` where:
 
 κ controls sharpness: larger κ → approaches hard mask.
 """
-function soft_visibility(normals_z::AbstractVector{T}; κ::T=T(50)) where T<:AbstractFloat
+function soft_visibility(normals_z::AbstractVector{T}; κ=T(50)) where T<:AbstractFloat
+    κ_T = T(κ)
     npix = length(normals_z)
     weights = Vector{T}(undef, npix)
     sig_args = Vector{T}(undef, npix)
     @inbounds for i in 1:npix
-        sig_args[i] = κ * normals_z[i]
+        sig_args[i] = κ_T * normals_z[i]
         weights[i] = sigmoid(sig_args[i])
     end
     return weights, sig_args

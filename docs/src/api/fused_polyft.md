@@ -4,6 +4,9 @@ Matrix-free two-pass polygon Fourier transform that eliminates the dense
 (Nuv x Npix) polyft matrix. Memory scales as O(Nuv + Npix) instead of
 O(Nuv * Npix).
 
+See [Chi-squared & imaging](@ref) for a comparison of the matrix and
+fused paths and guidance on when to use each.
+
 ## Forward pass
 
 | Function | Description |

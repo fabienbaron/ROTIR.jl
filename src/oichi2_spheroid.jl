@@ -26,12 +26,12 @@ end
   Threads.@threads for i=1:nepochs
        indx = stars[i].index_quads_visible
        stars[i].polyflux = setup_polyflux_single(stars[i].proj_west[indx,:], stars[i].proj_north[indx,:])
-       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i].proj_west[indx,:], stars[i].proj_north[indx,:]);
+       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i].proj_west[indx,:], stars[i].proj_north[indx,:]; T=T);
      end
   else # single epoch, thread over calculation
     indx = stars[1].index_quads_visible
     stars[1].polyflux = setup_polyflux_single(stars[1].proj_west[indx,:], stars[1].proj_north[indx,:])
-    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1].proj_west[indx,:], stars[1].proj_north[indx,:]);
+    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1].proj_west[indx,:], stars[1].proj_north[indx,:]; T=T);
   end
 end
 
@@ -43,7 +43,7 @@ end
   Threads.@threads for i=1:nepochs
        indx = star_epoch_geom[i].index_quads_visible
        polyflux[i] = setup_polyflux_single(star_epoch_geom[i].proj_west[indx,:], star_epoch_geom[i].proj_north[indx,:])
-       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i].proj_west[indx,:], star_epoch_geom[i].proj_north[indx,:]);
+       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i].proj_west[indx,:], star_epoch_geom[i].proj_north[indx,:]; T=T);
      end
   return polyflux, polyft
 end
@@ -67,7 +67,7 @@ function stcis(x1,x2,y1,y2,kx,ky)
   return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-π*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
 end
 
-@views function setup_polyft_single_alt(uv, pjx, pjy; T=Float64)
+@views function setup_polyft_single_alt(uv, pjx, pjy; T=Float32)
   kx =  uv[1,:] * T(-pi / (180*3600000))
   ky =  uv[2,:] * T( pi / (180*3600000))
   x = [Array(pjx[:,i])' for i in 1:4]
@@ -90,7 +90,7 @@ end
   return polyft
 end
 
-@views function setup_polyft_single(uv, pjx, pjy; T=Float64)
+@views function setup_polyft_single(uv, pjx, pjy; T=Float32)
   kx =  uv[1,:] * T(-pi / (180*3600000));
   ky =  uv[2,:] * T( pi / (180*3600000));
   # note: check definition sinc(x) = sin(pi*x)/(pi*x)
@@ -101,7 +101,7 @@ end
 
 
 
-@views function setup_polyft_single(kx, ky, pjx, pjy; T=Float64)
+@views function setup_polyft_single(kx, ky, pjx, pjy; T=Float32)
   polyft = -im*T(1/(2pi))*(((sinc.( (kx*transpose(pjx[:,2]-pjx[:,1])) + (ky*transpose(pjy[:,2]-pjy[:,1])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,2]+pjx[:,1])) +  (ky*transpose(pjy[:,2]+pjy[:,1])) )).* ( (ky*transpose(pjx[:,2]-pjx[:,1]))  - (kx*transpose(pjy[:,2]-pjy[:,1])) ) + sinc.( (kx*transpose(pjx[:,3]-pjx[:,2])) + (ky*transpose(pjy[:,3]-pjy[:,2])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,3]+pjx[:,2])) +  (ky*transpose(pjy[:,3]+pjy[:,2])) )).* ( (ky*transpose(pjx[:,3]-pjx[:,2]))  - (kx*transpose(pjy[:,3]-pjy[:,2])) )+ sinc.( (kx*transpose(pjx[:,4]-pjx[:,3])) + (ky*transpose(pjy[:,4]-pjy[:,3])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,4]+pjx[:,3])) +  (ky*transpose(pjy[:,4]+pjy[:,3])) )).* ( (ky*transpose(pjx[:,4]-pjx[:,3]))  - (kx*transpose(pjy[:,4]-pjy[:,3])) ) + sinc.( (kx*transpose(pjx[:,1]-pjx[:,4])) + (ky*transpose(pjy[:,1]-pjy[:,4])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,1]+pjx[:,4])) +  (ky*transpose(pjy[:,1]+pjy[:,4])) )).* ( (ky*transpose(pjx[:,1]-pjx[:,4]))  - (kx*transpose(pjy[:,1]-pjy[:,4])) )))./((kx.*kx+ky.*ky)));
   return polyft;
 end
@@ -118,7 +118,7 @@ function cvis_to_v2(cvis, indx)
   v2_model = abs2.(cvis[indx]);
 end
 
-function cvis_to_t3(cvis, indx1, indx2, indx3; T=Float64)
+function cvis_to_t3(cvis, indx1, indx2, indx3; T=Float32)
   t3 = cvis[indx1].*cvis[indx2].*cvis[indx3];
   t3amp = abs.(t3);
   t3phi = angle.(t3)*T(180/pi);
@@ -155,7 +155,9 @@ function chi2s(x, star, data; verbose::Bool = true)
   chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
   chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);
   if verbose == true
-    println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi)
+    printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
+    printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
+    printstyled(@sprintf("T3P: %.4f\n", chi2_t3phi/data.nt3phi), color=:green)
   end
   return chi2_v2, chi2_t3amp, chi2_t3phi
 end
@@ -166,7 +168,9 @@ function chi2s2(x, star, data; verbose::Bool = true)
   chi2_t3amp = n2((t3amp_model - data.t3amp)./data.t3amp_err);
   chi2_t3phi = n2( mod360(t3phi_model - data.t3phi)./data.t3phi_err);
   if verbose == true
-    println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi)
+    printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
+    printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
+    printstyled(@sprintf("T3P: %.4f\n", chi2_t3phi/data.nt3phi), color=:green)
   end
   return chi2_v2, chi2_t3amp, chi2_t3phi
 end
@@ -177,7 +181,9 @@ function spheroid_chi2_f(x, star, data; verbose::Bool = false)
   chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
   chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);
   if verbose == true
-    println("V2: ", chi2_v2/data.nv2, " T3A: ", chi2_t3amp/data.nt3amp, " T3P: ", chi2_t3phi/data.nt3phi)
+    printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
+    printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
+    printstyled(@sprintf("T3P: %.4f\n", chi2_t3phi/data.nt3phi), color=:green)
   end
   return chi2_v2 + chi2_t3amp + chi2_t3phi
 end
@@ -205,7 +211,10 @@ end
   g_normalized = (gsum .- dot(xw, gsum) * star.polyflux / flux) / flux;
   g[indx] = w .* g_normalized;
   if verbose == true
-    println("V2: ", chi2_v2/data.nv2, "\tT3A: ", chi2_t3amp/data.nt3amp, "\tT3P: ", chi2_t3phi/data.nt3phi,"\tFlux: ", flux)
+    printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
+    printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
+    printstyled(@sprintf("T3P: %.4f ", chi2_t3phi/data.nt3phi), color=:green)
+    printstyled(@sprintf("Flux: %.4f\n", flux), color=:normal)
   end
   return chi2_v2 + chi2_t3amp + chi2_t3phi
 end
@@ -221,12 +230,12 @@ if epochs_weights!=[]
   f = f.*epochs_weights
 end
 if verbose == true 
-  println("All epochs, weighted chi2: ", f, "\n");
+  printstyled(@sprintf("All epochs, χ²r: %.4f\n\n", f), color=:white);
 end
 return f;
 end
 
-function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[], verbose=false, T=Float64)
+function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[], verbose=false, T=Float32)
   T = eltype(x)
   #g[:] .= T(0);
   nepochs = length(data)
@@ -243,7 +252,7 @@ function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_w
    end 
   g[:] .= sum(singleepoch_g)
   if verbose == true
-    println("Total weighted chi2: $f");
+    printstyled(@sprintf("Total χ²r: %.4f\n", f), color=:white);
   end
   # Map regularization
   if regularizers!=[]
@@ -262,7 +271,8 @@ function parametric_temperature_map(parameters, star; secondary=false) # dispatc
   elseif star.surface_type == 1
     return temperature_map_vonZeipel_ellipsoid(parameters,star);
   elseif star.surface_type == 0 # sphere
-    return parameters.tpole*ones(eltype(star.vertices_spherical), star.npix );  
+    T = eltype(star.vertices_spherical)
+    return T(parameters.tpole)*ones(T, star.npix);
   else
     println("Unimplemented parametric von Zeipel function")
   end
@@ -316,7 +326,7 @@ function spheroid_total_variation2_fg(x, tv_g, tvinfo; verbose = true)
   tv_f = norm(tvinfo[6]*x)^2
   tv_g[:] = 2*(tvinfo[7]*x)
   if verbose == true
-      println("TV2: ", tv_f);
+      printstyled(@sprintf("TV2: %.4f\n", tv_f), color=:yellow);
   end
   return tv_f
 end

@@ -154,57 +154,60 @@ function rot_vertex(angle_r1, angle_r2, angle_r3)
 end
   
 
-function compute_radii(tessels::tessellation, star_params, t; secondary=false, T=Float64)
+function compute_radii(tessels::tessellation, star_params, t; secondary=false, T=Float32)
+  p = convert_params(T, star_params)
   npix = tessels.npix
   xyz = [];
   r = [];
   # compute radii and xyz based on stellar parameters
-  if star_params.surface_type  == 0  # Spherical:0, , Rapid Rotator:2, Roche: 3
-    xyz = star_params.radius*tessels.unit_xyz;
-    r = repeat([star_params.radius],npix, 5);
-  elseif star_params.surface_type == 1 # Ellipsoid: 1
-    xyz = reshape(reshape(tessels.unit_xyz, (npix*5,3)).*[star_params.radius_x star_params.radius_y star_params.radius_z], (npix,5,3));;
+  if p.surface_type  == 0  # Spherical:0, , Rapid Rotator:2, Roche: 3
+    xyz = p.radius*tessels.unit_xyz;
+    r = repeat([p.radius],npix, 5);
+  elseif p.surface_type == 1 # Ellipsoid: 1
+    xyz = reshape(reshape(tessels.unit_xyz, (npix*5,3)).*T.([p.radius_x p.radius_y p.radius_z]), (npix,5,3));;
     # TODO: just repeat of radius_x, radius_y and radius_z then block multiply
     r = sqrt.(sum(xyz.^2, dims=3));
-  elseif star_params.surface_type == 2 # Rapid rotator
-    r = update_radii_rapidrot(tessels, star_params);
+  elseif p.surface_type == 2 # Rapid rotator
+    r = update_radii_rapidrot(tessels, p);
     xyz = r.*tessels.unit_xyz;
-  elseif star_params.surface_type == 3
+  elseif p.surface_type == 3
     # Star params are actually binary parameters
-    D = T(compute_separation(star_params, t))
-    ff = secondary ? star_params.fillout_factor_secondary : star_params.fillout_factor_primary
-    r = update_roche_radii(tessels, star_params, D, use_fillout_factor = ff>-1, secondary=secondary)
+    D = T(compute_separation(p, t))
+    ff = secondary ? p.fillout_factor_secondary : p.fillout_factor_primary
+    r = update_roche_radii(tessels, p, D, use_fillout_factor = ff>-1, secondary=secondary)
     xyz = r.*tessels.unit_xyz;
   end
   return r, xyz
 end
 
-function rotate_star(xyz, star_params, t; T=Float64)
+function rotate_star(xyz, star_params, t; T=Float32)
   # TODO: reimplement differential rotation for compatible surfaces (see old ROTIR)
   # Right multiply: xyz * R where R = rot_vertex(ψ, inc, PA)
   #   ψ  = rotation phase (spinning surface features)
   #   inc = inclination (tilt spin axis from line of sight)
   #   PA  = position angle (orient projected spin axis on sky, N through E)
   # Spin axis direction: R[3,:] = [-sin(inc)*sin(PA), sin(inc)*cos(PA), cos(inc)]
+  p = convert_params(T, star_params)
   npix = size(xyz,1)
-  compound_rotation = rot_vertex(T(2pi)*t/star_params.rotation_period, star_params.inclination*T(pi/180.), star_params.position_angle*T(pi/180.));
+  compound_rotation = rot_vertex(T(2pi)*t/p.rotation_period, p.inclination*T(pi/180.), p.position_angle*T(pi/180.));
   return reshape(reshape(xyz,(npix*5,3))*compound_rotation, (npix,5,3));
 end
 
 
-function compute_ldmap(μ,star_params; T=Float64)
+function compute_ldmap(μ,star_params; T=Float32)
+  p = convert_params(T, star_params)
   # Limb-darkening map
-  if (star_params.ldtype == 1) # 1: quadratic
-    ldmap = T(1.0) .- star_params.ld1*(T(1.0) .-μ) 
-  elseif (star_params.ldtype == 2) # 1: quadratic
-    ldmap = T(1.0) .- star_params.ld1*(T(1.0) .-μ) - star_params.ld2*(T(1.0).-μ.^2)  
-  elseif (star_params.ldtype == 3)  # 3; Hestroffer
-    ldmap = μ.^star_params.ld1
+  if (p.ldtype == 1) # 1: quadratic
+    ldmap = T(1.0) .- p.ld1*(T(1.0) .-μ)
+  elseif (p.ldtype == 2) # 2: quadratic
+    ldmap = T(1.0) .- p.ld1*(T(1.0) .-μ) - p.ld2*(T(1.0).-μ.^2)
+  elseif (p.ldtype == 3)  # 3; Hestroffer
+    ldmap = μ.^p.ld1
   end
 end
 
 # Generate geometry and ld map from tesselation and stellar parameters
-@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float64, κ=T(50))
+@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float32, κ=T(50))
   npix = tessels.npix;
   # Compute radii
   r, xyz = compute_radii(tessels, star_params, t; secondary=secondary);
@@ -269,7 +272,7 @@ end
 function rotate_single_star(base_geom, star_params, orbit_incl, long_ascending_node, rot_angle; offsets = [], recenter=[])
   npix = base_geom.npix;
   compound_rotation = rot_vertex(orbit_incl*pi/180.0, long_ascending_node*pi/180.0, rot_angle*pi/180.0);
-  vertices_xyz_rot = Array{Float64}(undef, npix, 5, 3)
+  vertices_xyz_rot = Array{eltype(base_geom.vertices_xyz)}(undef, npix, 5, 3)
   if recenter ==[]
     for ii=1:npix
       for jj = 1:5

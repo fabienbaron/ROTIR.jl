@@ -308,8 +308,10 @@ Drop-in replacement for spheroid_chi2_fg.
     g[indx] = w .* grad_xw
 
     if verbose
-        println("V2: ", chi2_v2/data.nv2, "\tT3A: ", chi2_t3amp/data.nt3amp,
-                "\tT3P: ", chi2_t3phi/data.nt3phi, "\tFlux: ", flux)
+        printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
+        printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
+        printstyled(@sprintf("T3P: %.4f ", chi2_t3phi/data.nt3phi), color=:green)
+        printstyled(@sprintf("Flux: %.4f\n", flux), color=:normal)
     end
     return chi2_v2 + chi2_t3amp + chi2_t3phi
 end

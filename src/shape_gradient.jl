@@ -299,7 +299,7 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
                          xmap::Vector{T}, θ::Vector{T},
                          data_epochs, tessels::tessellation{T},
                          star_params_base, tepochs;
-                         κ::T=T(50), verbose::Bool=false) where T
+                         κ=T(50), verbose::Bool=false) where T
 
     nparams = length(θ)
     npix = tessels.npix
@@ -448,8 +448,11 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         end
 
         if verbose
-            println("Epoch $ep — V2: ", chi2_v2/data.nv2, "\tT3A: ", chi2_t3amp/data.nt3amp,
-                    "\tT3P: ", chi2_t3phi/data.nt3phi, "\tFlux: ", flux)
+            printstyled("Epoch $ep — ", color=:normal)
+            printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
+            printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
+            printstyled(@sprintf("T3P: %.4f ", chi2_t3phi/data.nt3phi), color=:green)
+            printstyled(@sprintf("Flux: %.4f\n", flux), color=:normal)
         end
     end
 
@@ -475,7 +478,7 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
                                nouter::Int=5, reg_weight::T=T(1e-5),
                                θ_lower::Union{Vector{T},Nothing}=nothing,
                                θ_upper::Union{Vector{T},Nothing}=nothing,
-                               κ::T=T(50), verbose::Bool=true) where T
+                               κ=T(50), verbose::Bool=true) where T
 
     xmap = copy(xmap_start)
     θ = copy(θ_start)

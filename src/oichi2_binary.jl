@@ -28,7 +28,7 @@ in ROTIR's projected frame (West, North).
 
 Uses the same kx/ky sign convention as the polygon FT in `setup_polyft_single`.
 """
-function binary_phase_shift(uv, offset_x, offset_y; T=Float64)
+function binary_phase_shift(uv, offset_x, offset_y; T=Float32)
     C = T(180 * 3600000)
     kx = uv[1,:] .* T(-pi / C)
     ky = uv[2,:] .* T( pi / C)
@@ -78,7 +78,9 @@ function binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose::Bool=fa
     chi2_t3amp = sum(abs2, (t3amp_model .- data.t3amp) ./ data.t3amp_err)
     chi2_t3phi = sum(abs2, mod360(t3phi_model .- data.t3phi) ./ data.t3phi_err)
     if verbose
-        println("V2: ", chi2_v2/data.nv2, "\tT3A: ", chi2_t3amp/data.nt3amp, "\tT3P: ", chi2_t3phi/data.nt3phi)
+        printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
+        printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
+        printstyled(@sprintf("T3P: %.4f\n", chi2_t3phi/data.nt3phi), color=:green)
     end
     return chi2_v2 + chi2_t3amp + chi2_t3phi
 end

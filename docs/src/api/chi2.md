@@ -1,6 +1,50 @@
 # Chi-squared & imaging
 
-## Setup
+## Two forward-model paths
+
+ROTIR provides two ways to compute complex visibilities from a
+temperature map.  Both produce identical results; the choice depends on
+what is being optimized.
+
+### Matrix path (precomputed polyft)
+
+`setup_oi!()` precomputes a dense complex matrix `polyft` (Nuv x Npix)
+and a flux vector `polyflux` (Npix) for each epoch, stored inside the
+`stellar_geometry` struct.  Complex visibilities are then a single
+matrix-vector multiply: `cvis = polyft * xw / flux`.  The gradient is
+the transpose multiply.
+
+This is the default path used by `spheroid_chi2_fg`,
+`image_reconstruct_oi`, and the standard reconstruction pipeline.
+
+### Fused matrix-free path
+
+`fused_spheroid_chi2_fg` (in `fused_polyft.jl`) computes visibilities
+on-the-fly in a loop over pixels and UV points, without ever forming the
+dense polyft matrix.  A second adjoint pass computes the gradient.  This
+path also supports `compute_adjoint_vertices!`, which backpropagates
+through the vertex positions — needed for joint shape + map optimization
+(`shape_chi2_fg!`).
+
+### When to use which
+
+|                     | Matrix path          | Fused path                  |
+|---------------------|----------------------|-----------------------------|
+| Memory              | O(Nuv x Npix) dense  | O(Nuv + Npix)               |
+| Setup cost          | One-time `setup_oi!` | None                        |
+| Per-iteration cost  | Mat-vec multiply     | Loop over pixels x UV pts   |
+| Gradient            | Transpose multiply   | Adjoint loop                |
+| Vertex gradients    | No                   | Yes                         |
+| Used by             | `image_reconstruct_oi`, `spheroid_chi2_fg` | `shape_chi2_fg!`, `joint_reconstruct_oi` |
+| Best when           | Map-only optimization (fixed geometry) | Shape optimization, or large Nuv x Npix |
+
+For most reconstructions where only the temperature map is optimized,
+the matrix path is simpler and fast (a single BLAS call per epoch).
+Switch to the fused path when optimizing shape parameters (inclination,
+radii, position angle) jointly with the map, or when the polyft matrix
+is too large to fit in memory.
+
+## Setup (matrix path)
 
 | Function | Description |
 |----------|-------------|
