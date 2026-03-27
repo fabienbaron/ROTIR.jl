@@ -128,7 +128,8 @@ HEALPix resolution progression on a rapid rotator (pixel edges shown):
 | Equal area pixels | Yes | No (poles oversampled) |
 | Multi-resolution | Yes (factor-of-4 up/downsampling) | No |
 | Hierarchical nesting | Yes | No |
-| Uniform neighbor count | ~8 | 4 |
+| Latitude/longitude interpretation | No | Direct |
+| Differential rotation | Manual | Built-in `make_spot_move` |
 | Spot creation | Manual | Built-in `make_circ_spot` |
 
 For image reconstruction from interferometry, **HEALPix is recommended** due to

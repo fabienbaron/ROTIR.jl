@@ -25,6 +25,7 @@ makedocs(;
             "Surface Types"           => "guides/surfaces.md",
             "Image Reconstruction"    => "guides/reconstruction.md",
             "Single-Epoch Imaging"    => "guides/single_epoch.md",
+            "Binary Orbits"           => "guides/orbits.md",
             "Multi-resolution"        => "guides/multires.md",
             "Plotting"                => "guides/plotting.md",
         ],

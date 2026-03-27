@@ -12,7 +12,7 @@
 ENV["MPLBACKEND"] = "agg"
 
 using ROTIR
-using PyPlot
+using PyPlot, PyCall
 
 const OUTDIR = joinpath(@__DIR__, "..", "docs", "src", "assets")
 mkpath(OUTDIR)
@@ -344,13 +344,103 @@ for (fillout, label) in [(0.90, "90"), (0.95, "95"), (0.98, "98"), (0.99, "99")]
     local tmap = parametric_temperature_map(params, star)
     local fig, ax = plot2d(tmap, star;
         intensity      = true,
-        plotmesh       = true,
         compass        = true,
         inclination    = params.inclination,
         position_angle = params.position_angle,
     )
+    ax.set_xlim(0.75, -0.75)
+    ax.set_ylim(-0.75, 0.75)
     save_and_close(fig, "roche_fill$label.png")
 end
+
+# ===========================================================================
+# Section 9: Binary orbit showcase (Spica-like parameters, 3 PNGs)
+# ===========================================================================
+println("Generating binary orbit figures...")
+
+# Spica orbital elements (Aufdenberg+2015)
+P_orb    = 4.0145       # days
+a_orb    = 1.54         # mas
+e_orb    = 0.123
+T0_orb   = 2454189.40   # JD
+q_binary = 0.6188       # M2/M1
+i_orb    = 116.0        # degrees (>90 = retrograde)
+Omega_orb = 309.938     # degrees
+omega_orb = 255.0       # degrees
+
+inc_star = 180.0 - i_orb      # prograde equivalent = 64°
+pa_star  = Omega_orb - 180.0  # spin PA on sky = 129.938°
+
+star1p = starparameters(0.93/2, 25300.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0, inc_star, pa_star, 0.0, P_orb)
+star2p = starparameters(0.57/2, 20585.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0, inc_star, pa_star, 0.0, P_orb)
+bparams = binaryparameters(star1p, star2p, 77.0, i_orb, Omega_orb, omega_orb,
+    P_orb, a_orb, e_orb, T0_orb, q_binary, [1.0, 1.0], 0.0, 0.0)
+
+# --- Binary sky-plane image at widest separation ---
+star1_nt = (surface_type=0, radius=0.93/2, tpole=25300.0, ldtype=3, ld1=0.15, ld2=0.0,
+    inclination=inc_star, position_angle=pa_star, rotation_period=P_orb)
+star2_nt = (surface_type=0, radius=0.57/2, tpole=20585.0, ldtype=3, ld1=0.15, ld2=0.0,
+    inclination=inc_star, position_angle=pa_star, rotation_period=P_orb)
+
+tessels_b1 = tessellation_healpix(3)
+tessels_b2 = tessellation_healpix(2)
+star1_geom = create_star(tessels_b1, star1_nt, 0.0)
+star2_geom = create_star(tessels_b2, star2_nt, 0.0)
+tmap_b1 = parametric_temperature_map(star1_nt, star1_geom)
+tmap_b2 = parametric_temperature_map(star2_nt, star2_geom)
+
+# Pick an epoch near widest separation (phase ~0.25 after periastron)
+t_wide = T0_orb + 0.25 * P_orb
+fig, ax = plot2d_binary(tmap_b1, tmap_b2, star1_geom, star2_geom, bparams, t_wide;
+    intensity=true, graticules=true, compass=true,
+    inclination1=inc_star, position_angle1=pa_star,
+    inclination2=inc_star, position_angle2=pa_star)
+save_and_close(fig, "binary_skyplane.png")
+
+# --- Orbital diagram ---
+patches_mpl = pyimport("matplotlib.patches")
+fig2, ax2 = subplots(1, 1, figsize=(8, 8))
+ax2.set_aspect("equal", adjustable="box")
+
+tepochs_orbit = bparams.T0 .+ collect(range(0.0, stop=bparams.P, length=500))
+orbit_x = zeros(500)
+orbit_y = zeros(500)
+for (j, t) in enumerate(tepochs_orbit)
+    local x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, t)
+    orbit_x[j] = y2 - y1
+    orbit_y[j] = x2 - x1
+end
+ax2.plot(orbit_x, orbit_y, "b-", linewidth=1.5, alpha=0.7)
+
+rpri = bparams.star1.rpole
+rsec = bparams.star2.rpole
+c_pri = patches_mpl.Circle((0, 0), rpri, facecolor="gold", edgecolor="black", linewidth=0.5, zorder=5)
+ax2.add_patch(c_pri)
+
+# Mark a few orbital phases
+for (phase, label) in [(0.0, "periastron"), (0.25, ""), (0.5, "apastron"), (0.75, "")]
+    local t_jd = T0_orb + phase * P_orb
+    local x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, t_jd)
+    local east = y2 - y1; local north = x2 - x1
+    local c_sec = patches_mpl.Circle((east, north), rsec, facecolor="lightskyblue",
+        edgecolor="black", linewidth=0.5, zorder=4, alpha=0.8)
+    ax2.add_patch(c_sec)
+    if label != ""
+        ax2.annotate(label, (east, north), textcoords="offset points", xytext=(8, 8), fontsize=9)
+    end
+end
+
+ax2.invert_xaxis()
+ax2.set_xlabel("East offset (mas)", fontsize=14)
+ax2.set_ylabel("North offset (mas)", fontsize=14)
+ax2.set_title("Binary orbit (secondary relative to primary)")
+ax2.grid(true, alpha=0.3)
+save_and_close(fig2, "binary_orbit.png")
+
+# --- Radial velocity curves ---
+fig3, ax3 = plot_rv(bparams, K1=123.9, K2=198.8, γ=0.0,
+    figtitle="Radial velocities")
+save_and_close(fig3, "binary_rv.png")
 
 # ===========================================================================
 println("\nDone! Generated $(length(readdir(OUTDIR))) files in $OUTDIR")
