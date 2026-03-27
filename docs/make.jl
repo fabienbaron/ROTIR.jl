@@ -6,6 +6,7 @@ using Documenter, ROTIR
 makedocs(;
     modules=[ROTIR],
     sitename = "ROTIR",
+    repo = "https://github.com/fabienbaron/ROTIR.jl/blob/{commit}{path}#{line}",
     checkdocs = :none,
     doctest = false,
     format = Documenter.HTML(;
