@@ -425,6 +425,7 @@ for (phase, label) in [(0.0, "periastron"), (0.25, ""), (0.5, "apastron"), (0.75
     local c_sec = patches_mpl.Circle((east, north), rsec, facecolor="lightskyblue",
         edgecolor="black", linewidth=0.5, zorder=4, alpha=0.8)
     ax2.add_patch(c_sec)
+    ax2.plot(east, north, "ko", markersize=5, zorder=6)
     if label != ""
         ax2.annotate(label, (east, north), textcoords="offset points", xytext=(8, 8), fontsize=9)
     end
@@ -435,6 +436,24 @@ ax2.set_xlabel("East offset (mas)", fontsize=14)
 ax2.set_ylabel("North offset (mas)", fontsize=14)
 ax2.set_title("Binary orbit (secondary relative to primary)")
 ax2.grid(true, alpha=0.3)
+
+# Inset with orbital elements
+using LaTeXStrings
+orbital_text = join([
+    L"P = 4.0145 \; \mathrm{d}",
+    L"a = 1.54 \; \mathrm{mas}",
+    L"e = 0.123",
+    L"i = 116.0°",
+    L"\Omega = 309.9°",
+    L"\omega = 255.0°",
+    L"q = 0.6188",
+    L"T_0 = 2454189.4 \; \mathrm{JD}",
+], "\n")
+ax2.text(0.98, 0.98, orbital_text, transform=ax2.transAxes,
+    fontsize=11, verticalalignment="top", horizontalalignment="right",
+    bbox=Dict("boxstyle" => "round,pad=0.4", "facecolor" => "wheat", "alpha" => 0.85),
+    family="serif", zorder=10)
+
 save_and_close(fig2, "binary_orbit.png")
 
 # --- Radial velocity curves ---
