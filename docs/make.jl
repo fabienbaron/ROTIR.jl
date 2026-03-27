@@ -8,11 +8,11 @@ makedocs(;
     sitename = "ROTIR",
     checkdocs = :none,
     doctest = false,
-    remotes = nothing,
     format = Documenter.HTML(;
-        prettyurls = CI,
-        collapselevel = 2,
-    ),
+          prettyurls = CI,
+          collapselevel = 2,
+          repolink = "https://github.com/fabienbaron/ROTIR.jl",
+      ),
     authors = "Fabien Baron and contributors",
     pages = [
         "Home" => "index.md",
