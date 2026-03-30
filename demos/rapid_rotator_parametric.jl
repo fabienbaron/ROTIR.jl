@@ -9,11 +9,6 @@ nepochs = length(data)
 tepochs = Float32.([d.mean_mjd for d in data])
 tepochs = tepochs .- tepochs[1]; # First epoch set as t=0
 
-# To use the latitude/longitude scheme
-# ntheta=50
-# nphi=50
-# @btime tessellation_latlong(ntheta,nphi)
-
 # To use a Healpix scheme
 n=3; 
 tessels = tessellation_healpix(n)

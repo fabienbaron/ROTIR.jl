@@ -8,7 +8,6 @@ import Statistics: mean
 # The merged OIFITS file contains epochs from 2007, 2012, and 2015 campaigns
 oifitsfile = "./data/2007_2012_2015.Spica.oifits"
 data_all = readoifits(oifitsfile)[1,1]
-
 # Automatically identify epochs from MJD gaps in the data
 all_v2_mjds = sort(data_all.v2_mjd)
 gap_threshold = 0.5  # days — observations separated by > half a day are different epochs
@@ -18,7 +17,7 @@ epoch_ends   = all_v2_mjds[[jumps; length(all_v2_mjds)]]
 nepochs = length(epoch_starts)
 
 # Split into per-epoch data
-data = Vector{typeof(data_all)}(undef, nepochs)
+data = Vector{typeof(data_all)}(undef, nepochs);
 epoch_mean_mjd = zeros(nepochs)
 for i in 1:nepochs
     idx = set_data_filter(data_all; mjd_range=[epoch_starts[i] - 0.01, epoch_ends[i] + 0.01])

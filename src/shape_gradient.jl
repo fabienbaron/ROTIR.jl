@@ -70,6 +70,7 @@ function f_rapid_rot_and_deriv(x::T) where T
     if abs(x) < T(1e-12)
         return one(T), zero(T)
     end
+    x = clamp(x, -one(T), one(T))
     α = (T(π) + acos(x)) / 3
     sα, cα = sincos(α)
     f = 3 * cα / x
