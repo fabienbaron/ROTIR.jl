@@ -332,6 +332,7 @@ end
 function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5,
     colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="white", flipx=false,
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false,
+    contours=Float64[], contour_color="white", contour_labels=true, contour_fontsize=10,
     inclination=NaN, position_angle=NaN, star_params=nothing,
     graticule_kwargs=(;))
   # Plot temperature map onto the projected 2D image plane (= observer view)
@@ -377,6 +378,15 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   end
   xlabel(L"x $\leftarrow$ E (mas)", fontsize=20)
   ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
+  # Contours from triangulated visible polygon centers
+  if !isempty(contours)
+    cx = vec(mean(-star.proj_west[visible, :], dims=2))
+    cy = vec(mean(star.proj_north[visible, :], dims=2))
+    cs = ax.tricontour(cx, cy, Float64.(projmap), levels=Float64.(sort(contours)), colors=contour_color, zorder=4)
+    if contour_labels
+      ax.clabel(cs, inline=true, fontsize=contour_fontsize, fmt="%.0f K")
+    end
+  end
   # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
   if graticules; draw_graticules(ax, star; inclination=inclination, position_angle=position_angle, star_params=star_params, graticule_kwargs...); end
   if rotation_axis; draw_rotation_axis(ax, star, inclination=inclination, position_angle=position_angle); end
@@ -631,7 +641,7 @@ function plot_mollweide(tmap, star; kwargs...)
   return
 end
 
-function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide", mask_unobserved=true, bad_color="lightgray")
+function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide", mask_unobserved=true, bad_color="lightgray", lon_color="white", lat_color="black")
   np = pyimport("numpy")
   xsize = 2000
   ysize = div(xsize,2)
@@ -696,8 +706,8 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
   cb.ax.xaxis.set_label_text("Temperature (K)")
   # workaround for issue with viewers, see colorbar docstring
   cb.solids.set_edgecolor("face")
-  ax.tick_params(axis="x", labelsize=12)
-  ax.tick_params(axis="y", labelsize=12)
+  ax.tick_params(axis="x", labelsize=12, colors=lon_color)
+  ax.tick_params(axis="y", labelsize=12, colors=lat_color)
   return
 end
 
