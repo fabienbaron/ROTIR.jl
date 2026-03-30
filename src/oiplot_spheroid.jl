@@ -145,28 +145,39 @@ function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.15, offset_frac=0
 end
 
 """
-    draw_graticules(ax, star; nlat=5, nlon=8, inclination=NaN, position_angle=NaN, ...)
+    draw_graticules(ax, star; star_params=nothing, nlat=5, nlon=8, inclination=NaN, position_angle=NaN, ...)
 
 Draw latitude/longitude graticule lines on the star surface using parametric curves.
 Generates smooth curves in the body frame, rotates them with the same Euler rotation
 as the star (rot_vertex), and z-clips to the front hemisphere.
 Renders via matplotlib PolyCollection for efficiency.
 
-Semi-axes are extracted automatically from the tessellation's body-frame radii.
+When `star_params` is provided, exact surface geometry is used:
+- Type 0 (sphere): radius
+- Type 1 (triaxial ellipsoid): radius_x, radius_y, radius_z
+- Type 2 (rapid rotator): rpole, frac_escapevel via f_rapid_rot
+
+When `star_params` is omitted, semi-axes are estimated from the tessellation (backward compatible).
 """
 function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8, alpha=0.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
-    rotation_angle=0.0, npoints=200)
+    rotation_angle=0.0, npoints=200, star_params=nothing)
     collections = pyimport("matplotlib.collections")
 
-    # Extract effective semi-axes from body-frame tessellation
-    all_colat = star.vertices_spherical[:, 1:4, 2]   # colatitude (body frame)
-    all_r     = star.vertices_spherical[:, 1:4, 1]    # radius (body frame)
+    # Determine surface model
+    use_exact = star_params !== nothing && hasproperty(star_params, :surface_type)
+    stype = use_exact ? star_params.surface_type : -1
 
-    pole_mask = (all_colat .< 0.3) .| (all_colat .> π - 0.3)
-    r_pole = any(pole_mask) ? mean(all_r[pole_mask]) : mean(all_r)
-    eq_mask = abs.(all_colat .- π/2) .< 0.3
-    r_eq = any(eq_mask) ? mean(all_r[eq_mask]) : mean(all_r)
+    # Extract effective semi-axes from body-frame tessellation (used as fallback
+    # when star_params is absent or surface_type is not 0/1/2)
+    if !use_exact || stype ∉ (0, 1, 2)
+        all_colat = star.vertices_spherical[:, 1:4, 2]
+        all_r     = star.vertices_spherical[:, 1:4, 1]
+        pole_mask = (all_colat .< 0.3) .| (all_colat .> π - 0.3)
+        r_pole = any(pole_mask) ? mean(all_r[pole_mask]) : mean(all_r)
+        eq_mask = abs.(all_colat .- π/2) .< 0.3
+        r_eq = any(eq_mask) ? mean(all_r[eq_mask]) : mean(all_r)
+    end
 
     # Build rotation matrix (same convention as rotate_star)
     inc_rad = isnan(inclination) ? 0.0 : inclination * π / 180
@@ -180,9 +191,26 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
     θ_targets = collect(range(π/(nlat+1), stop=π*nlat/(nlat+1), length=nlat))
     ϕ_range = collect(range(-π, stop=π, length=npoints))
     for θ0 in θ_targets
-        body_pts = hcat(r_eq .* sin(θ0) .* cos.(ϕ_range),
-                        r_eq .* sin(θ0) .* sin.(ϕ_range),
-                        fill(r_pole * cos(θ0), npoints))
+        if stype == 0
+            r = star_params.radius
+            body_pts = hcat(r .* sin(θ0) .* cos.(ϕ_range),
+                            r .* sin(θ0) .* sin.(ϕ_range),
+                            fill(r * cos(θ0), npoints))
+        elseif stype == 1
+            body_pts = hcat(star_params.radius_x .* sin(θ0) .* cos.(ϕ_range),
+                            star_params.radius_y .* sin(θ0) .* sin.(ϕ_range),
+                            fill(star_params.radius_z * cos(θ0), npoints))
+        elseif stype == 2
+            arg = star_params.frac_escapevel * sin(θ0)
+            r0 = abs(arg) < 1e-5 ? star_params.rpole : star_params.rpole * f_rapid_rot(arg)
+            body_pts = hcat(r0 .* sin(θ0) .* cos.(ϕ_range),
+                            r0 .* sin(θ0) .* sin.(ϕ_range),
+                            fill(r0 * cos(θ0), npoints))
+        else
+            body_pts = hcat(r_eq .* sin(θ0) .* cos.(ϕ_range),
+                            r_eq .* sin(θ0) .* sin.(ϕ_range),
+                            fill(r_pole * cos(θ0), npoints))
+        end
         sky_pts = body_pts * R
         append!(graticule_lines, _visible_segments(sky_pts, offset_west, offset_north))
     end
@@ -191,9 +219,28 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
     ϕ_targets = collect(range(0, stop=2π*(1 - 1/nlon), length=nlon))
     θ_range = collect(range(0, stop=π, length=npoints))
     for ϕ0 in ϕ_targets
-        body_pts = hcat(r_eq .* sin.(θ_range) .* cos(ϕ0),
-                        r_eq .* sin.(θ_range) .* sin(ϕ0),
-                        r_pole .* cos.(θ_range))
+        if stype == 0
+            r = star_params.radius
+            body_pts = hcat(r .* sin.(θ_range) .* cos(ϕ0),
+                            r .* sin.(θ_range) .* sin(ϕ0),
+                            r .* cos.(θ_range))
+        elseif stype == 1
+            body_pts = hcat(star_params.radius_x .* sin.(θ_range) .* cos(ϕ0),
+                            star_params.radius_y .* sin.(θ_range) .* sin(ϕ0),
+                            star_params.radius_z .* cos.(θ_range))
+        elseif stype == 2
+            ω = star_params.frac_escapevel
+            args = ω .* sin.(θ_range)
+            r_vals = star_params.rpole .* f_rapid_rot.(args)
+            r_vals[abs.(args) .< 1e-5] .= star_params.rpole
+            body_pts = hcat(r_vals .* sin.(θ_range) .* cos(ϕ0),
+                            r_vals .* sin.(θ_range) .* sin(ϕ0),
+                            r_vals .* cos.(θ_range))
+        else
+            body_pts = hcat(r_eq .* sin.(θ_range) .* cos(ϕ0),
+                            r_eq .* sin.(θ_range) .* sin(ϕ0),
+                            r_pole .* cos.(θ_range))
+        end
         sky_pts = body_pts * R
         append!(graticule_lines, _visible_segments(sky_pts, offset_west, offset_north))
     end
@@ -282,7 +329,8 @@ end
 function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5,
     colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="white", flipx=false,
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false,
-    inclination=NaN, position_angle=NaN)
+    inclination=NaN, position_angle=NaN, star_params=nothing,
+    graticule_kwargs=(;))
   # Plot temperature map onto the projected 2D image plane (= observer view)
   # Convention: East left, North up (astronomical standard)
   set_oiplot_defaults()
@@ -327,7 +375,7 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   xlabel(L"x $\leftarrow$ E (mas)", fontsize=20)
   ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
   # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
-  if graticules; draw_graticules(ax, star, inclination=inclination, position_angle=position_angle); end
+  if graticules; draw_graticules(ax, star; inclination=inclination, position_angle=position_angle, star_params=star_params, graticule_kwargs...); end
   if rotation_axis; draw_rotation_axis(ax, star, inclination=inclination, position_angle=position_angle); end
   if rotation_arrow; draw_rotation_arrow(ax, star, inclination=inclination, position_angle=position_angle); end
   if compass; draw_compass(ax, axis_max); end
@@ -350,7 +398,9 @@ The farther star (larger z = receding) is drawn behind the nearer one.
 function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
     intensity=false, plotmesh=false, colormap="gist_heat", pad=1.0, background="white",
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false, figtitle="",
-    inclination1=NaN, position_angle1=NaN, inclination2=NaN, position_angle2=NaN)
+    inclination1=NaN, position_angle1=NaN, inclination2=NaN, position_angle2=NaN,
+    star_params1=nothing, star_params2=nothing,
+    graticule_kwargs=(;))
   set_oiplot_defaults()
   patches = pyimport("matplotlib.patches")
   axdiv = pyimport("mpl_toolkits.axes_grid1.axes_divider")
@@ -418,9 +468,9 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
   # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
   if graticules
-    draw_graticules(ax, star1, inclination=inclination1, position_angle=position_angle1)
-    draw_graticules(ax, star2, offset_west=offset_west, offset_north=offset_north,
-        inclination=inclination2, position_angle=position_angle2)
+    draw_graticules(ax, star1; inclination=inclination1, position_angle=position_angle1, star_params=star_params1, graticule_kwargs...)
+    draw_graticules(ax, star2; offset_west=offset_west, offset_north=offset_north,
+        inclination=inclination2, position_angle=position_angle2, star_params=star_params2, graticule_kwargs...)
   end
   if rotation_axis
     draw_rotation_axis(ax, star1, inclination=inclination1, position_angle=position_angle1)

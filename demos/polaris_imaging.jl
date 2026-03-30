@@ -51,6 +51,7 @@ chi2 = image_reconstruct_oi_chi2(tmap, data, stars, verbose=true)
 # --- 7. Plot -----------------------------------------------------------------
 plot2d(tmap, stars[1], intensity=true,
     graticules=true, compass=true,
+    star_params=star_params,
     figtitle="Polaris – single-epoch reconstruction")
 
 plot_mollweide(tmap, stars[1])

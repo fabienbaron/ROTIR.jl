@@ -41,6 +41,19 @@ these functions.
 | `graticules` | `false` | Draw latitude/longitude grid lines on the surface |
 | `rotation_axis` | `false` | Draw the rotation axis (dashed line through poles) |
 | `rotation_arrow` | `false` | Draw spin direction arrow at the north pole |
+| `star_params` | `nothing` | Star parameters NamedTuple for exact graticule geometry (sphere, triaxial ellipsoid, rapid rotator) |
+| `graticule_kwargs` | `(;)` | Style overrides passed to `draw_graticules` (see below) |
+
+### Graticule style (`graticule_kwargs`)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `nlat` | `5` | Number of latitude circles |
+| `nlon` | `8` | Number of longitude lines |
+| `color` | `"black"` | Line color |
+| `linewidth` | `0.8` | Line width |
+| `alpha` | `0.5` | Opacity |
+| `npoints` | `200` | Points per curve (resolution) |
 
 ## Binary sky-plane
 
@@ -54,6 +67,8 @@ these functions.
 |---------|---------|-------------|
 | `inclination1`, `position_angle1` | `NaN` | Override star 1 orientation for decorations |
 | `inclination2`, `position_angle2` | `NaN` | Override star 2 orientation for decorations |
+| `star_params1`, `star_params2` | `nothing` | Star parameters for exact graticule geometry on each component |
+| `graticule_kwargs` | `(;)` | Graticule style overrides (shared by both components) |
 
 ## Radial velocity
 

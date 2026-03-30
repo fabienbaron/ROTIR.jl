@@ -167,13 +167,14 @@ plot2d_binary(tmap1, tmap2, stars1[i_epoch], stars2[i_epoch], bparams, tepoch_jd
     rotation_axis=true, graticules=true,
     inclination1=inc_star, position_angle1=pa_star,
     inclination2=inc_star, position_angle2=pa_star,
+    star_params1=roche_params_1, star_params2=roche_params_2,
     figtitle="Spica Binary (Roche) — Epoch $i_epoch")
 
 # Debug: plot each component separately
 plot2d(tmap1, stars1[i_epoch], intensity=true, graticules=true, rotation_axis=true, rotation_arrow=true,
-    inclination=inc_star, position_angle=pa_star, figtitle="Primary (Roche)")
+    inclination=inc_star, position_angle=pa_star, star_params=roche_params_1, figtitle="Primary (Roche)")
 plot2d(tmap2, stars2[i_epoch], intensity=true, graticules=true, rotation_axis=true, rotation_arrow=true,
-    inclination=inc_star, position_angle=pa_star, figtitle="Secondary (Roche)")
+    inclination=inc_star, position_angle=pa_star, star_params=roche_params_2, figtitle="Secondary (Roche)")
 
 # =============================================================================
 # 6. PLOT: ORBITAL DIAGRAM

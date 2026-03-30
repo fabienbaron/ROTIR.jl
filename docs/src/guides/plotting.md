@@ -25,11 +25,43 @@ plot2d(tmap, stars[1];
     graticules     = false,       # draw lat/lon grid lines on the surface
     rotation_axis  = false,       # draw dashed line through poles
     rotation_arrow = false,       # draw spin direction arrow at north pole
+    star_params    = nothing,     # pass star_params for exact graticules
+    graticule_kwargs = (;),       # graticule style overrides (see below)
 )
 ```
 
 The projection shows the sky plane in milliarcseconds (East left, North up).
 Only pixels with positive soft visibility weight are rendered.
+
+### Graticules
+
+When `graticules = true`, latitude/longitude grid lines are drawn on the stellar
+surface. Pass `star_params` to use the exact surface geometry:
+
+- **Sphere** (type 0): uses `radius` directly
+- **Triaxial ellipsoid** (type 1): uses `radius_x`, `radius_y`, `radius_z` — latitude circles are ellipses when the equatorial radii differ
+- **Rapid rotator** (type 2): uses `rpole` and `frac_escapevel` — longitude lines follow the exact Roche meridional profile via `f_rapid_rot`
+
+Without `star_params`, graticules fall back to an oblate spheroid approximation
+estimated from the tessellation vertices.
+
+Customize the graticule appearance via `graticule_kwargs`:
+
+```julia
+plot2d(tmap, star;
+    graticules = true,
+    star_params = star_params,
+    graticule_kwargs = (
+        nlat      = 8,        # number of latitude circles (default 5)
+        nlon      = 12,       # number of longitude lines (default 8)
+        color     = "white",  # line color (default "black")
+        linewidth = 0.6,      # line width (default 0.8)
+        alpha     = 0.4,      # opacity (default 0.5)
+    ),
+)
+```
+
+![Graticule styles](../assets/graticule_styles.png)
 
 ### Examples
 

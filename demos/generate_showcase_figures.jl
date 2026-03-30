@@ -127,6 +127,7 @@ for (params, name, show_spin, hp_n) in [
         rotation_arrow = show_spin,
         inclination    = params.inclination,
         position_angle = params.position_angle,
+        star_params    = params,
     )
     save_and_close(fig, name)
 end
@@ -167,15 +168,18 @@ fig, ax = plot2d(tmap_ll, star_ll;
 save_and_close(fig, "tess_latlong_mesh.png")
 
 # Lon/lat with a temperature spot (unique lon/lat feature)
-ntheta = 20; nphi = 40
-tmap_spot = copy(tmap_ll)
-tmap_spot = make_circ_spot(tmap_spot, ntheta, nphi, 4, 8, 30; bright_frac=0.3)
-fig, ax = plot2d(tmap_spot, star_ll;
-    intensity  = true,
-    compass    = true,
-    graticules = true,
+ntheta_spot = 40; nphi_spot = 80
+tessels_ll_hires = tessellation_latlong(ntheta_spot, nphi_spot)
+star_ll_hires = create_star(tessels_ll_hires, sphere_params, 0.0)
+tmap_spot = parametric_temperature_map(sphere_params, star_ll_hires)
+tmap_spot = make_circ_spot(tmap_spot, ntheta_spot, nphi_spot, 8, 16, 60; bright_frac=0.3)
+fig, ax = plot2d(tmap_spot, star_ll_hires;
+    intensity      = true,
+    compass        = true,
+    graticules     = true,
     inclination    = sphere_params.inclination,
     position_angle = sphere_params.position_angle,
+    star_params    = sphere_params,
 )
 save_and_close(fig, "tess_latlong_spot.png")
 
@@ -226,6 +230,7 @@ fig, ax = plot2d(tmap_show, star_show;
     rotation_arrow = true,
     inclination    = rotator_params.inclination,
     position_angle = rotator_params.position_angle,
+    star_params    = rotator_params,
 )
 save_and_close(fig, "plot_decorated.png")
 
@@ -243,6 +248,56 @@ plot_mollweide(tmap_show, star_show;
     figtitle = "Mollweide projection",
 )
 save_current("plot_mollweide.png")
+
+# ===========================================================================
+# Section 5b: Graticule style comparison (1 PNG, 2x2 subplot)
+# ===========================================================================
+println("Generating graticule style comparison...")
+
+tessels_grat = tessellation_healpix(4)
+star_sph = create_star(tessels_grat, sphere_params, 0.0)
+tmap_sph = parametric_temperature_map(sphere_params, star_sph)
+star_ell = create_star(tessels_grat, ellipsoid_params, 0.0)
+tmap_ell = parametric_temperature_map(ellipsoid_params, star_ell)
+
+grat_configs = [
+    (tmap_sph,  star_sph,  sphere_params,    (;),                                                        "Sphere (default)"),
+    (tmap_show, star_show, rotator_params,   (nlat=8, nlon=12, color="white", linewidth=0.6, alpha=0.4), "Rapid rotator (dense, white)"),
+    (tmap_show, star_show, rotator_params,   (;),                                                        "Rapid rotator (exact, ω=0.9)"),
+    (tmap_ell,  star_ell,  ellipsoid_params, (;),                                                        "Triaxial ellipsoid"),
+]
+
+fig_grat, axes_grat = subplots(2, 2, figsize=(12, 12))
+patches_grat = pyimport("matplotlib.patches")
+for (idx, (tm, st, sp, gkw, ttl)) in enumerate(grat_configs)
+    local ax = axes_grat[(idx-1) ÷ 2 + 1, (idx-1) % 2 + 1]
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_title(ttl, fontsize=14)
+    axis_max = maximum(sqrt.(st.vertices_xyz[:,:,1].^2 .+ st.vertices_xyz[:,:,2].^2 .+ st.vertices_xyz[:,:,3].^2)) + 0.3
+    ax.set_xlim([axis_max, -axis_max])
+    ax.set_ylim([-axis_max, axis_max])
+    projmap = tm[st.index_quads_visible] .* st.ldmap[st.index_quads_visible]
+    pmin = minimum(projmap); pmax = maximum(projmap)
+    prange = pmax - pmin
+    if prange < 1.0; prange = max(abs(pmax) * 0.01, 1.0); end
+    cfloor = 0.08
+    vmin_padded = pmin - cfloor / (1.0 - cfloor) * prange
+    norm_plot = matplotlib.colors.Normalize(vmin=vmin_padded, vmax=pmax)
+    colours = get_cmap("gist_heat").(norm_plot.(projmap))
+    for i in 1:st.nquads_visible
+        ii = st.index_quads_visible[i]
+        p = patches_grat.Polygon(hcat(-st.proj_west[ii,:], st.proj_north[ii,:]),
+            closed=true, edgecolor=colours[i], facecolor=colours[i], fill=true, rasterized=false, zorder=2)
+        ax.add_patch(p)
+    end
+    draw_graticules(ax, st;
+        inclination=sp.inclination, position_angle=sp.position_angle,
+        star_params=sp, gkw...)
+    ax.set_xlabel(L"x $\leftarrow$ E (mas)", fontsize=12)
+    ax.set_ylabel(L"y $\rightarrow$ N (mas)", fontsize=12)
+end
+fig_grat.tight_layout(pad=2.0)
+save_and_close(fig_grat, "graticule_styles.png")
 
 # ===========================================================================
 # Section 6: Conventions annotated figure (1 PNG)
@@ -273,6 +328,7 @@ fig, ax = plot2d(tmap_conv, star_conv;
     inclination    = 45.0,
     position_angle = 45.0,
     figtitle       = "inc = 45°, PA = 45°",
+    star_params    = conv_params,
 )
 save_and_close(fig, "conventions_annotated.png")
 
@@ -301,10 +357,11 @@ for (omega, label) in [(0.0, "00"), (0.5, "50"), (0.9, "90"), (0.99, "99")]
     local tmap = parametric_temperature_map(params, star)
     local fig, ax = plot2d(tmap, star;
         intensity      = true,
-        plotmesh       = true,
         compass        = true,
+#        graticules     = true,
         inclination    = params.inclination,
         position_angle = params.position_angle,
+        star_params    = params,
     )
     save_and_close(fig, "rotator_omega$label.png")
 end
@@ -394,7 +451,8 @@ t_wide = T0_orb + 0.25 * P_orb
 fig, ax = plot2d_binary(tmap_b1, tmap_b2, star1_geom, star2_geom, bparams, t_wide;
     intensity=true, graticules=true, compass=true,
     inclination1=inc_star, position_angle1=pa_star,
-    inclination2=inc_star, position_angle2=pa_star)
+    inclination2=inc_star, position_angle2=pa_star,
+    star_params1=star1_nt, star_params2=star2_nt)
 save_and_close(fig, "binary_skyplane.png")
 
 # --- Orbital diagram ---

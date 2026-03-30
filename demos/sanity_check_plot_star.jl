@@ -22,4 +22,5 @@ tmap = parametric_temperature_map(star_params, star)
 plot2d(tmap, star, intensity=true,
     graticules=true, rotation_axis=true, rotation_arrow=true, compass=true,
     inclination=35.0, position_angle=20.0,
+    star_params=star_params,
     figtitle="Sanity check: inc=35° PA=20°")

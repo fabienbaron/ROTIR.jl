@@ -156,14 +156,15 @@ plot2d_binary(tmap1, tmap2, stars1[i_epoch], stars2[i_epoch], bparams, tepoch_jd
     intensity=true, graticules=true, compass=true,
     inclination1=inc_star, position_angle1=pa_star,
     inclination2=inc_star, position_angle2=pa_star,
+    star_params1=star1_params, star_params2=star2_params,
     figtitle="Spica Binary (spheres) — Epoch $i_epoch")
 
 # Debug: plot each component separately
 plot2d(tmap1, stars1[i_epoch], intensity=true, graticules=true, rotation_axis=true, rotation_arrow=true, compass=true,
-    inclination=inc_star, position_angle=pa_star,
+    inclination=inc_star, position_angle=pa_star, star_params=star1_params,
     figtitle="Primary (sphere)")
 plot2d(tmap2, stars2[i_epoch], intensity=true, graticules=true, rotation_axis=true, rotation_arrow=true, compass=true,
-    inclination=inc_star, position_angle=pa_star,
+    inclination=inc_star, position_angle=pa_star, star_params=star2_params,
     figtitle="Secondary (sphere)")
 
 # =============================================================================
