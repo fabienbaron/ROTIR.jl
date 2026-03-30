@@ -241,6 +241,18 @@ fig, ax = plot2d(tmap_show, star_show;
 )
 save_and_close(fig, "plot_intensity.png")
 
+# Temperature contours
+fig, ax = plot2d(tmap_show, star_show;
+    intensity      = true,
+    compass        = true,
+    contours       = [4200, 4400, 4600, 4800],
+    contour_color  = "gray",
+    inclination    = rotator_params.inclination,
+    position_angle = rotator_params.position_angle,
+    star_params    = rotator_params,
+)
+save_and_close(fig, "plot_contours.png")
+
 # Mollweide projection
 plot_mollweide(tmap_show, star_show;
     colormap = "gist_heat",

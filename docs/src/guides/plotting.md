@@ -33,6 +33,22 @@ plot2d(tmap, stars[1];
 The projection shows the sky plane in milliarcseconds (East left, North up).
 Only pixels with positive soft visibility weight are rendered.
 
+### Temperature contours
+
+Draw temperature contour lines on the projected surface by passing an array of
+temperature values:
+
+```julia
+plot2d(tmap, stars[1];
+    contours       = [6000, 6500, 7000, 7500],  # temperature levels (K)
+    contour_color  = "gray",     # line and label color (default "gray")
+    contour_labels = true,       # label each contour with "XXXX K" (default true)
+    contour_fontsize = 10,       # label font size (default 10)
+)
+```
+
+![Temperature contours](../assets/plot_contours.png)
+
 ### Graticules
 
 When `graticules = true`, latitude/longitude grid lines are drawn on the stellar
@@ -147,13 +163,26 @@ tessellation type. Options:
 
 ```julia
 plot_mollweide(tmap, stars[1];
-    visible_pixels = [],       # highlight visible pixels
-    vmin           = 4000.0,   # color scale minimum
-    vmax           = 5000.0,   # color scale maximum
-    colormap       = "gist_heat",
-    incl           = 78.0,     # draw inclination line
-    figtitle       = "Mollweide",
+    visible_pixels  = [],            # pixels observed at any epoch
+    mask_unobserved = true,          # gray out unobserved pixels (default true)
+    bad_color       = "lightgray",   # color for unobserved pixels (default "lightgray")
+    vmin            = 4000.0,        # color scale minimum
+    vmax            = 5000.0,        # color scale maximum
+    colormap        = "gist_heat",
+    incl            = 78.0,          # draw inclination line
+    figtitle        = "Mollweide",
+    lon_color       = "white",       # longitude tick label color (default "white")
+    lat_color       = "black",       # latitude tick label color (default "black")
 )
+```
+
+When `visible_pixels` is provided and `mask_unobserved = true` (the default),
+pixels that were never observed are rendered in `bad_color`. Use
+`sometimes_visible(stars)` to get the list of pixels visible at any epoch:
+
+```julia
+vis = sometimes_visible(stars)
+plot_mollweide(tmap, stars[1], visible_pixels=vis)
 ```
 
 The Mollweide projection shows longitude on the x-axis (-180 to 180 degrees)

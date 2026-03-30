@@ -332,7 +332,7 @@ end
 function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5,
     colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="white", flipx=false,
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false,
-    contours=Float64[], contour_color="white", contour_labels=true, contour_fontsize=10,
+    contours=Float64[], contour_color="gray", contour_labels=true, contour_fontsize=10,
     inclination=NaN, position_angle=NaN, star_params=nothing,
     graticule_kwargs=(;))
   # Plot temperature map onto the projected 2D image plane (= observer view)
@@ -384,7 +384,7 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
     cy = vec(mean(star.proj_north[visible, :], dims=2))
     cs = ax.tricontour(cx, cy, Float64.(projmap), levels=Float64.(sort(contours)), colors=contour_color, zorder=4)
     if contour_labels
-      ax.clabel(cs, inline=true, fontsize=contour_fontsize, fmt="%.0f K")
+      ax.clabel(cs, inline=true, fontsize=contour_fontsize, fmt="%.0f K", colors=contour_color)
     end
   end
   # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
