@@ -109,7 +109,7 @@ tmap = make_circ_spot(tmap, star_geometry, spot_radius, lat, long;
                        bright_frac=0.8)
 ```
 
-- `spot_radius` in degrees, `lat` in [-90, 90], `long` in [-180, 180] (or [0, 360])
+- `spot_radius` in degrees, `lat` in \[-90, 90\], `long` in \[-180, 180\] (or \[0, 360\])
 - Uses Euclidean chord distance in 3D, so spots remain circular on
   non-spherical surfaces (ellipsoids, rapid rotators, Roche lobes)
 - A fill-fraction variant is also available:
