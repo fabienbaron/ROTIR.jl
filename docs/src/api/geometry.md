@@ -4,7 +4,7 @@
 
 | Function | Description |
 |----------|-------------|
-| `create_star(tessels, star_params, t; secondary=false, T=Float64, kappa=50)` | Create `stellar_geometry` for one epoch at time `t` |
+| `create_star(tessels, star_params, t; secondary=false, T=Float64, κ=50)` | Create `stellar_geometry` for one epoch at time `t` |
 | `create_star_multiepochs(tessels, star_params, tepochs; kwargs...)` | Create geometries for all epochs, returns `Vector{stellar_geometry}` |
 | `create_binary(star1_tessels, star2_tessels, binary_params, t)` | Create binary system geometry |
 

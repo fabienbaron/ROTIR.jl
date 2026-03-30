@@ -51,7 +51,7 @@ The derivative computation is surface-type-specific:
 
 | Function | Description |
 |----------|-------------|
-| `shape_chi2_fg!(grad_theta, grad_xmap, xmap, theta, data, tessels, star_params_base, tepochs; kappa, verbose)` | Chi2 and gradients w.r.t. both shape and map parameters |
+| `shape_chi2_fg!(grad_θ, grad_xmap, xmap, θ, data, tessels, star_params_base, tepochs; κ, verbose)` | Chi2 and gradients w.r.t. both shape and map parameters |
 
 The gradient chain has three components:
 
@@ -73,17 +73,17 @@ Inclination and PA are in **degrees** (converted internally).
 
 | Function | Description |
 |----------|-------------|
-| `joint_reconstruct_oi(xmap, theta, data, tessels, star_params, tepochs; kwargs...)` | Alternating optimization of map and shape parameters |
+| `joint_reconstruct_oi(xmap, θ, data, tessels, star_params, tepochs; kwargs...)` | Alternating optimization of map and shape parameters |
 
 ### Keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
 | `maxiter_xmap` | `200` | Max iterations for map optimization |
-| `maxiter_theta` | `50` | Max iterations for shape optimization |
+| `maxiter_θ` | `50` | Max iterations for shape optimization |
 | `nouter` | `5` | Number of alternating cycles |
 | `reg_weight` | `1e-5` | TV2 regularization weight for map step |
-| `kappa` | `50.0` | Sigmoid sharpness for soft visibility |
-| `theta_lower` | `nothing` | Lower bounds on shape parameters |
-| `theta_upper` | `nothing` | Upper bounds on shape parameters |
+| `κ` | `50.0` | Sigmoid sharpness for soft visibility |
+| `θ_lower` | `nothing` | Lower bounds on shape parameters |
+| `θ_upper` | `nothing` | Upper bounds on shape parameters |
 | `verbose` | `true` | Print diagnostics |

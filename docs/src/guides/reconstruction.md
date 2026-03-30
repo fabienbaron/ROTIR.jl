@@ -139,17 +139,17 @@ ROTIR can simultaneously optimize the surface map and shape parameters
 
 ```julia
 # Starting shape parameters: [rpole (mas), omega, inclination (°), PA (°)]
-theta_start = [1.37, 0.9, 78.0, 24.0]
+θ_start = [1.37, 0.9, 78.0, 24.0]
 
-tmap_final, theta_final = joint_reconstruct_oi(
-    tmap_start, theta_start, data, tessels, star_params, tepochs;
+tmap_final, θ_final = joint_reconstruct_oi(
+    tmap_start, θ_start, data, tessels, star_params, tepochs;
     maxiter_xmap=200,     # iterations per temperature-map step
-    maxiter_theta=50,     # iterations per shape-parameter step
+    maxiter_θ=50,         # iterations per shape-parameter step
     nouter=5,             # number of alternating cycles
     reg_weight=1e-5,      # TV regularization weight
-    kappa=50.0,           # soft-visibility sigmoid sharpness
-    theta_lower=[0.5, 0.0, 0.0, -180.0],    # [rpole, omega, inc, PA] lower bounds
-    theta_upper=[3.0, 1.0, 180.0, 180.0],   # [rpole, omega, inc, PA] upper bounds
+    κ=50.0,               # soft-visibility sigmoid sharpness
+    θ_lower=[0.5, 0.0, 0.0, -180.0],    # [rpole, ω, inc, PA] lower bounds
+    θ_upper=[3.0, 1.0, 180.0, 180.0],   # [rpole, ω, inc, PA] upper bounds
 )
 ```
 

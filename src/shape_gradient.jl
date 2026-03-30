@@ -511,7 +511,7 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
                                                     inclination=θ[2], position_angle=θ[3]))
         end
         n = npix2n(npix)
-        tessels = tessellation_healpix(n)
+        tessels = tessellation_healpix(n, T=T)
         stars = create_star_multiepochs(tessels, star_params, tepochs)
         setup_oi!(data, stars)
 
