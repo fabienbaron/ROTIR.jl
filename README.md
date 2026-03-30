@@ -93,8 +93,18 @@ tmap = image_reconstruct_oi(tmap_start, data, stars;
 # Plot the visible stellar disk at each epoch (shows rotation of surface features)
 plot2d_allepochs(tmap, stars)
 
+# Rescale so that the pole pixel temperature matches star_params.tpole
+tmap = rescale_temperature_tpole(tmap, stars, star_params)
+
+# Plot the visible stellar disk with temperature contours
+plot2d(tmap, stars[1];
+    intensity=true, graticules=true, compass=true,
+    contours=[4200, 4400, 4600, 4800],
+    star_params=star_params)
+
 # Plot the full surface as a Mollweide equal-area projection
-plot_mollweide(tmap, stars[1])
+# Unobserved pixels are grayed out
+plot_mollweide(tmap, stars[1], visible_pixels=sometimes_visible(stars))
 ```
 
 ## Gallery
@@ -103,9 +113,13 @@ plot_mollweide(tmap, stars[1])
 |:------:|:-------------:|
 | ![Sphere](docs/src/assets/surface_sphere.png) | ![Rapid rotator](docs/src/assets/surface_rapid_rotator.png) |
 
-| Roche lobe | Mollweide projection |
+| Roche lobe | Binary system |
 |:--------------:|:--------------------:|
-| ![Roche lobe](docs/src/assets/surface_roche.png) | ![Mollweide](docs/src/assets/plot_mollweide.png) |
+| ![Roche lobe](docs/src/assets/surface_roche.png) | ![Binary](docs/src/assets/binary_skyplane.png) |
+
+| Temperature contours | Mollweide projection |
+|:--------------------:|:--------------------:|
+| ![Contours](docs/src/assets/plot_contours.png) | ![Mollweide](docs/src/assets/plot_mollweide.png) |
 
 See the [full documentation](https://fabienbaron.github.io/ROTIR.jl/dev/guides/surfaces/) for all surface types and plotting options.
 
@@ -113,6 +127,8 @@ See the [full documentation](https://fabienbaron.github.io/ROTIR.jl/dev/guides/s
 
 - **Multiple surface geometries**: spheres, triaxial ellipsoids, rapid rotators
   (centrifugally distorted), and Roche-lobe-filling stars in binaries
+- **Binary star modeling**: forward model for resolved binaries with Keplerian
+  orbits, radial velocity curves, and composite interferometric observables
 - **Two tessellation schemes**: nested HEALPix (equal-area, hierarchical) and
   longitude/latitude grids
 - **Multi-epoch reconstruction**: simultaneously fit data from multiple rotation
@@ -127,6 +143,10 @@ See the [full documentation](https://fabienbaron.github.io/ROTIR.jl/dev/guides/s
   constraint, and harmonic bias
 - **Gradient-based optimization**: VMLMB quasi-Newton with bounds
   (OptimPackNextGen)
+- **Spot creation**: circular spots with Euclidean chord distance (correct on
+  any surface geometry), with flat or linear temperature profiles
+- **Rich visualization**: 2D projections with graticules, temperature contours,
+  rotation decorations; Mollweide maps with unobserved-pixel masking
 
 ROTIR uses [OITOOLS.jl](https://github.com/fabienbaron/OITOOLS.jl) for OIFITS
 I/O and data handling.
@@ -140,8 +160,11 @@ including:
 - [Overview and workflow](https://fabienbaron.github.io/ROTIR.jl/dev/guides/overview/)
 - [Tessellation schemes](https://fabienbaron.github.io/ROTIR.jl/dev/guides/tessellation/)
 - [Surface types](https://fabienbaron.github.io/ROTIR.jl/dev/guides/surfaces/)
+- [Plotting and visualization](https://fabienbaron.github.io/ROTIR.jl/dev/guides/plotting/)
+- [Binary stars and orbits](https://fabienbaron.github.io/ROTIR.jl/dev/guides/orbits/)
 - [Image reconstruction](https://fabienbaron.github.io/ROTIR.jl/dev/guides/reconstruction/)
 - [Multi-resolution imaging](https://fabienbaron.github.io/ROTIR.jl/dev/guides/multires/)
+- [Conventions](https://fabienbaron.github.io/ROTIR.jl/dev/guides/conventions/)
 - [API reference](https://fabienbaron.github.io/ROTIR.jl/dev/api/chi2/)
 
 ## Development install

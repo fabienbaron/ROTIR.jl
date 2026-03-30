@@ -41,5 +41,8 @@ regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap_start)]];
 tmap =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 1000, regularizers = regularizers, verbose = true);
 crit = image_reconstruct_oi_crit(tmap, data, stars, regularizers = [], verbose = true)
 chi2 = image_reconstruct_oi_chi2(tmap, data, stars, verbose = true)
-plot2d_allepochs(tmap, stars)
-plot_mollweide(tmap, stars[1])
+
+tmap_final = rescale_temperature_teff(tmap, stars, star_params, 4633.0)
+plot2d(tmap_final, stars[1], contours=[2500, 3000, 4000])
+
+plot_mollweide(tmap_final, stars[1], visible_pixels=sometimes_visible(stars), bad_color="lightgray")

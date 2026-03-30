@@ -483,6 +483,24 @@ function rescale_temperature_tpole(tmap, stars, star_params)
     return tmap .* scale
 end
 
+"""
+    rescale_temperature_teff(tmap, stars, teff)
+
+Rescale a temperature map so that the mean temperature of the visible pixels equals `teff`.
+`stars` can be a single `stellar_geometry` or a vector of them (multi-epoch).
+Visibility is the union across all epochs.
+"""
+function rescale_temperature_teff(tmap, stars, teff)
+    vis = sometimes_visible(stars)
+    if isempty(vis)
+        @warn "No visible pixels — returning unmodified map"
+        return copy(tmap)
+    end
+    mean_T = mean(tmap[vis])
+    scale = teff / mean_T
+    return tmap .* scale
+end
+
 
 # "Multitemporal" = dynamical reconstruction
 
