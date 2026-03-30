@@ -109,8 +109,9 @@ function setup_di(star_epoch_geom; ld = true)
     return polyflux, visible_pixels, hidden_pixels
 end
 
-function make_circ_spot_DI(temperature_map,star_geometry,spot_radius,lat,long;bright_frac=0.8)
+function make_circ_spot(temperature_map,star_geometry,spot_radius,lat,long;bright_frac=0.8)
     ## Makes a circular spot at a given (lat, long)
+    ## Uses Euclidean chord distance so spots stay circular on non-spherical surfaces
     ##  spot_radius ∈ [0, 360]
     ##  lat ∈ [-90, 90]
     ##  long ∈ [-180, 180]
@@ -120,17 +121,38 @@ function make_circ_spot_DI(temperature_map,star_geometry,spot_radius,lat,long;br
 
     temperature_map_copy = deepcopy(temperature_map)
     centers = star_geometry.vertices_spherical[:,5,:]
-    θ = centers[:, 3]
-    ϕ = -centers[:, 2] .+ pi/2
+    r_c = @view centers[:, 1]
+    θ_c = @view centers[:, 2]  # colatitude
+    φ_c = @view centers[:, 3]  # longitude
 
-    da = 2.0*asin.(sqrt.(sin.(0.5*(ϕ .- lat*pi/180)).^2+cos(lat*pi/180).*cos.(ϕ).*sin.(0.5*(θ .- long*pi/180)).^2))
+    # Body-frame Cartesian positions of patch centers
+    sinθ = sin.(θ_c); cosθ = cos.(θ_c)
+    px = r_c .* sinθ .* cos.(φ_c)
+    py = r_c .* sinθ .* sin.(φ_c)
+    pz = r_c .* cosθ
 
-    spot_mask = findall(da .<= spot_radius*pi/180)
+    # Spot center unit direction
+    spot_colat = (90 - lat) * pi / 180
+    spot_lon   = long * pi / 180
+    ux = sin(spot_colat) * cos(spot_lon)
+    uy = sin(spot_colat) * sin(spot_lon)
+    uz = cos(spot_colat)
+
+    # Radius at spot center ≈ radius of nearest patch
+    r_spot = r_c[argmax(sinθ .* ux .* cos.(φ_c) .+ sinθ .* uy .* sin.(φ_c) .+ cosθ .* uz)]
+
+    # Euclidean chord distance from spot center to each patch
+    d = sqrt.((px .- r_spot * ux).^2 .+ (py .- r_spot * uy).^2 .+ (pz .- r_spot * uz).^2)
+
+    # Convert angular radius to chord distance: chord = 2R sin(α/2)
+    chord_radius = 2 * r_spot * sin(spot_radius * pi / 360)
+
+    spot_mask = findall(d .<= chord_radius)
     temperature_map_copy[spot_mask] .= median(temperature_map_copy) * bright_frac
     return vec(temperature_map_copy)
 end
 
-function make_meridional_band_DI(temperature_map,star_geometry,band_width,long;bright_frac=0.8)
+function make_meridional_band(temperature_map,star_geometry,band_width,long;bright_frac=0.8)
     ## Makes a meridional band at a given long
     ##  spot_radius ∈ [0, 360]
     ##  long ∈ [-180, 180]
@@ -148,7 +170,7 @@ function make_meridional_band_DI(temperature_map,star_geometry,band_width,long;b
     return vec(temperature_map_copy)
 end
 
-function make_equatorial_band_DI(temperature_map,star_geometry,band_width,lat;bright_frac=0.8)
+function make_equatorial_band(temperature_map,star_geometry,band_width,lat;bright_frac=0.8)
     ## Makes an equatorial band at a given lat
     ##  spot_radius ∈ [0, 360]
     ##  lat ∈ [-90, 90]
@@ -889,27 +911,48 @@ function calculate_chi2_g_spotfill(x::Vector{Float64}, g::Vector{Float64}, star_
     return g
 end
 
-function make_circ_spot_DI_spotfill(star_geometry,spot_radius,lat,long; profile="flat")
+function make_circ_spot_spotfill(star_geometry,spot_radius,lat,long; profile="flat")
     ## Makes a circular spot at a given (lat, long)
+    ## Uses Euclidean chord distance so spots stay circular on non-spherical surfaces
     ##  spot_radius ∈ [0, 360]
     ##  lat ∈ [-90, 90]
     ##  long ∈ [-180, 180]
-    ##  bright_frac ∈ [0, ∞)
 
     long = mod(long, 360)
 
     x = zeros(star_geometry.npix)
     centers = star_geometry.vertices_spherical[:,5,:]
-    θ = centers[:, 3]
-    ϕ = -centers[:, 2] .+ pi/2
+    r_c = @view centers[:, 1]
+    θ_c = @view centers[:, 2]  # colatitude
+    φ_c = @view centers[:, 3]  # longitude
 
-    da = 2.0*asin.(sqrt.(sin.(0.5*(ϕ .- lat*pi/180)).^2+cos(lat*pi/180).*cos.(ϕ).*sin.(0.5*(θ .- long*pi/180)).^2))
+    # Body-frame Cartesian positions of patch centers
+    sinθ = sin.(θ_c); cosθ = cos.(θ_c)
+    px = r_c .* sinθ .* cos.(φ_c)
+    py = r_c .* sinθ .* sin.(φ_c)
+    pz = r_c .* cosθ
 
-    spot_mask = findall(da .<= spot_radius*pi/180)
+    # Spot center unit direction
+    spot_colat = (90 - lat) * pi / 180
+    spot_lon   = long * pi / 180
+    ux = sin(spot_colat) * cos(spot_lon)
+    uy = sin(spot_colat) * sin(spot_lon)
+    uz = cos(spot_colat)
+
+    # Radius at spot center ≈ radius of nearest patch
+    r_spot = r_c[argmax(sinθ .* ux .* cos.(φ_c) .+ sinθ .* uy .* sin.(φ_c) .+ cosθ .* uz)]
+
+    # Euclidean chord distance from spot center to each patch
+    d = sqrt.((px .- r_spot * ux).^2 .+ (py .- r_spot * uy).^2 .+ (pz .- r_spot * uz).^2)
+
+    # Convert angular radius to chord distance: chord = 2R sin(α/2)
+    chord_radius = 2 * r_spot * sin(spot_radius * pi / 360)
+
+    spot_mask = findall(d .<= chord_radius)
     if profile == "flat"
         x[spot_mask] .= 1.0
     elseif profile == "linear"
-        x[spot_mask] .= 1.0 .- da[spot_mask] ./ (spot_radius*pi/180)
+        x[spot_mask] .= 1.0 .- d[spot_mask] ./ chord_radius
     end
 
     return vec(x)

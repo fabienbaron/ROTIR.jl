@@ -19,13 +19,24 @@
 | `upsample_map_stars(tmap, stars, star_params, tepochs)` | Double resolution (each pixel splits into 4) |
 | `downsample_map_stars(tmap, stars, star_params, tepochs)` | Halve resolution (average groups of 4) |
 
+## Spots and surface features
+
+These work with any tessellation type (HEALPix or lon/lat) via `stellar_geometry`. Spots use Euclidean chord distance in 3D, so they remain circular on non-spherical surfaces.
+
+| Function | Description |
+|----------|-------------|
+| `make_circ_spot(tmap, star_geom, radius, lat, lon; bright_frac)` | Create circular temperature spot on any surface |
+| `make_circ_spot_spotfill(star_geom, radius, lat, lon; profile)` | Spot fill-fraction map (`"flat"` or `"linear"` profile) |
+| `make_meridional_band(tmap, star_geom, width, lon; bright_frac)` | Meridional (N-S) temperature band |
+| `make_equatorial_band(tmap, star_geom, width, lat; bright_frac)` | Equatorial (E-W) temperature band |
+
 ## Longitude/latitude
 
 | Function | Description |
 |----------|-------------|
 | `tessellation_latlong(ntheta, nphi; T=Float32)` | Create regular lat/lon grid with ntheta rings of nphi pixels |
 | `tv_neighbors_longlat(ntheta, nphi)` | TV neighbor structure for lat/lon grid |
-| `make_circ_spot(tmap, ntheta, nphi, radius, lat, lon; bright_frac)` | Create circular temperature spot |
+| `make_circ_spot(tmap, ntheta, nphi, radius, lat, lon; bright_frac)` | Create circular spot (pixel-index based, lon/lat only) |
 | `make_spot_move(tmap, ntheta, nphi, period, B_rot, tepochs)` | Move spot in longitude with differential rotation |
 
 ## Internal HEALPix functions

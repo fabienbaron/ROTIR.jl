@@ -100,8 +100,23 @@ tv_info = tv_neighbors_longlat(ntheta, nphi)
 
 ### Spots
 
-The longitude/latitude scheme provides convenience functions for creating and
-moving temperature spots:
+ROTIR provides two spot-creation interfaces.
+
+**Any tessellation** (HEALPix or lon/lat) — works with `stellar_geometry`:
+
+```julia
+tmap = make_circ_spot(tmap, star_geometry, spot_radius, lat, long;
+                       bright_frac=0.8)
+```
+
+- `spot_radius` in degrees, `lat` in [-90, 90], `long` in [-180, 180] (or [0, 360])
+- Uses Euclidean chord distance in 3D, so spots remain circular on
+  non-spherical surfaces (ellipsoids, rapid rotators, Roche lobes)
+- A fill-fraction variant is also available:
+  `make_circ_spot_spotfill(star_geometry, spot_radius, lat, long; profile="flat")`
+  where `profile` can be `"flat"` or `"linear"` (linearly decreasing toward the edge)
+
+**Lon/lat grid only** — pixel-index-based (legacy):
 
 ```julia
 tmap = make_circ_spot(tmap, ntheta, nphi, spot_radius, latitude, longitude;
@@ -130,7 +145,7 @@ HEALPix resolution progression on a rapid rotator (pixel edges shown):
 | Hierarchical nesting | Yes | No |
 | Latitude/longitude interpretation | No | Direct |
 | Differential rotation | Manual | Built-in `make_spot_move` |
-| Spot creation | Manual | Built-in `make_circ_spot` |
+| Spot creation | `make_circ_spot(tmap, star_geom, ...)` | Also `make_circ_spot(tmap, ntheta, nphi, ...)` |
 
 For image reconstruction from interferometry, **HEALPix is recommended** due to
 equal-area pixels and multi-resolution support.

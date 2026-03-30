@@ -55,6 +55,7 @@ these functions.
 | `alpha` | `0.5` | Opacity |
 | `npoints` | `200` | Points per curve (resolution) |
 
+
 ## Binary sky-plane
 
 | Function | Description |

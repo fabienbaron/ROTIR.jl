@@ -161,7 +161,7 @@ When `star_params` is omitted, semi-axes are estimated from the tessellation (ba
 """
 function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8, alpha=0.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
-    rotation_angle=0.0, npoints=200, star_params=nothing)
+    npoints=200, star_params=nothing)
     collections = pyimport("matplotlib.collections")
 
     # Determine surface model
@@ -182,6 +182,9 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
     # Build rotation matrix (same convention as rotate_star)
     inc_rad = isnan(inclination) ? 0.0 : inclination * π / 180
     PA_rad  = isnan(position_angle) ? 0.0 : position_angle * π / 180
+    # Compute rotation angle from epoch
+    rotation_angle = (star_params !== nothing && hasproperty(star_params, :rotation_period)) ?
+        360.0 * star.t / star_params.rotation_period : 0.0
     ψ_rad   = rotation_angle * π / 180
     R = rot_vertex(ψ_rad, inc_rad, PA_rad)
 

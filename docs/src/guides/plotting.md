@@ -61,13 +61,33 @@ plot2d(tmap, star;
 )
 ```
 
+The rotation angle is computed automatically from `star.t` and
+`star_params.rotation_period`, so graticules stay aligned with the surface at
+any rotational phase.
+
 ![Graticule styles](../assets/graticule_styles.png)
 
-### Examples
+### Decorations
 
-| Plain | Intensity | Fully decorated |
-|:-----:|:---------:|:---------------:|
-| ![Plain](../assets/plot_plain.png) | ![Intensity](../assets/plot_intensity.png) | ![Decorated](../assets/plot_decorated.png) |
+Three annotation overlays are available on top of the surface plot:
+
+- **Pole line** (`rotation_axis = true`) — dashed line through the projected rotation axis (north to south pole), with an arrow at the north pole
+- **Spin arrow** (`rotation_arrow = true`) — curved arrow at the north pole showing the sense of prograde rotation (solid in front, dashed behind the limb)
+- **Compass** (`compass = true`) — E/N compass arrows in the lower-right corner (East points left, following astronomical convention)
+
+```julia
+plot2d(tmap, star;
+    rotation_axis  = true,
+    rotation_arrow = true,
+    compass        = true,
+    inclination    = 60.0,   # degrees from LOS (for exact axis placement)
+    position_angle = 30.0,   # degrees, N through E
+)
+```
+
+| Pole line | Spin arrow | Compass | All three |
+|:---------:|:----------:|:-------:|:---------:|
+| ![Pole line](../assets/decoration_poleline.png) | ![Spin arrow](../assets/decoration_spinarrow.png) | ![Compass](../assets/decoration_compass.png) | ![All](../assets/decoration_all.png) |
 
 ## Multi-epoch 2D
 

@@ -251,32 +251,31 @@ save_current("plot_mollweide.png")
 
 # ===========================================================================
 # Section 5b: Graticule style comparison (1 PNG, 2x2 subplot)
+# Same triaxial ellipsoid with different graticule styles
 # ===========================================================================
 println("Generating graticule style comparison...")
 
 tessels_grat = tessellation_healpix(4)
-star_sph = create_star(tessels_grat, sphere_params, 0.0)
-tmap_sph = parametric_temperature_map(sphere_params, star_sph)
 star_ell = create_star(tessels_grat, ellipsoid_params, 0.0)
 tmap_ell = parametric_temperature_map(ellipsoid_params, star_ell)
 
 grat_configs = [
-    (tmap_sph,  star_sph,  sphere_params,    (;),                                                        "Sphere (default)"),
-    (tmap_show, star_show, rotator_params,   (nlat=8, nlon=12, color="white", linewidth=0.6, alpha=0.4), "Rapid rotator (dense, white)"),
-    (tmap_show, star_show, rotator_params,   (;),                                                        "Rapid rotator (exact, ω=0.9)"),
-    (tmap_ell,  star_ell,  ellipsoid_params, (;),                                                        "Triaxial ellipsoid"),
+    ((;),                                                        "Default"),
+    ((nlat=8, nlon=12),                                          "Dense (8 lat, 12 lon)"),
+    ((color="white", linewidth=0.6, alpha=0.4),                  "White, thin, translucent"),
+    ((nlat=3, nlon=4, color="cyan", linewidth=1.5, alpha=0.8),   "Sparse, cyan, thick"),
 ]
 
 fig_grat, axes_grat = subplots(2, 2, figsize=(12, 12))
 patches_grat = pyimport("matplotlib.patches")
-for (idx, (tm, st, sp, gkw, ttl)) in enumerate(grat_configs)
+for (idx, (gkw, ttl)) in enumerate(grat_configs)
     local ax = axes_grat[(idx-1) ÷ 2 + 1, (idx-1) % 2 + 1]
     ax.set_aspect("equal", adjustable="box")
     ax.set_title(ttl, fontsize=14)
-    axis_max = maximum(sqrt.(st.vertices_xyz[:,:,1].^2 .+ st.vertices_xyz[:,:,2].^2 .+ st.vertices_xyz[:,:,3].^2)) + 0.3
+    axis_max = maximum(sqrt.(star_ell.vertices_xyz[:,:,1].^2 .+ star_ell.vertices_xyz[:,:,2].^2 .+ star_ell.vertices_xyz[:,:,3].^2)) + 0.3
     ax.set_xlim([axis_max, -axis_max])
     ax.set_ylim([-axis_max, axis_max])
-    projmap = tm[st.index_quads_visible] .* st.ldmap[st.index_quads_visible]
+    projmap = tmap_ell[star_ell.index_quads_visible] .* star_ell.ldmap[star_ell.index_quads_visible]
     pmin = minimum(projmap); pmax = maximum(projmap)
     prange = pmax - pmin
     if prange < 1.0; prange = max(abs(pmax) * 0.01, 1.0); end
@@ -284,20 +283,44 @@ for (idx, (tm, st, sp, gkw, ttl)) in enumerate(grat_configs)
     vmin_padded = pmin - cfloor / (1.0 - cfloor) * prange
     norm_plot = matplotlib.colors.Normalize(vmin=vmin_padded, vmax=pmax)
     colours = get_cmap("gist_heat").(norm_plot.(projmap))
-    for i in 1:st.nquads_visible
-        ii = st.index_quads_visible[i]
-        p = patches_grat.Polygon(hcat(-st.proj_west[ii,:], st.proj_north[ii,:]),
+    for i in 1:star_ell.nquads_visible
+        ii = star_ell.index_quads_visible[i]
+        p = patches_grat.Polygon(hcat(-star_ell.proj_west[ii,:], star_ell.proj_north[ii,:]),
             closed=true, edgecolor=colours[i], facecolor=colours[i], fill=true, rasterized=false, zorder=2)
         ax.add_patch(p)
     end
-    draw_graticules(ax, st;
-        inclination=sp.inclination, position_angle=sp.position_angle,
-        star_params=sp, gkw...)
+    draw_graticules(ax, star_ell;
+        inclination=ellipsoid_params.inclination, position_angle=ellipsoid_params.position_angle,
+        star_params=ellipsoid_params, gkw...)
     ax.set_xlabel(L"x $\leftarrow$ E (mas)", fontsize=12)
     ax.set_ylabel(L"y $\rightarrow$ N (mas)", fontsize=12)
 end
 fig_grat.tight_layout(pad=2.0)
 save_and_close(fig_grat, "graticule_styles.png")
+
+# ===========================================================================
+# Section 5c: Decoration examples (4 PNGs: pole line, spin arrow, compass, all)
+# ===========================================================================
+println("Generating decoration examples...")
+
+for (ra, rar, comp, name) in [
+    (true,  false, false, "decoration_poleline.png"),
+    (false, true,  false, "decoration_spinarrow.png"),
+    (false, false, true,  "decoration_compass.png"),
+    (true,  true,  true,  "decoration_all.png"),
+]
+    local fig, ax = plot2d(tmap_ell, star_ell;
+        intensity      = true,
+        graticules     = false,
+        compass        = comp,
+        rotation_axis  = ra,
+        rotation_arrow = rar,
+        inclination    = ellipsoid_params.inclination,
+        position_angle = ellipsoid_params.position_angle,
+        star_params    = ellipsoid_params,
+    )
+    save_and_close(fig, name)
+end
 
 # ===========================================================================
 # Section 6: Conventions annotated figure (1 PNG)
