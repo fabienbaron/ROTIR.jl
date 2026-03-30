@@ -1,38 +1,47 @@
-mutable struct starparameters{T}
-  rpole::T # milliarcseconds (at pole)
-  tpole::T # Kelvin (at pole)
-  frac_escapevel::T # unitless; fractional rotational velocity
-  ldtype::Int64
-  ld1::T # limb darkening,first coefficient is for LD law type, then LD coefficients
-  ld2::T
-  beta_vZ::T # exponent for von Zeipel law
-  B_rot::T # 2nd constant for rotational velocity
-  inclination::T # degrees
-  position_angle::T # degrees
-  rotation_offset::T # degrees # offsets the rotation by a fixed angle
-  rotation_period::T # Rotation period days
-  #T_long0::T # Reference time for longitude=0
+"""
+    starparameters(rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta_vZ, B_rot,
+                   inclination, position_angle, rotation_offset, rotation_period)
+
+Construct a stellar parameters NamedTuple. Fields:
+- `rpole`: polar radius (mas)
+- `tpole`: polar temperature (K)
+- `frac_escapevel`: fractional rotational velocity (0–1)
+- `ldtype`: limb-darkening law (1=linear, 2=quadratic, 3=Hestroffer)
+- `ld1`, `ld2`: limb-darkening coefficients
+- `beta_vZ`: von Zeipel gravity-darkening exponent (0.25 radiative, 0.08 convective)
+- `B_rot`: differential rotation coefficient
+- `inclination`: spin-axis inclination (degrees)
+- `position_angle`: spin-axis PA (degrees)
+- `rotation_offset`: fixed rotation offset (degrees)
+- `rotation_period`: rotation period (days)
+"""
+function starparameters(rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta_vZ, B_rot,
+                        inclination, position_angle, rotation_offset, rotation_period)
+    return (rpole=rpole, tpole=tpole, frac_escapevel=frac_escapevel,
+            ldtype=ldtype, ld1=ld1, ld2=ld2, beta_vZ=beta_vZ, B_rot=B_rot,
+            inclination=inclination, position_angle=position_angle,
+            rotation_offset=rotation_offset, rotation_period=rotation_period)
 end
 
-mutable struct binaryparameters{T}
-  star1::starparameters
-  star2::starparameters
-  d::T # distance (parsecs)
-  # parameters for binary
-  i::T # degrees
-  Ω::T # degrees
-  ω::T # degrees
-  P::T # days
-  a::T # in milliarcseconds (aka semi-major axis)
-  e::T # unitless
-  T0::T # JD; time of periastron
-  q::T # unitless; M2/M1
-  fillout_factor::Array{T,1} # unitless; value of the potential at Roche lobe divided by value of potential at the surface
-  dP::T # days/day; linear change of the binary period
-  dω::T # periapsis change (degrees/day)
+"""
+    binaryparameters(star1, star2, d, i, Ω, ω, P, a, e, T0, q, fillout_factor, dP, dω)
+
+Construct a binary parameters NamedTuple. Fields:
+- `star1`, `star2`: NamedTuple from `starparameters()` for each component
+- `d`: distance (pc)
+- `i`: orbital inclination (degrees)
+- `Ω`: longitude of ascending node (degrees)
+- `ω`: argument of periapsis (degrees)
+- `P`: orbital period (days)
+- `a`: semi-major axis (mas)
+- `e`: eccentricity
+- `T0`: time of periastron passage (JD)
+- `q`: mass ratio M₂/M₁
+- `fillout_factor`: Roche lobe fillout factors [primary, secondary]
+- `dP`: period derivative (days/day)
+- `dω`: periapsis precession (degrees/day)
+"""
+function binaryparameters(star1, star2, d, i, Ω, ω, P, a, e, T0, q, fillout_factor, dP, dω)
+    return (star1=star1, star2=star2, d=d, i=i, Ω=Ω, ω=ω, P=P, a=a, e=e,
+            T0=T0, q=q, fillout_factor=fillout_factor, dP=dP, dω=dω)
 end
-
-Base.iterate(bparameters::binaryparameters, state = 1) = state <= 1 ? (bparameters, state+1) : nothing
-Base.length(bparameters::binaryparameters) = 1
- 
-

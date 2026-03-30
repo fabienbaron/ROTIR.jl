@@ -58,7 +58,7 @@ star_params = (
     inclination     = 78.0,     # degrees
     position_angle  = 24.0,     # degrees
     rotation_period = 54.8,     # days
-    beta            = 0.08,     # von Zeipel exponent
+    beta            = 0.08,     # von Zeipel exponent: T ∝ g^β (e.g. 0.25 radiative, 0.08 convective)
     frac_escapevel  = 0.9,      # fractional rotational velocity (rapid rotator)
     B_rot           = 0.0,      # differential rotation coefficient
 )

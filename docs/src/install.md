@@ -34,6 +34,21 @@ Pkg.add(url="https://github.com/fabienbaron/OITOOLS.jl.git")
 Pkg.add(url="https://github.com/fabienbaron/ROTIR.jl.git")
 ```
 
+## Python / matplotlib
+
+ROTIR uses PyPlot.jl for plotting, which requires a Python environment with
+matplotlib installed. If you see a `PyImport_ImportModule` error when loading
+ROTIR, the simplest fix is to let Julia manage its own Python via Conda.jl:
+
+```julia
+ENV["PYTHON"] = ""
+using Pkg
+Pkg.build("PyCall")
+```
+
+Then restart Julia. PyCall will use a private Conda Python with matplotlib
+installed automatically.
+
 ## Verify
 
 ```julia

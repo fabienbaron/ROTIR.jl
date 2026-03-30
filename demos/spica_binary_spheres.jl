@@ -71,8 +71,8 @@ star2_params = (
     rotation_period = P_orb
 )
 
-# Binary orbital parameters (starparameters struct required by binaryparameters)
-# Fields: rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta_vZ, B_rot, inclination, position_angle, rotation_offset, rotation_period
+# Binary orbital parameters
+#                    rpole       tpole   ω    ld  ld1   ld2  β_vZ  B_rot inc       PA        rot_off  P_rot
 star1p = starparameters(0.93/2, 25300.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, inc_star, pa_star, 0.0, P_orb)
 star2p = starparameters(0.57/2, 20585.0, 0.0, 3, 0.15, 0.0, 0.205, 0.0, inc_star, pa_star, 0.0, P_orb)
 

@@ -34,7 +34,7 @@ star_params = (
     inclination=78.0,         # inclination in degrees (90°=edge-on)
     position_angle=24.0,      # position angle of rotation axis on sky (degrees)
     rotation_period=54.8,     # rotation period in days
-    beta=0.08,                # gravity-darkening exponent (T ∝ g^β)
+    beta=0.08,                # von Zeipel exponent: T ∝ g^β (e.g. 0.25 radiative, 0.08 convective)
     frac_escapevel=0.9,       # rotational velocity as fraction of escape velocity
     B_rot=0.0,                # differential rotation coefficient (0=solid body)
 )
@@ -47,8 +47,9 @@ stars = create_star_multiepochs(tessels, star_params, tepochs)
 # (serves as the starting point for the optimizer)
 tmap_start = parametric_temperature_map(star_params, stars[1])
 
-# Pre-compute polygon flux and Fourier transform matrices for each epoch
-# (stored in-place in the stars objects for fast χ² evaluation)
+# Pre-compute polygon flux and Fourier transform matrices for each epoch.
+# This stores polyflux and polyft in-place in each stellar_geometry struct.
+# Must be called before image_reconstruct_oi or any chi2 evaluation.
 setup_oi!(data, stars)
 
 # Set up quadratic total-variation regularization to enforce smooth maps
@@ -74,7 +75,9 @@ is a vector specifying the type, weight, and any additional arguments:
 | `"mean"` | `["mean", mu]` | Mean constraint |
 | `"bias"` | `["bias", mu, B]` | Harmonic bias for asymmetric brightening |
 
-The `tv_info` argument comes from `tv_neighbors_healpix(n)` or
+The `tv_info` argument is a sparse difference matrix encoding the pixel
+neighbor graph — it tells the regularizer which pixels are adjacent for
+computing total variation. Build it with `tv_neighbors_healpix(n)` or
 `tv_neighbors_longlat(ntheta, nphi)`.
 
 ## Evaluating the fit
@@ -135,7 +138,12 @@ controls the sharpness of the transition.
 ## Joint shape + map optimization
 
 ROTIR can simultaneously optimize the surface map and shape parameters
-(radii, inclination, position angle) using analytical gradients:
+(radii, inclination, position angle) using analytical gradients.
+
+!!! note
+    `tessellation_healpix` defaults to `Float32`. For joint reconstruction,
+    pass `T=Float64` to match the optimizer's precision:
+    `tessellation_healpix(n, T=Float64)`.
 
 ```julia
 # Starting shape parameters: [rpole (mas), omega, inclination (°), PA (°)]

@@ -10,7 +10,13 @@
 
 ## Star parameters
 
-Parameters are passed as a `NamedTuple`. Required fields depend on `surface_type`:
+Parameters are passed as a `NamedTuple`. Required fields depend on `surface_type`.
+
+!!! note
+    These NamedTuples are used by the geometry and reconstruction pipeline
+    (`create_star`, `image_reconstruct_oi`, etc.). The binary/orbit code uses
+    a separate `starparameters()` constructor with slightly different field names
+    (e.g. `beta_vZ` instead of `beta`) — see [Orbits API](orbits.md).
 
 ### Common fields
 

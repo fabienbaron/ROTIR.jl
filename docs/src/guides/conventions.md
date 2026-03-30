@@ -147,7 +147,12 @@ observer frame:
 Note that the orbital z-axis points **away** from the observer (positive
 = receding), while the stellar geometry z-axis points **toward** the
 observer.  The `orbit_to_rotir_offset` function handles this conversion
-when placing binary components on the sky plane.
+when placing binary components on the sky plane:
+
+```
+offset_west  = -(East component)    # West = -East
+offset_north =   North component
+```
 
 ## Radial velocities
 

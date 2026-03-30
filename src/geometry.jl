@@ -244,7 +244,7 @@ end
   return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible, nquads_visible, proj_west, proj_north, ldmap, vis_weights, sig_args, center, T[], zeros(Complex{T}, 0, 0), t);
 end
 
-function create_binary(star1::tessellation, star2::tessellation, binary_params::binaryparameters, t)
+function create_binary(star1::tessellation, star2::tessellation, binary_params, t)
 # Update a binary system
 # Step 1: compute location of components
 # Step 2: compute Roche lobes for both components

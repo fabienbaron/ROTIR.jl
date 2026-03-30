@@ -91,8 +91,10 @@ roche_params_2 = (
 )
 
 # Binary orbital parameters (for orbit computation and plotting)
-star1p = starparameters(0.93/2, 25300.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0, 180.0-i_orb, Omega-180.0, 0.0, P_orb)
-star2p = starparameters(0.57/2, 20585.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0, 180.0-i_orb, Omega-180.0, 0.0, P_orb)
+star1p = starparameters(0.93/2, 25300.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0,
+                        180.0-i_orb, Omega-180.0, 0.0, P_orb)
+star2p = starparameters(0.57/2, 20585.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0,
+                        180.0-i_orb, Omega-180.0, 0.0, P_orb)
 bparams = binaryparameters(star1p, star2p,
     77.0, i_orb, Omega, omega, P_orb, a_orb, e_orb, T0_orb, q_binary,
     [1.0, 1.0], 0.0, 0.0)

@@ -349,7 +349,7 @@ function doppler_shift_spectrum(wavelength::Vector{Float64}, intensity::Vector{F
     return Spline1D(wavelength .* (1.0 + v/3E5), intensity, k=1, bc="nearest", s=0.0)(wavelength)
 end
 
-function calculate_global_profiles(temperature_map::Vector{Vector{Float64}}, stellar_geometry::Array{stellar_geometry, 1}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Array{starparameters, 1}, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64)
+function calculate_global_profiles(temperature_map::Vector{Vector{Float64}}, stellar_geometry::Array{stellar_geometry, 1}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Vector, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64)
 # function calculate_global_profiles(temperature_map, stellar_geometry, star_epoch_μ, star_epoch_v, stellar_parameters, polyflux, model_grid, vsini)
     global_intensities = Array{Vector{Float64}}(undef, length(stellar_geometry))
     # fill!(global_intensities, zeros(model_grid.nwvls))
@@ -384,7 +384,7 @@ function calculate_global_profiles(temperature_map::Vector{Vector{Float64}}, ste
     return globalLineProfiles(length(temperature_map[1]), length(stellar_geometry), model_grid.nwvls, model_grid.wavelength, global_intensities)
 end
 
-function calculate_global_profiles_unnormalized(temperature_map::Vector{Vector{Float64}}, stellar_geometry::Array{stellar_geometry, 1}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Array{starparameters, 1}, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64)
+function calculate_global_profiles_unnormalized(temperature_map::Vector{Vector{Float64}}, stellar_geometry::Array{stellar_geometry, 1}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Vector, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64)
 # function calculate_global_profiles(temperature_map, stellar_geometry, star_epoch_μ, star_epoch_v, stellar_parameters, polyflux, model_grid, vsini)
     global_intensities = Array{Vector{Float64}}(undef, length(stellar_geometry))
     # fill!(global_intensities, zeros(model_grid.nwvls))
@@ -414,7 +414,7 @@ function calculate_global_profiles_unnormalized(temperature_map::Vector{Vector{F
     return globalLineProfiles(length(temperature_map[1]), length(stellar_geometry), model_grid.nwvls, model_grid.wavelength, global_intensities)
 end
 
-function calculate_μv(npix::Int64, stellar_geometry::Array{stellar_geometry, 1}, stellar_parameters::Array{starparameters, 1}, vsini::Float64)
+function calculate_μv(npix::Int64, stellar_geometry::Array{stellar_geometry, 1}, stellar_parameters::Vector, vsini::Float64)
     nepochs = length(stellar_geometry)
     μ = zeros(npix, nepochs)  # μ angle per pixel
     xcosPA = zeros(npix)
@@ -435,7 +435,7 @@ function calculate_μv(npix::Int64, stellar_geometry::Array{stellar_geometry, 1}
     return μ, v
 end
 
-# function calculate_global_profiles(temperature_map::Vector{Vector{Float64}}, stellar_geometry::Array{stellar_geometry}, stellar_parameters::Array{starparameters}, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64)
+# function calculate_global_profiles(temperature_map::Vector{Vector{Float64}}, stellar_geometry::Array{stellar_geometry}, stellar_parameters::Vector, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64)
 #= function calculate_global_profiles(temperature_map::Vector{Vector{Float64}}, stellar_geometry, stellar_parameters, polyflux, model_grid, vsini)
     global_intensities = Array{Vector{Float64}}(undef, length(stellar_geometry))
 
@@ -528,14 +528,14 @@ function jd2phase(jd::Vector{Float64}, P::Float64, T0::Float64)
 end
 
 function setup_stellar_parameters_di(starparams::Vector{Any}, didata::observedLineProfiles; mjd_long0 = 0.0)
-    stellar_parameters = Array{starparameters}(undef, didata.nepochs);
+    stellar_parameters = Vector(undef, didata.nepochs);
     for i=1:didata.nepochs
         stellar_parameters[i]=starparameters(starparams[1],starparams[2],starparams[3],starparams[4],starparams[5],starparams[6],starparams[7],starparams[8],mod(360.0/starparams[10].*(didata.mjd[i]-mjd_long0),360),starparams[10]);
     end
     return stellar_parameters
 end
 
-function di_reconstruct(x_start::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Array{starparameters, 1}, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}; lowtemp = 0, hightemp=10000, relative = false, printcolor= [], verb = true, maxiter = 200, regularizers =[], wavelength_regions=[], normalization_region=[])
+function di_reconstruct(x_start::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Vector, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}; lowtemp = 0, hightemp=10000, relative = false, printcolor= [], verb = true, maxiter = 200, regularizers =[], wavelength_regions=[], normalization_region=[])
     ## Use VMLMB from OptimPackNextGen to find the temperature map that minimizes the χ^2 between the observed profiles and the models
     x_sol = [];
     crit_imaging = x -> x; #TODO: proper dummy init
@@ -544,7 +544,7 @@ function di_reconstruct(x_start::Vector{Float64}, didata::observedLineProfiles, 
     return x_sol
 end
 
-function di_crit_fg(x::Vector{Float64}, g::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry, 1}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Array{starparameters, 1}, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}; regularizers=[], verb = true, wavelength_regions=[], normalization_region=[])
+function di_crit_fg(x::Vector{Float64}, g::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry, 1}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Vector, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}; regularizers=[], verb = true, wavelength_regions=[], normalization_region=[])
 # function di_crit_fg(x, g, didata, polyflux, star_epoch_geom, star_epoch_μ, star_epoch_v, stellar_parameters, model_grid, vsini, visible_pixels; regularizers=[], verb = true, wavelength_regions=[])
 ## Compute χ^2 and ∇χ^2
     # x .= max.(x, 3500.0)
@@ -609,7 +609,7 @@ function calculate_chi2_f(res::Vector{Vector{Float64}}, SNR::Vector{Float64})
     return chi2_f
 end
 
-function calculate_chi2_g(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Array{starparameters, 1}, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}; wavelength_regions=[])
+function calculate_chi2_g(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Vector, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}; wavelength_regions=[])
 # function calculate_chi2_g(x, g, star_epoch_geom, star_epoch_μ, star_epoch_v, stellar_parameters, model_grid, polyflux, vsini, res, SNR; wavelength_regions=[])
     if wavelength_regions == [] # Specific spectral lines are selected here
         ixs = collect(1:length(model_grid.wavelength))
@@ -627,7 +627,7 @@ function calculate_chi2_g(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geo
     return g
 end
 
-function calculate_chi2_g_unnormalized(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Array{starparameters, 1}, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}; wavelength_regions=[], scale=1.0)
+function calculate_chi2_g_unnormalized(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Vector, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}; wavelength_regions=[], scale=1.0)
 # function calculate_chi2_g(x, g, star_epoch_geom, star_epoch_μ, star_epoch_v, stellar_parameters, model_grid, polyflux, vsini, res, SNR; wavelength_regions=[])
     if wavelength_regions == [] # Specific spectral lines are selected here
         ixs = collect(1:length(model_grid.wavelength))
@@ -645,7 +645,7 @@ function calculate_chi2_g_unnormalized(x::Vector{Float64}, g::Vector{Float64}, s
     return g
 end
 
-function calculate_chi2_g_numerical(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Array{starparameters, 1}, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}; wavelength_regions=[])
+function calculate_chi2_g_numerical(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, star_epoch_μ::Array{Float64, 2}, star_epoch_v::Array{Float64, 2}, stellar_parameters::Vector, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}; wavelength_regions=[])
     # function calculate_chi2_g(x, g, star_epoch_geom, star_epoch_μ, star_epoch_v, stellar_parameters, model_grid, polyflux, vsini, res, SNR; wavelength_regions=[])
     if wavelength_regions == [] # Specific spectral lines are selected here
         ixs = collect(1:length(model_grid.wavelength))
@@ -765,7 +765,7 @@ function plot_profiles(line_profiles; didata=[], line_centers=[], line_labels=[]
     PyPlot.draw()
 end
 
-function di_reconstruct_spotfill(x_start::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry}, stellar_parameters::Array{starparameters}, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}, Tphot::Float64, Tspot::Float64; printcolor= [], verb = true, maxiter = 200, regularizers =[], wavelength_regions=[])
+function di_reconstruct_spotfill(x_start::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry}, stellar_parameters::Vector, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}, Tphot::Float64, Tspot::Float64; printcolor= [], verb = true, maxiter = 200, regularizers =[], wavelength_regions=[])
     ## Use VMLMB from OptimPackNextGen to find the temperature map that minimizes the χ^2 between the observed profiles and the models, where the fitted parameter is the spot-filling fctor per pixel
     x_sol = [];
     crit_imaging = x -> x; #TODO: proper dummy init
@@ -774,7 +774,7 @@ function di_reconstruct_spotfill(x_start::Vector{Float64}, didata::observedLineP
     return x_sol
 end
 
-function di_crit_fg_spotfill(x::Vector{Float64}, g::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry}, stellar_parameters::Array{starparameters}, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}, Tphot::Float64, Tspot::Float64; regularizers=[], verb = true, wavelength_regions=[])
+function di_crit_fg_spotfill(x::Vector{Float64}, g::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry}, stellar_parameters::Vector, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}, Tphot::Float64, Tspot::Float64; regularizers=[], verb = true, wavelength_regions=[])
     ## Compute χ^2 and ∇χ^2
     if wavelength_regions == []  # Specific spectral lines are selected here
         ixs = collect(1:length(model_grid.wavelength))
@@ -806,7 +806,7 @@ function di_crit_fg_spotfill(x::Vector{Float64}, g::Vector{Float64}, didata::obs
     return chi2_f + reg_f
 end
 
-function calculate_global_profiles_spotfill(f_map::Vector{Float64}, stellar_geometry::Array{stellar_geometry}, stellar_parameters::Array{starparameters}, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64, Tphot::Float64, Tspot::Float64)
+function calculate_global_profiles_spotfill(f_map::Vector{Float64}, stellar_geometry::Array{stellar_geometry}, stellar_parameters::Vector, polyflux::Matrix{Float64}, model_grid::modelGrid, vsini::Float64, Tphot::Float64, Tspot::Float64)
     # local_line_profiles = calculate_local_profiles(temperature_map, stellar_geometry, model_grid, vsini)
     global_intensities = Array{Vector{Float64}}(undef, length(stellar_geometry))
     fill!(global_intensities, zeros(model_grid.nwvls))
@@ -844,7 +844,7 @@ function calculate_global_profiles_spotfill(f_map::Vector{Float64}, stellar_geom
     return globalLineProfiles(length(f_map), length(stellar_geometry), model_grid.nwvls, model_grid.wavelength, global_intensities)
 end
 
-function calculate_chi2_g_spotfill(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, stellar_parameters::Array{starparameters}, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}, Tphot::Float64, Tspot::Float64; wavelength_regions=[])
+function calculate_chi2_g_spotfill(x::Vector{Float64}, g::Vector{Float64}, star_epoch_geom::Vector{stellar_geometry}, stellar_parameters::Vector, model_grid::modelGrid, polyflux::Matrix{Float64}, vsini::Float64, res::Vector{Vector{Float64}}, SNR::Vector{Float64}, Tphot::Float64, Tspot::Float64; wavelength_regions=[])
     if wavelength_regions == [] # Specific spectral lines are selected here
         ixs = collect(1:length(model_grid.wavelength))
     else

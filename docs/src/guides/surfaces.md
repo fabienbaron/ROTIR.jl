@@ -23,8 +23,8 @@ star_params = (
 )
 ```
 
-A sphere has no gravity darkening (uniform temperature from the von Zeipel law
-unless beta > 0 with non-zero rotation).
+A sphere produces a uniform temperature map — there is no oblateness, so the
+von Zeipel law gives constant temperature everywhere.
 
 ![Sphere surface](../assets/surface_sphere.png)
 
@@ -62,13 +62,18 @@ A star distorted by centrifugal forces. The shape is determined by two
 parameters: the polar radius `rpole` and the fractional rotational velocity
 `frac_escapevel` (omega = v_rot / v_escape at the equator, ranging from 0 to 1).
 
-The equatorial radius is given by the Roche model for a single rotating star:
+The equatorial radius is given by the Roche model for a single rotating star
+(the equipotential surface of a rigidly rotating body with a point-mass
+gravitational field):
 
 ```
 r(theta) = rpole * f(omega * sin(theta))
 ```
 
-where `f(x) = 3*cos((pi + acos(x))/3) / x` and `theta` is the colatitude.
+where `f(x) = 3*cos((pi + acos(x))/3) / x`, `theta` is the colatitude, and
+`omega` is the `frac_escapevel` parameter (ratio of equatorial rotational
+velocity to breakup velocity, 0 to 1). At `omega = 0` the star is a sphere
+(`f = 1`); at `omega = 1` it reaches critical rotation.
 
 ```julia
 star_params = (
@@ -81,7 +86,7 @@ star_params = (
     inclination     = 78.0,
     position_angle  = 24.0,
     rotation_period = 54.8,
-    beta            = 0.08,    # von Zeipel gravity darkening exponent
+    beta            = 0.08,    # von Zeipel exponent: T ∝ g^β (e.g. 0.25 radiative, 0.08 convective)
     frac_escapevel  = 0.9,     # omega: 0 = no rotation, 1 = critical rotation
     B_rot           = 0.0,     # differential rotation coefficient
 )
@@ -101,7 +106,12 @@ g_theta = omega^2 * r * sin(theta) * cos(theta)
 g       = sqrt(g_r^2 + g_theta^2)
 ```
 
-The equator-to-pole radius ratio and temperature contrast depend on `omega`:
+The equator-to-pole radius ratio and temperature contrast depend on `omega`.
+The temperature column uses `beta = 0.25`, the classical von Zeipel (1924)
+value for radiative envelopes. Typical reference values are `beta = 0.25`
+(radiative, von Zeipel 1924) and `beta = 0.08` (fully convective, Lucy 1967),
+but `beta` can take any value — Claret (2000) computes it as a continuous
+function of effective temperature and evolutionary stage.
 
 | omega | R_eq / R_pole | T_eq / T_pole (beta=0.25) |
 |-------|---------------|---------------------------|

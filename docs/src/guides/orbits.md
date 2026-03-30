@@ -6,15 +6,30 @@ positions and radial velocities, and visualize the system.
 
 ## Orbital elements
 
-Binary orbits are defined by the `binaryparameters` struct, which holds
-two `starparameters` objects plus the orbital elements:
+Binary orbits are defined by a `binaryparameters` NamedTuple, which holds
+two `starparameters` NamedTuples plus the orbital elements:
 
 ```julia
 using ROTIR
 
 # Spica-like binary (Aufdenberg+2015)
-star1 = starparameters(0.465, 25300.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0, 64.0, 129.938, 0.0, 4.0145)
-star2 = starparameters(0.285, 20585.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0, 64.0, 129.938, 0.0, 4.0145)
+# starparameters() and binaryparameters() return NamedTuples
+star1 = starparameters(
+    0.465,    # rpole: polar radius (mas)
+    25300.0,  # tpole: polar temperature (K)
+    0.0,      # frac_escapevel: rotational velocity fraction
+    3,        # ldtype: Hestroffer limb darkening
+    0.15,     # ld1: LD coefficient
+    0.0,      # ld2: (unused for Hestroffer)
+    0.25,     # beta_vZ: von Zeipel exponent (radiative)
+    0.0,      # B_rot: differential rotation
+    64.0,     # inclination (degrees)
+    129.938,  # position_angle (degrees)
+    0.0,      # rotation_offset (degrees)
+    4.0145,   # rotation_period (days)
+)
+star2 = starparameters(
+    0.285, 20585.0, 0.0, 3, 0.15, 0.0, 0.25, 0.0, 64.0, 129.938, 0.0, 4.0145)
 
 bparams = binaryparameters(
     star1, star2,
@@ -31,6 +46,23 @@ bparams = binaryparameters(
     0.0,           # dP: period derivative (days/day)
     0.0,           # dω: apsidal motion (degrees/day)
 )
+```
+
+Both `starparameters()` and `binaryparameters()` return NamedTuples, so you can
+also construct them directly:
+
+```julia
+star1 = (rpole=0.465, tpole=25300.0, frac_escapevel=0.0, ldtype=3,
+         ld1=0.15, ld2=0.0, beta_vZ=0.25, B_rot=0.0,
+         inclination=64.0, position_angle=129.938,
+         rotation_offset=0.0, rotation_period=4.0145)
+```
+
+Use `merge()` to override individual fields without rebuilding from scratch:
+
+```julia
+star1_tilted = merge(star1, (inclination=75.0, position_angle=140.0))
+bparams_circ = merge(bparams, (e=0.0,))
 ```
 
 See [Conventions](conventions.md#binary-orbital-elements) for a full description
@@ -68,13 +100,22 @@ on the sky plane. East is to the left following the astronomical convention.
 To render the binary on the sky at a specific epoch, use `plot2d_binary`:
 
 ```julia
-# Create star geometries (using star1, star2 from above)
+# create_star needs reconstruction-style NamedTuples (with surface_type, beta, etc.)
+star1_params = (surface_type=0, radius=star1.rpole, tpole=star1.tpole,
+                ldtype=star1.ldtype, ld1=star1.ld1, ld2=star1.ld2,
+                inclination=star1.inclination, position_angle=star1.position_angle,
+                rotation_period=star1.rotation_period)
+star2_params = (surface_type=0, radius=star2.rpole, tpole=star2.tpole,
+                ldtype=star2.ldtype, ld1=star2.ld1, ld2=star2.ld2,
+                inclination=star2.inclination, position_angle=star2.position_angle,
+                rotation_period=star2.rotation_period)
+
 tessels1 = tessellation_healpix(3)
 tessels2 = tessellation_healpix(2)
-star1_geom = create_star(tessels1, star1, 0.0)
-star2_geom = create_star(tessels2, star2, 0.0)
-tmap1 = parametric_temperature_map(star1, star1_geom)
-tmap2 = parametric_temperature_map(star2, star2_geom)
+star1_geom = create_star(tessels1, star1_params, 0.0)
+star2_geom = create_star(tessels2, star2_params, 0.0)
+tmap1 = parametric_temperature_map(star1_params, star1_geom)
+tmap2 = parametric_temperature_map(star2_params, star2_geom)
 
 # Plot at a specific Julian Date
 fig, ax = plot2d_binary(tmap1, tmap2, star1_geom, star2_geom, bparams, tepoch_jd;

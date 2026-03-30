@@ -11,7 +11,7 @@ mutable struct LCI
 end
 
 function setup_stellar_parameters_lci(starparams, lcidata; mjd_long0 = 0.0)
-  stellar_parameters = Array{starparameters}(undef, lcidata.nepochs);
+  stellar_parameters = Vector(undef, lcidata.nepochs);
   for i=1:lcidata.nepochs
     stellar_parameters[i]=starparameters(starparams[1],starparams[2],starparams[3],starparams[4],starparams[5],starparams[6],starparams[7],starparams[8],mod(360.0/starparams[10].*(lcidata.mjd[i]-mjd_long0),360),starparams[10]);
   end

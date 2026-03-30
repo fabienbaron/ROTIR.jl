@@ -15,12 +15,16 @@ Options:
 
 ```julia
 plot2d(tmap, stars[1];
-    intensity  = false,       # multiply by limb-darkening map
-    plotmesh   = false,       # show pixel edges
-    colormap   = "gist_heat", # matplotlib colormap
-    figtitle   = "Epoch 1",
-    flipx      = false,       # flip East-West
-    background = "black",
+    intensity      = false,       # multiply by limb-darkening map
+    plotmesh       = false,       # show pixel edges
+    colormap       = "gist_heat", # matplotlib colormap
+    figtitle       = "Epoch 1",
+    flipx          = false,       # flip East-West
+    background     = "black",
+    compass        = false,       # draw N/E compass arrows
+    graticules     = false,       # draw lat/lon grid lines on the surface
+    rotation_axis  = false,       # draw dashed line through poles
+    rotation_arrow = false,       # draw spin direction arrow at north pole
 )
 ```
 
