@@ -103,7 +103,7 @@ export sometimes_visible, never_visible, invisible_neighbors, with_invisible_nei
 # Utilities
 export make_circ_spot, make_spot_move
 export rl1, max_rpole
-export lci_linear_inversion_frame, lci_reconstruct_mutitemporal, rescale_temperature
+export rescale_temperature_tpole
 
 include("precompile.jl")
 

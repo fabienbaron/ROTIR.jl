@@ -459,8 +459,29 @@ function multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4,
   return tmap, stars
 end
 
+"""
+    rescale_temperature_tpole(tmap, stars, star_params)
 
-
+Rescale a temperature map so that the temperature at the pole equals `star_params.tpole`.
+`stars` can be a single `stellar_geometry` or a vector of them (multi-epoch).
+Warns if the pole pixel is never visible across all epochs.
+"""
+function rescale_temperature_tpole(tmap, stars, star_params)
+    star = stars isa AbstractVector ? stars[1] : stars
+    colat = @view star.vertices_spherical[:, 5, 2]
+    ipole = argmin(colat)
+    # Check visibility
+    if stars isa AbstractVector
+        visible = any(ipole in s.index_quads_visible for s in stars)
+    else
+        visible = ipole in star.index_quads_visible
+    end
+    if !visible
+        @warn "Pole pixel (index $ipole) is never visible — rescaling is based on an unconstrained pixel"
+    end
+    scale = star_params.tpole / tmap[ipole]
+    return tmap .* scale
+end
 
 
 # "Multitemporal" = dynamical reconstruction

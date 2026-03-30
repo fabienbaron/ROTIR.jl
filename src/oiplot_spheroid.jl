@@ -631,19 +631,29 @@ function plot_mollweide(tmap, star; kwargs...)
   return
 end
 
-function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide")
+function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide", mask_unobserved=true, bad_color="lightgray")
+  np = pyimport("numpy")
   xsize = 2000
   ysize = div(xsize,2)
   theta = collect(range(pi, stop=0.0, length=ysize))
   phi   = collect(range(-pi, stop=pi, length=xsize))
-  longitude = collect(range(-180, stop=180, length=xsize))/180*pi
-  latitude = collect(range(-90, stop=90, length=ysize))/180*pi
+  longitude = collect(range(-179.999, stop=179.999, length=xsize))/180*pi
+  latitude = collect(range(-89.999, stop=89.999, length=ysize))/180*pi
   # project the map to a rectangular matrix xsize x ysize
   nside = npix2nside(length(tmap))
   PHI = [i for j in theta, i in phi]
   THETA = [j for j in theta, i in phi]
   grid_pix = reshape(ang2pix_nest(nside, vec(THETA), vec(PHI)), size(PHI))
-  grid_map = tmap[grid_pix]
+  grid_map = Float64.(tmap[grid_pix])
+  # Mask unobserved pixels
+  if mask_unobserved && visible_pixels != []
+    vis_set = Set(visible_pixels)
+    for idx in eachindex(grid_pix)
+      if !(grid_pix[idx] in vis_set)
+        grid_map[idx] = NaN
+      end
+    end
+  end
   fig = figure(figtitle, figsize=(10, 7))
   fig.clear();
   ax = subplot(111,projection="mollweide")
@@ -667,7 +677,9 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
       vmax = maximum(tmap[visible_pixels]);
     end
   end
-  moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=colormap)
+  cmap_obj = matplotlib.cm.get_cmap(colormap)
+  cmap_obj.set_bad(color=bad_color)
+  moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=cmap_obj)
   # graticule
   ax.set_longitude_grid(20);
   ax.set_latitude_grid(20);
