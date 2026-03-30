@@ -12,16 +12,10 @@ jobs:
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1.10'
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.julia/packages
-            ~/.julia/compiled
-            ~/.julia/registries
-            ~/.julia/conda
-          key: docs-julia-${{ hashFiles('docs/Project.toml', 'Project.toml') }}
-          restore-keys: docs-julia-
+      - uses: julia-actions/cache@v2
       - name: Install dependencies
+        env:
+          PYTHON: ''
         run: |
           julia --project=docs -e '
             using Pkg
@@ -34,4 +28,5 @@ jobs:
       - name: Build and deploy docs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHON: ''
         run: julia --project=docs docs/make.jl
