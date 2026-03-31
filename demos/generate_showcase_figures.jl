@@ -208,8 +208,11 @@ end
 println("Generating plotting options showcase...")
 
 tessels_hires = tessellation_healpix(4)
-star_show = create_star(tessels_hires, rotator_params, 0.0)
+# Offset epoch by 20° so the pole line does not overlap a graticule
+t_offset = 20.0 / 360.0 * rotator_params.rotation_period
+star_show = create_star(tessels_hires, rotator_params, t_offset)
 tmap_show = parametric_temperature_map(rotator_params, star_show)
+show_lims = [-2.2, 2.2]
 
 # Plain (no decorations)
 fig, ax = plot2d(tmap_show, star_show;
@@ -219,6 +222,7 @@ fig, ax = plot2d(tmap_show, star_show;
     rotation_axis  = false,
     rotation_arrow = false,
 )
+ax.set_xlim(reverse(show_lims)); ax.set_ylim(show_lims)
 save_and_close(fig, "plot_plain.png")
 
 # Fully decorated
@@ -232,6 +236,7 @@ fig, ax = plot2d(tmap_show, star_show;
     position_angle = rotator_params.position_angle,
     star_params    = rotator_params,
 )
+ax.set_xlim(reverse(show_lims)); ax.set_ylim(show_lims)
 save_and_close(fig, "plot_decorated.png")
 
 # Intensity (limb-darkened, compass only)
@@ -239,18 +244,20 @@ fig, ax = plot2d(tmap_show, star_show;
     intensity = true,
     compass   = true,
 )
+ax.set_xlim(reverse(show_lims)); ax.set_ylim(show_lims)
 save_and_close(fig, "plot_intensity.png")
 
 # Temperature contours
 fig, ax = plot2d(tmap_show, star_show;
     intensity      = true,
     compass        = true,
-    contours       = [4200, 4400, 4600, 4800],
+    contours       = [3000, 3500, 4000, 4200],
     contour_color  = "gray",
     inclination    = rotator_params.inclination,
     position_angle = rotator_params.position_angle,
     star_params    = rotator_params,
 )
+ax.set_xlim(reverse(show_lims)); ax.set_ylim(show_lims)
 save_and_close(fig, "plot_contours.png")
 
 # Mollweide projection
@@ -274,8 +281,8 @@ tmap_ell = parametric_temperature_map(ellipsoid_params, star_ell)
 grat_configs = [
     ((;),                                                        "Default"),
     ((nlat=8, nlon=12),                                          "Dense (8 lat, 12 lon)"),
-    ((color="white", linewidth=0.6, alpha=0.4),                  "White, thin, translucent"),
-    ((nlat=3, nlon=4, color="cyan", linewidth=1.5, alpha=0.8),   "Sparse, cyan, thick"),
+    ((color="white", linewidth=0.6, alpha=0.4),              "white, thin, translucent"),
+    ((nlat=3, nlon=4, color="red", linewidth=1.5, alpha=0.8),    "Sparse, red, thick"),
 ]
 
 fig_grat, axes_grat = subplots(2, 2, figsize=(12, 12))
@@ -347,7 +354,7 @@ conv_params = (
     ld1             = 0.3,
     ld2             = 0.0,
     inclination     = 45.0,
-    position_angle  = 45.0,
+    position_angle  = 35.0,
     rotation_period = 1.0,
 )
 tessels_conv = tessellation_healpix(4)
@@ -362,7 +369,7 @@ fig, ax = plot2d(tmap_conv, star_conv;
     rotation_arrow = true,
     inclination    = 45.0,
     position_angle = 45.0,
-    figtitle       = "inc = 45°, PA = 45°",
+    figtitle       = "inc = 45°, PA = 35°",
     star_params    = conv_params,
 )
 save_and_close(fig, "conventions_annotated.png")

@@ -40,7 +40,7 @@ temperature values:
 
 ```julia
 plot2d(tmap, stars[1];
-    contours       = [6000, 6500, 7000, 7500],  # temperature levels (K)
+    contours       = [3000, 3500, 4000, 4200],       # temperature levels (K)
     contour_color  = "gray",     # line and label color (default "gray")
     contour_labels = true,       # label each contour with "XXXX K" (default true)
     contour_fontsize = 10,       # label font size (default 10)

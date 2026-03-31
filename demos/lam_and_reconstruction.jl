@@ -42,7 +42,7 @@ tmap =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 1000, regularize
 crit = image_reconstruct_oi_crit(tmap, data, stars, regularizers = [], verbose = true)
 chi2 = image_reconstruct_oi_chi2(tmap, data, stars, verbose = true)
 
-tmap_final = rescale_temperature_teff(tmap, stars, star_params, 4633.0)
+tmap_final = rescale_temperature_teff(tmap, stars, 4633.0)
 plot2d(tmap_final, stars[1], contours=[2500, 3000, 4000])
 
 plot_mollweide(tmap_final, stars[1], visible_pixels=sometimes_visible(stars), bad_color="lightgray")

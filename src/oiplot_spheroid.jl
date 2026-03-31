@@ -58,6 +58,20 @@ function draw_compass(ax, axis_max; size_frac=0.12, fontsize=12, color="black")
         fontsize=fontsize, color=color, ha="right", va="center", fontweight="bold", zorder=8)
 end
 
+function _polar_radius(star, star_params)
+    if star_params !== nothing && hasproperty(star_params, :surface_type)
+        stype = star_params.surface_type
+        if stype == 0
+            return star_params.radius
+        elseif stype == 1
+            return star_params.radius_z
+        elseif stype == 2
+            return star_params.rpole
+        end
+    end
+    return maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))
+end
+
 """
     draw_rotation_axis(ax, star; inclination=NaN, position_angle=NaN,
         arrow_frac=0.3, color="black", linewidth=1.5, offset_west=0.0, offset_north=0.0)
@@ -69,12 +83,13 @@ When `inclination` (degrees from LOS) and `position_angle` (degrees, N through E
 the axis is computed analytically. Otherwise it is estimated from the tessellation vertices.
 """
 function draw_rotation_axis(ax, star; arrow_frac=0.3, color="black", linewidth=1.5,
-    offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN)
+    offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
+    alpha=1.0, inside_alpha=0.5, star_params=nothing)
     if !isnan(inclination) && !isnan(position_angle)
         inc_rad = inclination * π / 180
         PA_rad  = position_angle * π / 180
         spin = [-sin(PA_rad) * sin(inc_rad), cos(PA_rad) * sin(inc_rad), cos(inc_rad)]
-        R = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))
+        R = _polar_radius(star, star_params)
         north = R .* spin
         south = -R .* spin
     else
@@ -86,16 +101,18 @@ function draw_rotation_axis(ax, star; arrow_frac=0.3, color="black", linewidth=1
     north_tip = north .+ arrow_frac .* delta
     south_tip = south .- arrow_frac .* delta
     points = hcat(south_tip, south, north, north_tip)  # 3×4
+    seg_alpha = [alpha, inside_alpha, alpha]  # outside, inside, outside
     for j in 1:3
         p1 = points[:, j]
         p2 = points[:, j+1]
         ax.plot([-(p1[1]+offset_west), -(p2[1]+offset_west)],
                 [p1[2]+offset_north, p2[2]+offset_north],
-                "--", color=color, linewidth=linewidth, zorder=6)
+                "--", color=color, linewidth=linewidth, alpha=seg_alpha[j], zorder=6)
     end
     ax.annotate("", xy=(-(north_tip[1]+offset_west), north_tip[2]+offset_north),
         xytext=(-(north[1]+offset_west), north[2]+offset_north),
-        arrowprops=Dict("arrowstyle" => "-|>", "color" => color, "lw" => linewidth, "linestyle" => "--"),
+        arrowprops=Dict("arrowstyle" => "-|>", "shrinkA" => 0, "shrinkB" => 0,
+            "color" => color, "lw" => 0, "mutation_scale" => 15),
         zorder=6)
 end
 
@@ -104,18 +121,18 @@ end
         color="black", linewidth=1.5, inclination=NaN, position_angle=NaN)
 
 Draw a curved arrow around the rotation axis showing the sense of rotation.
-A 270° ellipse centered at the pole, solid in front (z>0), dashed behind.
+A 290° ellipse centered at the pole, solid in front (z>0), dashed behind.
 Prograde rotation = counter-clockwise around north pole.
 When `inclination`/`position_angle` are given, the axis is computed analytically.
 """
-function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.15, offset_frac=0.05,
+function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.07, offset_frac=0.15,
     color="black", linewidth=1.5, npoints=200, offset_west=0.0, offset_north=0.0,
-    inclination=NaN, position_angle=NaN)
+    inclination=NaN, position_angle=NaN, star_params=nothing)
     if !isnan(inclination) && !isnan(position_angle)
         inc_rad = inclination * π / 180
         PA_rad  = position_angle * π / 180
         spin = [-sin(PA_rad) * sin(inc_rad), cos(PA_rad) * sin(inc_rad), cos(inc_rad)]
-        R = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))
+        R = _polar_radius(star, star_params)
         north = R .* spin
         south = -R .* spin
     else
@@ -130,7 +147,7 @@ function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.15, offset_frac=0
     ref = abs(axis_hat[3]) < 0.9 ? [0.0, 0.0, 1.0] : [1.0, 0.0, 0.0]
     e1 = cross(axis_hat, ref); e1 ./= norm(e1)
     e2 = cross(axis_hat, e1)
-    θ = collect(range(0, 3π/2, length=npoints))
+    θ = collect(range(0, 300π/180, length=npoints))
     pts = hcat([center .+ r .* (cos(t) .* e1 .+ sin(t) .* e2) for t in θ]...)
     x2d = -(pts[1, :] .+ offset_west); y2d = pts[2, :] .+ offset_north; z = pts[3, :]
     front = z .> 0
@@ -389,8 +406,8 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   end
   # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
   if graticules; draw_graticules(ax, star; inclination=inclination, position_angle=position_angle, star_params=star_params, graticule_kwargs...); end
-  if rotation_axis; draw_rotation_axis(ax, star, inclination=inclination, position_angle=position_angle); end
-  if rotation_arrow; draw_rotation_arrow(ax, star, inclination=inclination, position_angle=position_angle); end
+  if rotation_axis; draw_rotation_axis(ax, star, inclination=inclination, position_angle=position_angle, star_params=star_params); end
+  if rotation_arrow; draw_rotation_arrow(ax, star, inclination=inclination, position_angle=position_angle, star_params=star_params); end
   if compass; draw_compass(ax, axis_max); end
   cmap=ColorMap(colormap)
   divider = axdiv.make_axes_locatable(ax)
@@ -486,14 +503,14 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
         inclination=inclination2, position_angle=position_angle2, star_params=star_params2, graticule_kwargs...)
   end
   if rotation_axis
-    draw_rotation_axis(ax, star1, inclination=inclination1, position_angle=position_angle1)
+    draw_rotation_axis(ax, star1, inclination=inclination1, position_angle=position_angle1, star_params=star_params1)
     draw_rotation_axis(ax, star2, offset_west=offset_west, offset_north=offset_north,
-        inclination=inclination2, position_angle=position_angle2)
+        inclination=inclination2, position_angle=position_angle2, star_params=star_params2)
   end
   if rotation_arrow
-    draw_rotation_arrow(ax, star1, inclination=inclination1, position_angle=position_angle1)
+    draw_rotation_arrow(ax, star1, inclination=inclination1, position_angle=position_angle1, star_params=star_params1)
     draw_rotation_arrow(ax, star2, offset_west=offset_west, offset_north=offset_north,
-        inclination=inclination2, position_angle=position_angle2)
+        inclination=inclination2, position_angle=position_angle2, star_params=star_params2)
   end
   if compass; draw_compass(ax, axis_max); end
   # Colorbar — use the padded norm so colors match the patches
