@@ -147,6 +147,10 @@ function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.07, offset_frac=0
     ref = abs(axis_hat[3]) < 0.9 ? [0.0, 0.0, 1.0] : [1.0, 0.0, 0.0]
     e1 = cross(axis_hat, ref); e1 ./= norm(e1)
     e2 = cross(axis_hat, e1)
+    # Reverse sweep for retrograde rotation (negative rotation_period)
+    if star_params !== nothing && hasproperty(star_params, :rotation_period) && star_params.rotation_period < 0
+        e1, e2 = e2, e1
+    end
     θ = collect(range(0, 300π/180, length=npoints))
     pts = hcat([center .+ r .* (cos(t) .* e1 .+ sin(t) .* e2) for t in θ]...)
     x2d = -(pts[1, :] .+ offset_west); y2d = pts[2, :] .+ offset_north; z = pts[3, :]
