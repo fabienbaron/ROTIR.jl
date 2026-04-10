@@ -20,6 +20,8 @@ include("oichi2_spheroid.jl");
 include("oichi2_binary.jl");
 include("fused_polyft.jl");
 include("shape_gradient.jl");
+include("rasterize.jl");
+include("polyft_nfft.jl");
 include("oiplot_spheroid.jl");
 
 # Re-export OITOOLS functions so users only need `using ROTIR`
@@ -87,6 +89,12 @@ export sigmoid, dsigmoid, soft_visibility
 # Fused two-pass polyft (matrix-free forward/adjoint)
 export compute_polyflux_and_cvis!, compute_adjoint_cvis!, compute_adjoint_vertices!
 export precompute_k2_inv_im, fused_spheroid_chi2_fg
+
+# Rasterization (polygon -> image via Sutherland-Hodgman clipping)
+export rasterize_polygon_image!, rasterize_polygon_image, rasterize_adjoint!
+
+# NFFT (polygon -> Fourier grid via Gauss-Legendre quadrature + NFFT)
+export build_gauss_samples, polyft_nfft_forward, polyft_nfft_image
 
 # Shape gradients (joint shape + map optimization)
 export rotation_matrix, dR_dinc, dR_dPA
