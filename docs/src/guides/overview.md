@@ -26,6 +26,13 @@ Fourier transform contribution at each UV frequency is computed analytically
 using the polygon FT formula (edge-based sinc integrals). The total complex
 visibility is the flux-weighted sum over all visible pixels.
 
+**Direct imaging.** In addition to the polyft matrix, ROTIR provides two
+fast methods for producing real-space images: **rasterization** (exact
+polygon-pixel clipping via Sutherland-Hodgman) and **NFFT** (Gauss-Legendre
+quadrature folded into a non-uniform FFT). Both avoid the dense polyft matrix
+and are useful for visualization, image-plane fitting, and large grids. See
+[Direct imaging methods](@ref) for details.
+
 **Reconstruction.** The temperature map is optimized to minimize the
 chi-squared between model and observed interferometric quantities (V², closure
 phase, triple amplitude), subject to regularization. ROTIR uses the VMLMB

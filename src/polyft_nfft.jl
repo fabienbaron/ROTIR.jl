@@ -144,6 +144,14 @@ Returns a `(nx/2+1, nx)` complex array whose layout matches
 `reshape(polyft*x_weighted, nx/2+1, nx)`, so that the caller can feed it
 directly to `irfft(F, nx)` to obtain the real-space forward model.
 
+Convention notes:
+- NFFT.jl's adjoint computes `sum_j f_j exp(+2*pi*i * k . x_j)` in natural
+  order `k in {-N/2, ..., N/2-1}`.
+- With negated positions `pos = (-y/L, -x/L)`, the adjoint directly produces
+  the standard DFT `sum f_j exp(-2*pi*i * k . r_j)`.
+- `ifftshift` converts natural NFFT order to standard FFT order, then
+  extracting rows `1:nx/2+1` gives the rfft layout.
+
 # Arguments
 - `proj_west, proj_north`: `(Npix, 4)` polygon vertex coordinates (mas)
 - `x_weighted`: `(Npix,)` intensity weights
@@ -162,16 +170,17 @@ function polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize::Real,
 
     pos = Matrix{T}(undef, 2, Ns)
     @inbounds for s in 1:Ns
-        pos[1, s] = ys[s] / L
-        pos[2, s] = xs[s] / L
+        pos[1, s] = -ys[s] / L
+        pos[2, s] = -xs[s] / L
     end
 
     p_plan   = plan_nfft(pos, (nx, nx))
     fhat_nat = adjoint(p_plan) * fs
 
-    # rfft-layout extraction
+    # rfft-layout extraction: ifftshift converts natural → FFT order,
+    # then rows 1:nh give the non-negative half (rfft layout).
     nh = nx ÷ 2 + 1
-    return fftshift(fhat_nat[nh:-1:1, :], 2)
+    return ifftshift(fhat_nat)[1:nh, :]
 end
 
 """

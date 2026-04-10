@@ -44,6 +44,12 @@ Switch to the fused path when optimizing shape parameters (inclination,
 radii, position angle) jointly with the map, or when the polyft matrix
 is too large to fit in memory.
 
+!!! note
+    For producing real-space images (visualization, image-plane fitting),
+    ROTIR also provides **rasterization** and **NFFT** methods that avoid
+    the dense polyft matrix entirely. See [Rasterization & NFFT](@ref)
+    for the API and [Direct imaging methods](@ref) for a usage guide.
+
 ## Setup (matrix path)
 
 | Function | Description |

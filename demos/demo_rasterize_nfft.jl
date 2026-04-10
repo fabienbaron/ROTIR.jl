@@ -56,26 +56,74 @@ println("Rasterizing...")
 println("Computing NFFT...")
 @time img_nfft = polyft_nfft_image(pw, pn, x_weighted, pixsize, nx; ngauss=6)
 
+# --- Method 3: Step-by-step Fourier pipeline via rfftfreq/fftfreq -----------
+# Demonstrates the full pipeline explicitly:
+#   1. Define the frequency grid using rfftfreq + fftfreq
+#   2. Compute complex visibilities via NFFT on that grid
+#   3. Inverse real-FFT (irfft) back to a real-space image
+
+# Step 1: Build the frequency grids corresponding to the image grid.
+# For an image of nx pixels with spacing pixsize (mas/pixel), the spatial
+# sampling rate is 1/pixsize (samples/mas), giving frequencies in cycles/mas.
+u_freq = rfftfreq(nx, 1 / pixsize)    # non-negative freqs, length nx÷2+1
+v_freq = fftfreq(nx, 1 / pixsize)     # full freqs,         length nx
+
+# Step 2: Compute complex visibilities via adjoint NFFT.
+# polyft_nfft_forward returns F of shape (nx÷2+1, nx) in standard rfft layout:
+#   dim 1 (rows) matches rfftfreq — non-negative u frequencies
+#   dim 2 (cols) matches fftfreq  — standard FFT order
+println("Computing visibilities on rfftfreq/fftfreq grid via NFFT...")
+@time F = polyft_nfft_forward(pw, pn, x_weighted, pixsize, nx; ngauss=6)
+
+# Step 3: Inverse real-FFT to recover the image from the visibilities.
+img_irfft = fftshift(irfft(F, nx))
+
+# For display, fftshift dim 2 so zero-frequency is centered
+F_display = fftshift(F, 2)
+v_freq_shifted = fftshift(v_freq)
+
 # --- Plot the results -------------------------------------------------------
 half_fov = nx * pixsize / 2  # mas
 
-fig, axes = subplots(1, 2, figsize=(12, 5))
+# Frequency axis extents for the visibility plot (fftshifted v on x-axis)
+u_extent = [Float64(v_freq_shifted[1]), Float64(v_freq_shifted[end]),
+            Float64(u_freq[1]),         Float64(u_freq[end])]
 
-axes[1].imshow(img_raster, origin="lower",
-               extent=[-half_fov, half_fov, -half_fov, half_fov],
-               cmap="hot", interpolation="nearest")
-axes[1].set_title("Rasterization")
-axes[1].set_xlabel("West (mas)")
-axes[1].set_ylabel("North (mas)")
+fig, axes = subplots(2, 2, figsize=(12, 10))
 
-axes[2].imshow(img_nfft, origin="lower",
-               extent=[-half_fov, half_fov, -half_fov, half_fov],
-               cmap="hot", interpolation="nearest")
-axes[2].set_title("NFFT (ngauss=6)")
-axes[2].set_xlabel("West (mas)")
-axes[2].set_ylabel("North (mas)")
+# Top-left: rasterization
+axes[1,1].imshow(img_raster, origin="lower",
+                 extent=[-half_fov, half_fov, -half_fov, half_fov],
+                 cmap="hot", interpolation="nearest")
+axes[1,1].set_title("Rasterization")
+axes[1,1].set_xlabel("West (mas)")
+axes[1,1].set_ylabel("North (mas)")
 
-suptitle("Rapid Rotator (omega=0.9, inc=60 deg) -- Rasterize vs NFFT")
+# Top-right: NFFT convenience image (polyft_nfft_image)
+axes[1,2].imshow(img_nfft, origin="lower",
+                 extent=[-half_fov, half_fov, -half_fov, half_fov],
+                 cmap="hot", interpolation="nearest")
+axes[1,2].set_title("NFFT image (ngauss=6)")
+axes[1,2].set_xlabel("West (mas)")
+axes[1,2].set_ylabel("North (mas)")
+
+# Bottom-left: visibility amplitudes |F| on the rfftfreq x fftfreq grid
+axes[2,1].imshow(log10.(abs.(F_display) .+ 1f-12), origin="lower",
+                 extent=u_extent, aspect="auto",
+                 cmap="inferno", interpolation="nearest")
+axes[2,1].set_title("log₁₀|V| on rfft grid")
+axes[2,1].set_xlabel("v  (cycles/mas)")
+axes[2,1].set_ylabel("u  (cycles/mas)")
+
+# Bottom-right: image recovered via explicit irfft
+axes[2,2].imshow(img_irfft, origin="lower",
+                 extent=[-half_fov, half_fov, -half_fov, half_fov],
+                 cmap="hot", interpolation="nearest")
+axes[2,2].set_title("irfft(F) image")
+axes[2,2].set_xlabel("West (mas)")
+axes[2,2].set_ylabel("North (mas)")
+
+suptitle("Rapid Rotator (ω=0.9, inc=60°) — Rasterize / NFFT / Fourier pipeline")
 tight_layout()
 savefig("demo_rasterize_nfft.png", dpi=150)
 println("Saved demo_rasterize_nfft.png")
