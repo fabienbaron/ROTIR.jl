@@ -7,6 +7,7 @@ using Statistics
 using LinearAlgebra
 using Printf
 using PrecompileTools
+using ChainRulesCore
 
 include("oistars.jl");
 include("soft_visibility.jl");
@@ -20,6 +21,7 @@ include("oichi2_spheroid.jl");
 include("oichi2_binary.jl");
 include("fused_polyft.jl");
 include("shape_gradient.jl");
+include("parametric_gradient.jl");
 include("rasterize.jl");
 include("polyft_nfft.jl");
 include("oiplot_spheroid.jl");
@@ -39,11 +41,10 @@ export upsample_map_stars, downsample_map_stars
 
 # Stellar/binary parameters
 export starparameters, binaryparameters
-export update_star, update_binary
 
 # Geometry: stars and binaries
-export create_star, create_star_multiepochs, create_binary
-export rotate_single_star, compute_separation
+export create_star, create_star_multiepochs
+export compute_separation
 export oblate_const
 
 # Geometry: Roche lobe
@@ -100,6 +101,13 @@ export build_gauss_samples, polyft_nfft_forward, polyft_nfft_image
 export rotation_matrix, dR_dinc, dR_dPA
 export projected_vertices_and_derivs, shape_chi2_fg!, joint_reconstruct_oi
 
+# Parametric gradient (Zygote-composable primitives + ChainRules rrules)
+export limb_mu, mu_and_dmu
+export intensity, planck_and_dT
+export vonzeipel_map, vonzeipel_map_and_derivs
+export ld_weight, ld_and_derivs, visibility_weight
+export project_geometry, interferometric_chi2, build_parametric_logπ
+
 # Plotting
 export plot2d, plot2d_wireframe, plot2d_allepochs
 export plot3d
@@ -112,6 +120,21 @@ export sometimes_visible, never_visible, invisible_neighbors, with_invisible_nei
 export make_circ_spot, make_spot_move
 export rl1, max_rpole
 export rescale_temperature_tpole, rescale_temperature_teff
+
+function __init__()
+    # ROTIR extracts parallelism at the Julia level (threaded polygon-FT kernels in
+    # fused_polyft.jl; MCMC over chains/epochs). Keep FFTW/NFFT single-threaded so their
+    # internal FFTs do NOT oversubscribe against Julia's threads under `julia -t auto`
+    # (NFFT.__init__ otherwise sets _use_threads = nthreads()>1). Re-enable after
+    # `using ROTIR` if you drive FFTW/NFFT yourself in a single-threaded outer context:
+    #     FFTW.set_num_threads(Threads.nthreads()); NFFT._use_threads[] = true
+    try
+        FFTW.set_num_threads(1)
+        NFFT._use_threads[] = false
+    catch err
+        @debug "ROTIR: could not force single-threaded FFTW/NFFT" err
+    end
+end
 
 include("precompile.jl")
 

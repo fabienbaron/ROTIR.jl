@@ -1,5 +1,5 @@
 """
-    starparameters(rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta_vZ, B_rot,
+    starparameters(rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta, B_rot,
                    inclination, position_angle, rotation_offset, rotation_period)
 
 Construct a stellar parameters NamedTuple. Fields:
@@ -8,17 +8,17 @@ Construct a stellar parameters NamedTuple. Fields:
 - `frac_escapevel`: fractional rotational velocity (0–1)
 - `ldtype`: limb-darkening law (1=linear, 2=quadratic, 3=Hestroffer)
 - `ld1`, `ld2`: limb-darkening coefficients
-- `beta_vZ`: von Zeipel gravity-darkening exponent (0.25 radiative, 0.08 convective)
+- `beta`: von Zeipel gravity-darkening exponent (0.25 radiative, 0.08 convective)
 - `B_rot`: differential rotation coefficient
 - `inclination`: spin-axis inclination (degrees)
 - `position_angle`: spin-axis PA (degrees)
 - `rotation_offset`: fixed rotation offset (degrees)
 - `rotation_period`: rotation period (days)
 """
-function starparameters(rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta_vZ, B_rot,
+function starparameters(rpole, tpole, frac_escapevel, ldtype, ld1, ld2, beta, B_rot,
                         inclination, position_angle, rotation_offset, rotation_period)
     return (rpole=rpole, tpole=tpole, frac_escapevel=frac_escapevel,
-            ldtype=ldtype, ld1=ld1, ld2=ld2, beta_vZ=beta_vZ, B_rot=B_rot,
+            ldtype=ldtype, ld1=ld1, ld2=ld2, beta=beta, B_rot=B_rot,
             inclination=inclination, position_angle=position_angle,
             rotation_offset=rotation_offset, rotation_period=rotation_period)
 end

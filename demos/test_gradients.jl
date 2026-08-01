@@ -7,15 +7,16 @@ using FiniteDifferences
 using LinearAlgebra
 
 # ─── Load data (single epoch for speed) ─────────────────────────────────────
+# Float64 throughout: FD needs the precision (the runtime paths are Float32-native)
 oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits"]
-data_all = readoifits_multiepochs(oifitsfiles)
+data_all = readoifits_multiepochs(oifitsfiles; T=Float64)
 data = data_all[1, :]
 nepochs = length(data)
 tepochs = [d.mean_mjd for d in data]
 tepochs = tepochs .- tepochs[1]
 
 n = 3
-tessels = tessellation_healpix(n)
+tessels = tessellation_healpix(n, T=Float64)
 npix = tessels.npix
 
 # ─── Helper: compute chi2 from θ (shape params) and xmap ────────────────────
@@ -41,7 +42,8 @@ function test_gradient(label, star_params_base, θ_start, θ_names; κ=50.0)
     println("Testing: $label")
     println("="^70)
 
-    stars = create_star_multiepochs(tessels, star_params_base, tepochs)
+    # T=Float64: `create_star` defaults to Float32 regardless of the tessellation type
+    stars = create_star_multiepochs(tessels, star_params_base, tepochs, T=Float64)
     tmap = parametric_temperature_map(star_params_base, stars[1])
     setup_oi!(data, stars)
 
@@ -158,5 +160,25 @@ star_params_rr2 = (
 )
 test_gradient("Rapid Rotator (ω=0.3)", star_params_rr2,
               [1.37, 0.3, 60.0, 45.0], ["rpole", "ω", "inc", "PA"])
+
+# ─── Test 5: quadratic limb darkening ───────────────────────────────────────
+# Tests 1–4 all use the Hestroffer law; this one exercises the ldtype=2 branch of the
+# limb-darkening term in ∂χ²/∂θ (LD depends on nz, which depends on the shape params).
+star_params_ld2 = (
+    surface_type    = 2,
+    rpole           = 1.37,
+    tpole           = 4800.0,
+    ldtype          = 2,           # quadratic: 1 - ld1(1-μ) - ld2(1-μ²)
+    ld1             = 0.35,
+    ld2             = 0.15,
+    inclination     = 78.0,
+    position_angle  = 24.0,
+    rotation_period = 54.8,
+    beta            = 0.08,
+    frac_escapevel  = 0.6,
+    B_rot           = 0.0
+)
+test_gradient("Rapid Rotator, quadratic LD", star_params_ld2,
+              [1.37, 0.6, 78.0, 24.0], ["rpole", "ω", "inc", "PA"])
 
 println("\n\nDone.")

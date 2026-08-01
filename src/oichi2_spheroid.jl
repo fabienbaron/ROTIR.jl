@@ -7,14 +7,14 @@ end
 
 function poly_to_cvis(x, star)
    indx = star.index_quads_visible
-   xw = x[indx] .* star.vis_weights[indx]
+   xw = x[indx] .* star.vis_weights[indx] .* star.ldmap[indx]  # fold in limb darkening
    flux = dot(star.polyflux, xw); # get the total flux
    return star.polyft * xw / flux;
 end
 
 function poly_to_flux(x, star)
    indx = star.index_quads_visible
-   xw = x[indx] .* star.vis_weights[indx]
+   xw = x[indx] .* star.vis_weights[indx] .* star.ldmap[indx]  # fold in limb darkening
    flux = dot(star.polyflux, xw); # get the total flux
    return flux;
 end
@@ -192,7 +192,7 @@ end
   npix = star.npix;
   T = eltype(x);
   indx = star.index_quads_visible
-  w = star.vis_weights[indx]  # soft visibility weights for visible pixels
+  w = star.vis_weights[indx] .* star.ldmap[indx]  # soft visibility × limb darkening
   xw = x[indx] .* w           # weighted pixel values
   cvis_model = poly_to_cvis(x, star);
   v2_model = cvis_to_v2(cvis_model, data.indx_v2);

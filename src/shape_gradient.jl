@@ -289,6 +289,14 @@ end
 Compute chi2 and gradients w.r.t. both shape parameters θ and surface map xmap,
 using the fused two-pass approach (no polyft matrix).
 
+Each tessel is weighted by w = soft visibility σ(κ nz) × limb darkening ld(nz), with the
+LD law/coefficients taken from `star_params_base` (`ldtype`, `ld1`, `ld2`) — identical to
+`create_star`/`compute_ldmap`. Because ld depends on nz, its derivative contributes to
+∂χ²/∂θ; the LD coefficients themselves are held fixed (they are not part of θ) — with a
+free per-tessel `xmap` the map can reabsorb a radial darkening profile, so ld1/ld2 are
+largely degenerate with it. They are fittable in the parametric path
+(`build_parametric_logπ`), where the map is pinned by the von Zeipel model instead.
+
 θ layout depends on surface_type:
   0 (Sphere):    θ = [radius, inc, PA]
   1 (Ellipsoid): θ = [rx, ry, rz, inc, PA]
@@ -319,6 +327,14 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
                                                 inclination=θ[2], position_angle=θ[3]))
     end
 
+    # Limb-darkening law: same coefficients and same μ = max(nz,0) convention as the
+    # fixed-shape path (`create_star` → `compute_ldmap`), so the map step and the θ step
+    # of `joint_reconstruct_oi` optimize the *same* model. LD depends on nz, hence on θ:
+    # its derivative enters the θ gradient alongside the soft-visibility one below.
+    ldtype = hasproperty(star_params, :ldtype) ? Int(star_params.ldtype) : 1
+    ld1    = hasproperty(star_params, :ld1) ? T(star_params.ld1) : zero(T)  # ldtype 1, ld1=0 ⇒ ld ≡ 1
+    ld2    = hasproperty(star_params, :ld2) ? T(star_params.ld2) : zero(T)
+
     grad_θ .= zero(T)
     grad_xmap .= zero(T)
     total_chi2 = zero(T)
@@ -334,13 +350,20 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         # Soft visibility
         vis_w, sig_args = soft_visibility(nz, κ=κ)
 
-        # Select visible pixels
+        # Limb darkening (and its dependence on nz, needed for the θ gradient)
+        ld, dld_dnz, _, _ = ld_and_derivs(nz, ldtype, ld1, ld2)
+
+        # Total per-tessel weight: w = σ(κ nz) · ld(nz)
+        w = vis_w .* ld
+
+        # Select visible pixels (threshold on the soft visibility only: a tessel with
+        # ld ≈ 0 at the limb still contributes through dld/dnz to the θ gradient)
         vis_threshold = T(1e-4)
         indx = findall(vis_w .> vis_threshold)
         nvis = length(indx)
 
         # Weighted pixel values
-        xw = xmap[indx] .* vis_w[indx]
+        xw = xmap[indx] .* w[indx]
 
         # UV frequencies
         kx = data.uv[1,:] * T(-π / (180*3600000))
@@ -403,7 +426,7 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         compute_adjoint_cvis!(grad_xw, adj_F, kx, ky, k2_inv_im, pjx, pjy, polyflux_local)
         flux_adj = -dot(xw, grad_xw) / flux
         grad_xw .+= flux_adj * polyflux_local
-        grad_xmap[indx] .+= vis_w[indx] .* grad_xw
+        grad_xmap[indx] .+= w[indx] .* grad_xw
 
         # Adjoint pass for vertex position gradients (non-DC Fourier terms)
         grad_proj_west = Matrix{T}(undef, nvis, 4)
@@ -436,14 +459,15 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
             grad_θ[j] += s
         end
 
-        # Chain rule via soft visibility: ∂χ²/∂θ via w
-        # dchi2_dw = dchi2_dxw * xmap, and dw/dθ = dσ/d(κnz) * κ * dnz/dθ
+        # Chain rule via the per-tessel weight w = σ(κ nz)·ld(nz): ∂χ²/∂θ via w
+        # dchi2_dw = dchi2_dxw * xmap, and dw/dθ = dw/dnz * dnz/dθ with
+        #   dw/dnz = dσ/d(κnz) * κ * ld + σ * dld/dnz
         dchi2_dw_visible = grad_xw .* xmap[indx]  # ∂χ²/∂(w) for visible pixels
-        dw_dsigarg = dsigmoid.(sig_args[indx])
+        dw_dnz = dsigmoid.(sig_args[indx]) .* κ .* ld[indx] .+ vis_w[indx] .* dld_dnz[indx]
         for j in 1:nparams
             s = zero(T)
             for (li, pi) in enumerate(indx)
-                s += dchi2_dw_visible[li] * dw_dsigarg[li] * κ * dnz_dθ[pi, j]
+                s += dchi2_dw_visible[li] * dw_dnz[li] * dnz_dθ[pi, j]
             end
             grad_θ[j] += s
         end

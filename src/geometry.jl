@@ -194,6 +194,13 @@ function rotate_star(xyz, star_params, t; T=Float32)
 end
 
 
+# Limb cosine μ from the line-of-sight normal component nz (single source of truth,
+# shared by the forward model in create_star and by the LD gradient rules).
+# The face normal is unit-length (see create_star), so nz is exactly cos(emergent
+# angle) = the limb cosine; visible-side μ = max(nz, 0), back-facing tessels clamp to 0.
+@inline limb_mu(nz::T) where {T} = nz > zero(T) ? nz : zero(T)
+@inline mu_and_dmu(nz::T) where {T} = nz > zero(T) ? (nz, one(T)) : (zero(T), zero(T))
+
 function compute_ldmap(μ,star_params; T=Float32)
   p = convert_params(T, star_params)
   # Limb-darkening map
@@ -234,8 +241,8 @@ end
   proj_west = xyz[:, 1:4, 1];
   proj_north = xyz[:, 1:4, 2];
 
-  # Limb-darkening map (uses abs(μ) for all pixels)
-  μ = abs.(normals[:,3].*max.(normals[:,3], 0))
+  # Limb-darkening map. μ = limb cosine max(nz,0) on the visible side (see limb_mu).
+  μ = limb_mu.(normals[:,3])
   ldmap = compute_ldmap(μ,star_params)
   spherical = copy(tessels.unit_spherical);
   spherical[:,:,1] = r
@@ -243,60 +250,6 @@ end
   center = T.([0.0,0.0,0.0]);
   return stellar_geometry{T}(star_params.surface_type, tessels.tessellation_type, npix, xyz, spherical, normals, index_quads_visible, nquads_visible, proj_west, proj_north, ldmap, vis_weights, sig_args, center, T[], zeros(Complex{T}, 0, 0), t);
 end
-
-function create_binary(star1::tessellation, star2::tessellation, binary_params, t)
-# Update a binary system
-# Step 1: compute location of components
-# Step 2: compute Roche lobes for both components
- 
-## TEST star1=prim_base; star2=sec_base;t = tepochs[i]
-  x1, y1, z1, x2, y2, z2 = binary_orbit_abs(binary_params,t);
-  D = sqrt((x2-x1)^2+(y2-y1)^2+(z2-z1)^2)/binary_params.a # reduced separation
-
-  # Update Roche geometry
-  star1_roche_geom, star2_roche_geom =  update_roche_radii(star1, star2, binary_params, D); # updates both primary and secondary
-
-  # Determine rotation angles
-  ζ1 = 360.0/binary_params.star1.rotation_period*(t-binary_params.T0) + 180.0 
-  ζ2 = 360.0/binary_params.star2.rotation_period*(t-binary_params.T0)
-  Ω = binary_params.Ω*pi/180.0; # longitude of ascending node
-  i = binary_params.i*pi/180.0;
-
-  # Rotate and translate both stars
-  star_epoch_geom1 = rotate_single_star(star1_roche_geom, binary_params.star1, i*pi/180.0, Ω*pi/180.0, ζ1*pi/180.0, offsets = [x1, z1, y1])
-  star_epoch_geom2 = rotate_single_star(star2_roche_geom, binary_params.star2, i*pi/180.0, Ω*pi/180.0, ζ2*pi/180.0, offsets = [x2, z2, y2], recenter=[-D, 0, 0])
-  return star_epoch_geom1, star_epoch_geom2
-end
-
-# The following function is used for generating stars for a binary
-function rotate_single_star(base_geom, star_params, orbit_incl, long_ascending_node, rot_angle; offsets = [], recenter=[])
-  npix = base_geom.npix;
-  compound_rotation = rot_vertex(orbit_incl*pi/180.0, long_ascending_node*pi/180.0, rot_angle*pi/180.0);
-  vertices_xyz_rot = Array{eltype(base_geom.vertices_xyz)}(undef, npix, 5, 3)
-  if recenter ==[]
-    for ii=1:npix
-      for jj = 1:5
-       vertices_xyz_rot[ii, jj, :] = compound_rotation * base_geom.vertices_xyz[ii, jj, :] 
-      end
-    end
-  else 
-    for ii=1:npix
-      for jj = 1:5
-        vertices_xyz_rot[ii, jj, :] = compound_rotation * (base_geom.vertices_xyz[ii, jj, :] + recenter) 
-      end
-    end
-  end
-  # Offsets applied after rotation
-  if offsets !=[]
-    vertices_xyz_rot[:,:,1] .+= offsets[1]
-    vertices_xyz_rot[:,:,2] .+= offsets[2]
-    vertices_xyz_rot[:,:,3] .+= offsets[3]
-  end
-
-  # TODO: Compute the rest as usual including normals, mu, ldmap ,visible parts
-  vertices_spherical = copy(base_geom.vertices_spherical)
-  return stellar_geometry(npix, vertices_xyz_rot, vertices_spherical, normals, index_quads_visible,  nquads_visible, proj_west,  proj_north, ldmap, offsets);
- end
 
 function never_visible(star_epoch_geom)
   # return the list of pixels which are never visible at any epochs
@@ -356,12 +309,3 @@ end
 return star_epoch_geom
 end
 
-function create_binary_geometry(tessels, binary_parameters, tepochs; kwargs...)
-  nepochs = length(tepochs);
-  binary_epoch_geom = Array{stellar_geometry}(undef, nepochs);
-  #offsets = Array{Float64}(undef,nepochs,3);
-  for i=1:nepochs
-    binary_epoch_geom[i] = update_binary(tessels, binary_parameters,tepochs[i]; kwargs...);
-  end
-  return binary_epoch_geom
-end

@@ -23,38 +23,40 @@ Forward pass: compute complex visibilities F[k] and pixel areas polyflux[p].
 
     nuv = length(kx)
     npix = size(proj_west, 1)
-    F .= zero(Complex{T})
 
+    # Shoelace area per pixel (independent of xw — set for EVERY pixel so a zero-weight
+    # pixel never leaves polyflux[p] uninitialized).
     @inbounds for p in 1:npix
-        xw_p = xw[p]
-        xw_p == zero(T) && continue
-
-        # Shoelace area for this pixel
-        pf = T(0.5) * (
+        polyflux[p] = T(0.5) * (
             proj_west[p,1]*proj_north[p,2] - proj_west[p,2]*proj_north[p,1] +
             proj_west[p,2]*proj_north[p,3] - proj_west[p,3]*proj_north[p,2] +
             proj_west[p,3]*proj_north[p,4] - proj_west[p,4]*proj_north[p,3] +
             proj_west[p,4]*proj_north[p,1] - proj_west[p,1]*proj_north[p,4])
-        polyflux[p] = pf
+    end
 
-        # Accumulate FT contribution from 4 edges of the quad
-        for e in 1:4
-            j1 = e
-            j2 = mod1(e+1, 4)
-            dx = proj_west[p,j2] - proj_west[p,j1]
-            dy = proj_north[p,j2] - proj_north[p,j1]
-            cx = proj_west[p,j2] + proj_west[p,j1]
-            cy = proj_north[p,j2] + proj_north[p,j1]
-
-            for k in 1:nuv
-                kdd = kx[k]*dx + ky[k]*dy        # k·d (dot product with edge diff)
-                kdc = kx[k]*cx + ky[k]*cy        # k·c (dot product with edge center)
-                cr_k = ky[k]*dx - kx[k]*dy       # perpendicular component
-                s = sinc(kdd)                     # sinc(k·d)
-                phase = cis(-T(π) * kdc)          # exp(-iπ k·c)
-                F[k] += k2_inv_im[k] * s * phase * cr_k * xw_p
+    # F[k] = Σ_p Σ_edges (…). Threaded over the UV index k: each k is independent, so the
+    # accumulator is thread-local and there is no cross-thread contention (unlike threading
+    # over p, which would race on F[k]). This is the compute-dominant kernel — it scales
+    # ~linearly with Threads.nthreads(). Run Julia with `-t auto` to benefit.
+    Threads.@threads for k in 1:nuv
+        kxk = kx[k]; kyk = ky[k]; k2k = k2_inv_im[k]
+        acc = zero(Complex{T})
+        @inbounds for p in 1:npix
+            xw_p = xw[p]
+            xw_p == zero(T) && continue
+            for e in 1:4
+                j1 = e; j2 = mod1(e+1, 4)
+                dx = proj_west[p,j2] - proj_west[p,j1]
+                dy = proj_north[p,j2] - proj_north[p,j1]
+                cx = proj_west[p,j2] + proj_west[p,j1]
+                cy = proj_north[p,j2] + proj_north[p,j1]
+                kdd = kxk*dx + kyk*dy
+                kdc = kxk*cx + kyk*cy
+                cr  = kyk*dx - kxk*dy
+                acc += k2k * sinc(kdd) * cis(-T(π)*kdc) * cr * xw_p
             end
         end
+        F[k] = acc
     end
     return nothing
 end
@@ -76,7 +78,7 @@ Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
     npix = size(proj_west, 1)
     grad_xw .= zero(T)
 
-    @inbounds for p in 1:npix
+    Threads.@threads for p in 1:npix          # each p writes grad_xw[p] only — thread-safe
         acc = zero(Complex{T})
 
         for e in 1:4
@@ -87,7 +89,7 @@ Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
             cx = proj_west[p,j2] + proj_west[p,j1]
             cy = proj_north[p,j2] + proj_north[p,j1]
 
-            for k in 1:nuv
+            @inbounds for k in 1:nuv
                 kdd = kx[k]*dx + ky[k]*dy
                 kdc = kx[k]*cx + ky[k]*cy
                 cr_k = ky[k]*dx - kx[k]*dy
@@ -120,7 +122,8 @@ Used for shape gradient computation.
     grad_proj_west .= zero(T)
     grad_proj_north .= zero(T)
 
-    @inbounds for p in 1:npix
+    Threads.@threads for p in 1:npix          # each p writes its own grad_proj rows — thread-safe
+      @inbounds begin
         xw_p = xw[p]
         xw_p == zero(T) && continue
 
@@ -198,6 +201,7 @@ Used for shape gradient computation.
             grad_proj_north[p, j1] += acc_j1y
             grad_proj_north[p, j2] += acc_j2y
         end
+      end   # close @inbounds begin
     end
     return nothing
 end
@@ -230,7 +234,7 @@ Drop-in replacement for spheroid_chi2_fg.
     npix = star.npix
     T = eltype(x)
     indx = star.index_quads_visible
-    w = star.vis_weights[indx]
+    w = star.vis_weights[indx] .* star.ldmap[indx]  # soft visibility × limb darkening
     xw = x[indx] .* w
     pjx = star.proj_west[indx, :]
     pjy = star.proj_north[indx, :]

@@ -159,10 +159,13 @@ Convention notes:
 - `nx`: grid size (pixels per side)
 - `ngauss`: Gauss-Legendre order per axis (2..10)
 - `nsub`: number of sub-squares per axis for subdivision
+- `fftflags`: FFTW planner flags for the internal NFFT FFT. Default `FFTW.MEASURE`
+  (benchmarks once per grid size, cached in FFTW wisdom → faster transforms when the
+  NFFT is evaluated repeatedly). Pass `FFTW.ESTIMATE` for a single one-off call.
 """
 function polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize::Real,
                               nx::Integer; ngauss::Int=4, nsub::Int=1,
-                              T::Type=Float32)
+                              T::Type=Float32, fftflags=FFTW.MEASURE)
     xs, ys, fs = build_gauss_samples(proj_west, proj_north, x_weighted;
                                       ngauss=ngauss, nsub=nsub, T=T)
     Ns = length(xs)
@@ -174,7 +177,7 @@ function polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize::Real,
         pos[2, s] = -xs[s] / L
     end
 
-    p_plan   = plan_nfft(pos, (nx, nx))
+    p_plan   = plan_nfft(pos, (nx, nx); fftflags=fftflags)
     fhat_nat = adjoint(p_plan) * fs
 
     # rfft-layout extraction: ifftshift converts natural → FFT order,
@@ -195,8 +198,8 @@ Same as `polyft_nfft_forward`.
 """
 function polyft_nfft_image(proj_west, proj_north, x_weighted, pixsize::Real,
                             nx::Integer; ngauss::Int=4, nsub::Int=1,
-                            T::Type=Float32)
+                            T::Type=Float32, fftflags=FFTW.MEASURE)
     F = polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize, nx;
-                             ngauss=ngauss, nsub=nsub, T=T)
+                             ngauss=ngauss, nsub=nsub, T=T, fftflags=fftflags)
     return fftshift(irfft(F, nx))
 end

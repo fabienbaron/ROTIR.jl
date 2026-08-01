@@ -40,16 +40,18 @@ end
 
 Compute combined complex visibilities for a binary system.
 Star 1 is at the origin; star 2's visibilities are multiplied by `phase_shift`.
-Both temperature maps are flux-normalized together.
+Each map is weighted by its own soft visibility × limb-darkening map (`ldmap`, built by
+`create_star`), so the two components' fluxes — and hence their flux ratio in the joint
+normalization — are limb-darkened consistently with the single-star path.
 """
 function binary_cvis(x1, star1, x2, star2, phase_shift)
     indx1 = star1.index_quads_visible
-    xw1 = x1[indx1] .* star1.vis_weights[indx1]
+    xw1 = x1[indx1] .* star1.vis_weights[indx1] .* star1.ldmap[indx1]  # soft visibility × limb darkening
     flux1 = dot(star1.polyflux, xw1)
     F1 = star1.polyft * xw1
 
     indx2 = star2.index_quads_visible
-    xw2 = x2[indx2] .* star2.vis_weights[indx2]
+    xw2 = x2[indx2] .* star2.vis_weights[indx2] .* star2.ldmap[indx2]  # soft visibility × limb darkening
     flux2 = dot(star2.polyflux, xw2)
     F2 = star2.polyft * xw2
 

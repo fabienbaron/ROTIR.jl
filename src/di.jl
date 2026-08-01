@@ -448,7 +448,7 @@ function calculate_μv(npix::Int64, stellar_geometry::Array{stellar_geometry, 1}
     sinPA = sin(PA * pi/180)
 
     @views for i=1:nepochs
-        μ[:, i] .= stellar_geometry[i].normals[:, 3]  # μ angle is just the z-coordinate of each pixel
+        μ[:, i] .= max.(stellar_geometry[i].normals[:, 3], 0.0)  # limb cosine μ = max(nz,0); back-facing tessels clamp to 0
         xcosPA .= stellar_geometry[i].normals[:, 1] .* cosPA
         ysinPA .= stellar_geometry[i].normals[:, 2] .* sinPA
         v[:, i] .= vsini .* (xcosPA .- ysinPA) # velocity of each pixel is vsini*(xcos(PA) - ysin(PA)), from rotation about z-axis
@@ -847,7 +847,7 @@ function calculate_global_profiles_spotfill(f_map::Vector{Float64}, stellar_geom
     F = zeros(model_grid.nwvls)  # disk-integrated flux per pixel
     Fc = zeros(model_grid.nwvls)  # disk-integrated flux intensity per pixel
     @views for i=1:length(stellar_geometry)  # loop over all phases
-        μ .= stellar_geometry[i].normals[:, 3]  # μ angle is just the z-coordinate of each pixel
+        μ .= max.(stellar_geometry[i].normals[:, 3], 0.0)  # limb cosine μ = max(nz,0); back-facing tessels clamp to 0
         xcosPA .= stellar_geometry[i].normals[:, 1] .* cosPA
         ysinPA .= stellar_geometry[i].normals[:, 2] .* sinPA
         v .= vsini .* (xcosPA .- ysinPA)
@@ -891,7 +891,7 @@ function calculate_chi2_g_spotfill(x::Vector{Float64}, g::Vector{Float64}, star_
     Icspot = zeros(model_grid.nwvls)  # spot continuum intensity per pixel
     dRdf = zeros(model_grid.nwvls)  # spot continuum intensity per pixel
     @views for i=1:length(star_epoch_geom)
-        μ .= star_epoch_geom[i].normals[:, 3]
+        μ .= max.(star_epoch_geom[i].normals[:, 3], 0.0)  # limb cosine μ = max(nz,0); back-facing tessels clamp to 0
         xcosPA .= star_epoch_geom[i].normals[:, 1] .* cosPA
         ysinPA .= star_epoch_geom[i].normals[:, 2] .* sinPA
         v .= vsini .* (xcosPA .- ysinPA)
