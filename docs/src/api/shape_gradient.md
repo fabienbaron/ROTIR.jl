@@ -57,7 +57,16 @@ The gradient chain has three components:
 
 1. **Vertex positions**: `d(chi2)/d(theta) = sum_p sum_v (d(chi2)/d(proj_west) * d(proj_west)/d(theta) + ...)`
 2. **Flux normalization**: shoelace area derivatives for the flux correction term
-3. **Soft visibility**: `d(chi2)/d(theta) += d(chi2)/d(w) * d(sigmoid)/d(kappa*nz) * kappa * d(nz)/d(theta)`
+3. **Per-tessel weight** `w = sigmoid(kappa*nz) * ld(nz)`:
+   `d(chi2)/d(theta) += d(chi2)/d(w) * d(w)/d(nz) * d(nz)/d(theta)`, with
+   `d(w)/d(nz) = d(sigmoid)/d(kappa*nz) * kappa * ld + sigmoid * d(ld)/d(nz)`
+
+Limb darkening uses the `ldtype`, `ld1`, `ld2` of `star_params_base` and the same
+`mu = max(nz, 0)` convention as `create_star`/`compute_ldmap`, so the map step and the
+shape step of `joint_reconstruct_oi` optimize the same model. The LD coefficients
+themselves are held fixed — with a free per-tessel map they are largely degenerate with
+it; they *are* fitted in the [parametric model](parametric_gradient.md), where the map is
+pinned by von Zeipel.
 
 ### Shape parameter vector layout
 

@@ -1,0 +1,14 @@
+# Resolved environment: never committed for a package. Note it also hard-codes the
+# local dev path to OITOOLS.jl, which is machine-specific.
+Manifest.toml
+/demos/Manifest.toml
+/docs/Manifest.toml
+
+# Documenter output (regenerate with `julia --project=docs docs/make.jl`)
+/docs/build/
+
+# Julia coverage / profiling artifacts
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/deps/deps.jl

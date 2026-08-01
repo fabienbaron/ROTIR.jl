@@ -17,7 +17,7 @@ const FDM = central_fdm(5, 1)
 # instead of a spurious O(1) ratio of two numerical-noise vectors.
 relerr(a, b; scale = 0.0) = norm(a .- b) / max(norm(a), norm(b), scale, eps())
 status(r) = r < 1e-4 ? "✓" : (r < 1e-2 ? "~" : "✗")
-npass = Ref(0); nfail = Ref(0)
+npass = Ref(0); nfail = Ref(0); zygote_ran = Ref(false)
 function check(label, r; tol = 1e-4)
     ok = r < tol
     ok ? (npass[] += 1) : (nfail[] += 1)
@@ -95,6 +95,7 @@ try
     g_pl_fd = FiniteDifferences.grad(FDM, lp_pl, θ8)[1]
     check("planck full ∇ (8 params)", relerr(g_pl, g_pl_fd); tol = 1e-3)
     @printf("  planck ∇_tpole = %.4e (should be ≠ 0)\n", g_pl[8])
+    zygote_ran[] = true   # runtests.jl asserts this, so a skip can't masquerade as a pass
 catch e
     @warn "Zygote section skipped" exception = (e, catch_backtrace())
 end
