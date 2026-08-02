@@ -37,6 +37,7 @@ makedocs(;
             "Rasterization & NFFT"   => "api/rasterize_nfft.md",
             "Shape Gradients"        => "api/shape_gradient.md",
             "Parametric Model & AD"  => "api/parametric_gradient.md",
+            "Bootstrap Uncertainties" => "api/bootstrap.md",
             "Orbits"                 => "api/orbits.md",
             "Plotting"               => "api/plotting.md",
         ],

@@ -2,7 +2,10 @@ module ROTIR
 import OITOOLS: OIdata,
     readoifits, readoifits_multiepochs, readfits, writefits,
     set_data_filter, filter_data,
-    plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_residuals
+    plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_residuals,
+    DataBlocks, data_blocks, resample_blocks, block_counts, block_weights,
+    apply_block_counts, apply_block_weights, perturb_data,
+    BootstrapResult, bootstrap_driver
 using Statistics
 using LinearAlgebra
 using Printf
@@ -22,6 +25,7 @@ include("oichi2_binary.jl");
 include("fused_polyft.jl");
 include("shape_gradient.jl");
 include("parametric_gradient.jl");
+include("bootstrap.jl");
 include("rasterize.jl");
 include("polyft_nfft.jl");
 include("oiplot_spheroid.jl");
@@ -30,6 +34,9 @@ include("oiplot_spheroid.jl");
 export OIdata, readoifits, readoifits_multiepochs, readfits, writefits
 export set_data_filter, filter_data
 export plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_residuals
+export DataBlocks, data_blocks, resample_blocks, block_counts, block_weights
+export apply_block_counts, apply_block_weights, perturb_data
+export BootstrapResult, bootstrap_driver
 
 # Tessellation
 export tessellation
@@ -107,6 +114,11 @@ export intensity, planck_and_dT
 export vonzeipel_map, vonzeipel_map_and_derivs
 export ld_weight, ld_and_derivs, visibility_weight
 export project_geometry, interferometric_chi2, build_parametric_logπ
+
+# Bootstrap uncertainties for parametric fits (fit_parametric needs `using Zygote`)
+export epoch_blocks, resample_epochs, bootstrap_parametric, ParametricBootstrap
+export fit_parametric, default_parametric_bounds, parametric_param_names
+export parametric_free_indices
 
 # Plotting
 export plot2d, plot2d_wireframe, plot2d_allepochs

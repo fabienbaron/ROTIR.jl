@@ -40,6 +40,11 @@ end
         @test m.nfail[] == 0
     end
 
+    @testset "bootstrap" begin
+        m = run_script("test_bootstrap.jl")
+        @test m.zygote_ran[]     # the extension section must run, not silently skip
+    end
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions
