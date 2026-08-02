@@ -152,6 +152,7 @@ function bootstrap_parametric(data_epochs::AbstractVector, tessels, tepochs, bas
     maxiter         ::Int    = 200,
     gtol                     = (0.0, 1e-6),
     mem             ::Int    = 7,
+    refit_full      ::Bool   = true,
     verb            ::Bool   = true,
     kwargs...
 )
@@ -165,10 +166,15 @@ function bootstrap_parametric(data_epochs::AbstractVector, tessels, tepochs, bas
              gtol=gtol, mem=mem)
 
     # Full-data fit first: it seeds every replicate and warms up Zygote's pullback
-    # compilation on this thread, before any replicate task is spawned.
-    verb && println("Fitting the full dataset...")
-    θ̂, chi2r, info = fit_parametric(data_epochs, tessels, tepochs, base_params;
-                                    θ0=θ0, verb=verb, fitkw...)
+    # compilation on this thread, before any replicate task is spawned. Pass
+    # `refit_full=false` when θ0 is already the converged fit — otherwise vmlmb spends an
+    # iteration confirming it and logs a spurious "X test satisfied".
+    verb && refit_full && println("Fitting the full dataset...")
+    θ̂, chi2r, info = refit_full ?
+        fit_parametric(data_epochs, tessels, tepochs, base_params;
+                       θ0=θ0, verb=verb, fitkw...) :
+        (collect(float(eltype(tessels.unit_xyz)), θ0), NaN,
+         (evaluations=0, gratio=NaN, hit_maxiter=false))
     if verb
         @printf("Full-data fit: χ²ᵣ = %.4f  (%d evaluations, ‖g‖/‖g₀‖ = %.2e)\n",
                 chi2r, info.evaluations, info.gratio)

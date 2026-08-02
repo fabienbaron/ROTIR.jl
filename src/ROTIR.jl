@@ -26,6 +26,7 @@ include("fused_polyft.jl");
 include("shape_gradient.jl");
 include("parametric_gradient.jl");
 include("bootstrap.jl");
+include("ultranest.jl");
 include("rasterize.jl");
 include("polyft_nfft.jl");
 include("oiplot_spheroid.jl");
@@ -119,6 +120,7 @@ export project_geometry, interferometric_chi2, build_parametric_logπ
 export epoch_blocks, resample_epochs, bootstrap_parametric, ParametricBootstrap
 export fit_parametric, default_parametric_bounds, parametric_param_names
 export parametric_free_indices
+export fit_parametric_ultranest
 
 # Plotting
 export plot2d, plot2d_wireframe, plot2d_allepochs

@@ -1,74 +1,82 @@
 #!/usr/bin/env julia
-# Block-bootstrap uncertainties on a parametric fit of ρ Cas (CHARA).
+# Block-bootstrap uncertainties on the ρ Cas parametric fit.
 #
 #   julia --project=demos -t auto demos/rho_cas_bootstrap.jl
+#   NBOOT=500 julia --project=demos -t auto demos/rho_cas_bootstrap.jl
 #
-# Fits the angular size and limb darkening of a resolved single star, then resamples the
-# data in blocks of (MJD, telescope configuration) and refits, so the error bars do not
-# assume the quoted OIFITS errors are correct or uncorrelated.
+# On a fresh machine, add the registries first (OptimPackNextGen and friends are not in
+# General — see README.md):
+#   pkg"registry add General"
+#   pkg"registry add https://github.com/emmt/EmmtRegistry"
 #
-# Companion: demos/rapid_rotator_betCas_nuts.jl samples the posterior of the same model
-# with NUTS. The posterior trusts the error bars; the bootstrap does not. Run both.
+# Resamples the data in blocks of (MJD, telescope configuration) and refits, so the error
+# bars do not assume the quoted OIFITS errors are correct or uncorrelated. This is the one
+# method in demos/rho_cas_compare.jl that questions the error bars themselves; the three
+# samplers all take them at face value.
+#
+# It is also the one method that cannot leave the basin it starts in — every replicate is
+# warm-started at the full-data θ̂, deliberately, so the spread measures the data rather
+# than the optimiser. Run demos/rho_cas_basins.jl first to know which basin that is.
 
 using ROTIR, Zygote, Printf, Statistics
+include(joinpath(@__DIR__, "rho_cas_model.jl"))
+include(joinpath(@__DIR__, "posterior_utils.jl"))
 
-const NBOOT = 100          # ≥1000 for publication-grade percentiles; 100 runs in minutes
+const NBOOT = parse(Int, get(ENV, "NBOOT", "200"))
 
-# ── Data ────────────────────────────────────────────────────────────────────
-data    = readoifits_multiepochs(["./demos/data/rho_Cas_example.oifits"]; T = Float64)[1, :]
-tepochs = [0.0]            # single epoch: no rotational phase information
-tessels = tessellation_healpix(3, T = Float64)   # 768 tessels
-
-blocks = epoch_blocks(data)
-@printf("%d epoch(s), %d data points, %d :config blocks\n",
-        length(data), sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data), sum(length, blocks))
-
-# ── Model ───────────────────────────────────────────────────────────────────
-# Rapid-rotator surface with ω frozen at 0 is exactly a limb-darkened sphere: the radius
-# reduces to rpole everywhere, and with a uniform von Zeipel map the inclination, position
-# angle, β and tpole are inert. Fitting them would only add flat directions.
-base = (surface_type = 2, rpole = 1.25, tpole = 4000.0,
-        ldtype = 3, ld1 = 1.75, ld2 = 0.0,          # Hestroffer power law I ∝ μ^ld1
-        inclination = 0.0, position_angle = 0.0, rotation_period = 1e6,
-        beta = 0.08, frac_escapevel = 0.0, B_rot = 0.0)
-
-θ0   = [1.25, 0.0, 0.0, 0.0, 0.08, 1.75, 0.0]       # rpole ω inc PA β ld1 ld2
-free = ["rpole", "ld1"]
+describe_model()
+blocks = epoch_blocks(DATA)
+@printf("%d :config blocks over %d epoch(s)\n", sum(length, blocks), length(DATA))
 
 # ── Full-data fit ───────────────────────────────────────────────────────────
-# The χ² of a resolved star is multimodal in diameter (this one is resolved past its first
-# null: closure phases have an rms of 88°). Start close to the expected size — a far start
-# converges to a different basin entirely.
-θ̂, chi2r, info = fit_parametric(data, tessels, tepochs, base;
-                                θ0 = θ0, free = free, maxiter = 400)
-@printf("\nFull-data fit: diameter = %.4f mas   ld1 = %.4f   χ²ᵣ = %.3f  (%d evaluations)\n",
-        2θ̂[1], θ̂[6], chi2r, info.evaluations)
+(θ̂, chi2r, info), t_fit = timed(() ->
+    fit_parametric(DATA, TESSELS, TEPOCHS, BASE; θ0 = THETA0, free = FREE_NAMES,
+                   maxiter = 400))
+@printf("\nfull-data fit (%.1f s, %d evaluations): χ²ᵣ = %.4f\n", t_fit, info.evaluations, chi2r)
+for (j, l) in enumerate(LABELS)
+    @printf("  %-8s %.5f\n", l, θ̂[IFREE][j])
+end
 
 # ── Bootstrap ───────────────────────────────────────────────────────────────
-b = bootstrap_parametric(data, tessels, tepochs, base;
-                         θ0 = θ̂, free = free, nboot = NBOOT, seed = 42,
-                         sigma_clipping = 4.5, maxiter = 400, verb = true)
+# No σ-clipping by default. The percentile σ here is ~1e-3 mas, so a 4.5σ window is
+# ~0.003 mas wide and the three-pass clip throws away a third of the replicates — it is
+# rejecting the distribution's own tail, not outliers. Set SIGMA_CLIP to re-enable it.
+const SIGMA_CLIP = haskey(ENV, "SIGMA_CLIP") ? parse(Float64, ENV["SIGMA_CLIP"]) : nothing
 
-@printf("\n%d/%d replicates kept\n", count(b.mask), NBOOT)
-@printf("diameter = %.4f +%.4f -%.4f mas\n",
-        2b.median[1], 2b.sigma_plus[1], 2b.sigma_minus[1])
-@printf("ld1      = %.4f +%.4f -%.4f\n", b.median[2], b.sigma_plus[2], b.sigma_minus[2])
-@printf("correlation(diameter, ld1) = %+.3f\n", b.correlation[1, 2])
+b, wall = timed(() -> bootstrap_parametric(DATA, TESSELS, TEPOCHS, BASE;
+    θ0 = θ̂, free = FREE_NAMES, refit_full = false, nboot = NBOOT, seed = 42,
+    lb = [0.5, 0.0, 0.0, -180.0, 0.0, 0.0, -1.0], ub = [4.0, 0.99, 180.0, 180.0, 1.0, 2.0, 1.0],
+    sigma_clipping = SIGMA_CLIP, maxiter = 400, verb = true))
+
+@printf("\nwall time %.1f s   %d/%d replicates kept\n", wall, count(b.mask), NBOOT)
+let d = [abs(b.samples[i, 1] - b.median[1]) / max(b.sigma[1], eps()) for i in 1:NBOOT if b.mask[i]]
+    @printf("replicate spread: %d beyond 4.5σ, %d beyond 10σ (of %d) — heavy tails here are\n",
+            count(>(4.5), d), count(>(10), d), length(d))
+    println("the multimodality, so clipping them narrows the error bar by fiat.")
+end
+summarise(b.samples[b.mask, :], LABELS; title = "Block bootstrap:")
+@printf("correlation:\n%s\n", string(round.(b.correlation, digits = 3)))
+save_posterior("bootstrap", b.samples[b.mask, :], LABELS;
+               wall_seconds = wall, chi2r = chi2r, nboot = NBOOT,
+               nblocks = sum(length, blocks))
+corner_plot(b.samples[b.mask, :], LABELS, "bootstrap_corner.png";
+            truths = θ̂[IFREE], title = "ρ Cas — block bootstrap")
 
 # ── Is the data correlated? ─────────────────────────────────────────────────
 # An i.i.d. (:point) bootstrap ignores the correlation between the wavelength channels and
 # baselines of an exposure. If it returns visibly smaller uncertainties than the :config
 # block bootstrap, that gap *is* the correlated part of the error budget.
-bp = bootstrap_parametric(data, tessels, tepochs, base;
-                          θ0 = θ̂, free = free, nboot = NBOOT, seed = 42,
-                          granularity = :point, sigma_clipping = 4.5,
-                          maxiter = 400, verb = false)
-@printf("\nσ(diameter):  :config blocks %.5f mas   vs   :point %.5f mas   (ratio %.2f)\n",
-        2b.sigma[1], 2bp.sigma[1], b.sigma[1] / bp.sigma[1])
+println("\nSecond bootstrap (:point granularity, another $NBOOT fits) — this takes as long")
+println("as the first one:")
+bp, _ = timed(() -> bootstrap_parametric(DATA, TESSELS, TEPOCHS, BASE;
+    θ0 = θ̂, free = FREE_NAMES, refit_full = false, nboot = NBOOT, seed = 42,
+    granularity = :point, sigma_clipping = SIGMA_CLIP, maxiter = 400, verb = true))
+for (j, l) in enumerate(LABELS)
+    @printf("σ(%s):  :config blocks %.6g   :point %.6g   (ratio %.2f)\n",
+            l, b.sigma[j], bp.sigma[j], b.sigma[j] / bp.sigma[j])
+end
 
-# ── Caveat worth printing next to any number above ──────────────────────────
 if chi2r > 2
-    @printf("\nNOTE χ²ᵣ = %.2f: this model does not describe the star (ρ Cas has surface\n", chi2r)
-    println("structure a smooth limb-darkened disk cannot reproduce). The bootstrap gives")
+    @printf("\nNOTE χ²ᵣ = %.2f: this model does not describe the star. The bootstrap gives\n", chi2r)
     println("honest uncertainties *of this model's parameters*, not of the star's radius.")
 end
