@@ -17,67 +17,10 @@
 
 using ChainRulesCore
 
-# ===========================================================================
-# Intensity model (optional Planck)  ─ Step 1
-# ===========================================================================
-const _PLANCK_C2 = 1.438776877e-2   # hc/k  [m·K]
-
-# Non-dimensional band intensity. The global λ⁵ (and any constant) prefactor is
-# dropped because it cancels in the flux-normalized visibilities; only the SHAPE
-# of I(T) across the disk matters. dB/dT > 0 (the Wien curvature that breaks the
-# tpole degeneracy). λ (`band`) in metres, T in Kelvin.
-@inline function planck_and_dT(Tk::T, λ::T) where {T}
-    x   = T(_PLANCK_C2) / (λ * Tk)
-    em1 = expm1(x)                       # e^x − 1  (stable for small x)
-    ex  = em1 + one(T)                   # e^x
-    B     = one(T) / em1
-    dB_dT = ex * T(_PLANCK_C2) / (em1 * em1 * λ * Tk * Tk)
-    return B, dB_dT
-end
-
-"""
-    intensity(x, model, band) -> I
-
-Map the temperature map `x` (K) to a per-tessel intensity. `model = :linear`
-(default, `I = x`, the historical linear proxy) or `:planck` (`band` = wavelength
-in metres). Global scale is irrelevant (visibilities are normalized).
-"""
-function intensity(x::AbstractVector{T}, model::Symbol, band) where {T}
-    if model === :linear
-        return copy(x)
-    elseif model === :planck
-        λ = T(band)
-        I = similar(x)
-        @inbounds for i in eachindex(x)
-            I[i], _ = planck_and_dT(x[i], λ)
-        end
-        return I
-    else
-        error("intensity: unknown model $(model) (use :linear or :planck)")
-    end
-end
-
-function _intensity_dT(x::AbstractVector{T}, model::Symbol, band) where {T}
-    if model === :linear
-        return ones(T, length(x))
-    else
-        λ = T(band); dI = similar(x)
-        @inbounds for i in eachindex(x)
-            _, dI[i] = planck_and_dT(x[i], λ)
-        end
-        return dI
-    end
-end
-
-function ChainRulesCore.rrule(::typeof(intensity), x::AbstractVector, model::Symbol, band)
-    I = intensity(x, model, band)
-    dI = _intensity_dT(x, model, band)
-    function intensity_pullback(Ī)
-        x̄ = unthunk(Ī) .* dI
-        return (NoTangent(), x̄, NoTangent(), NoTangent())
-    end
-    return I, intensity_pullback
-end
+# The intensity model (`intensity`, `planck_and_dT`, and its rrule) lives in
+# src/intensity.jl — it is included earlier in ROTIR.jl so the χ² paths in
+# oichi2_spheroid.jl / oichi2_binary.jl can share it. Step 1 of the parametric
+# chain calls it unchanged.
 
 # ===========================================================================
 # von Zeipel temperature map + hand-coded parameter derivatives  ─ Step 3

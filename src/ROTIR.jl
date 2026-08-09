@@ -19,7 +19,10 @@ include("soft_visibility.jl");
 # Integer fields (surface_type, ldtype) pass through unchanged.
 convert_params(::Type{T}, p::NamedTuple) where T = NamedTuple{keys(p)}(map(v -> v isa AbstractFloat ? T(v) : v, values(p)))
 
+include("intensity.jl");     # before the chi2 paths: they all map T -> band intensity
 include("geometry.jl");
+include("binary_geometry.jl");
+include("reflection.jl");
 include("oichi2_spheroid.jl");
 include("oichi2_binary.jl");
 include("fused_polyft.jl");
@@ -30,6 +33,7 @@ include("ultranest.jl");
 include("rasterize.jl");
 include("polyft_nfft.jl");
 include("oiplot_spheroid.jl");
+include("animation.jl");
 
 # Re-export OITOOLS functions so users only need `using ROTIR`
 export OIdata, readoifits, readoifits_multiepochs, readfits, writefits
@@ -43,29 +47,42 @@ export BootstrapResult, bootstrap_driver
 export tessellation
 export tessellation_healpix, tessellation_latlong
 export nside2npix, npix2n
-export healpix_round_star, healpix_ellipsoid_star, tv_neighbors_healpix, tv_neighbors_healpix_visible
-export latlong_round_star, latlong_ellipsoid_star, tv_neighbors_longlat, latlong_rochelobe
+export tv_neighbors_healpix, tv_neighbors_healpix_visible, tv_neighbors_longlat
 export upsample_map_stars, downsample_map_stars
 
 # Stellar/binary parameters
 export starparameters, binaryparameters
 
 # Geometry: stars and binaries
+export stellar_geometry
 export create_star, create_star_multiepochs
 export compute_separation
 export oblate_const
 
+# Geometry: two stars in one frame (binary_geometry.jl)
+export binary_frame, sky_of_orbit
+export create_binary_star, create_binary_geometry, create_binary_geometry_multiepochs
+export projected_separation, check_binary_overlap
+export roche_omega_for_volume, roche_omega_table, roche_mesh_volume, tessel_solid_angles
+export finish_star
+
+# Mutual irradiation / reflection effect (reflection.jl)
+export tessel_centroids_areas, ld_bol_D0, ld_bol, crossbody_kernels
+export reflection_kernels, solve_radiosity, handle_reflection
+
+# Temperature -> band intensity (intensity.jl)
+export intensity, planck_and_dT, band_of
+
 # Geometry: Roche lobe
-export update_roche_radii, get_surface_potential, update_roche_geom
+export update_roche_radii, get_surface_potential
 export compute_potential_primary, compute_potential_secondary, solve_radius
 export solve_R_L1, solve_R_L2, solve_R_L3, solve_lagrange_points
-export newton_raphson, brent_root
+export brent_root, roche_polar_radius
 export radius_eggleton, radius_leahy, rpole_to_fillout
 export roche_volume, roche_area, roche_equivalent_radius, romberg_integrate
 
 # Geometry: rapid rotators
-export temperature_map_vonZeipel_rapid_rotator, calc_grelmap_vZ
-export compute_teff_vonzeipel
+export temperature_map_vonZeipel_rapid_rotator
 export calc_rotspin, calc_omega
 
 # Geometry: temperature maps
@@ -111,7 +128,6 @@ export projected_vertices_and_derivs, shape_chi2_fg!, joint_reconstruct_oi
 
 # Parametric gradient (Zygote-composable primitives + ChainRules rrules)
 export limb_mu, mu_and_dmu
-export intensity, planck_and_dT
 export vonzeipel_map, vonzeipel_map_and_derivs
 export ld_weight, ld_and_derivs, visibility_weight
 export project_geometry, interferometric_chi2, build_parametric_logπ
@@ -127,7 +143,10 @@ export plot2d, plot2d_wireframe, plot2d_allepochs
 export plot3d
 export plot_mollweide
 export draw_compass, draw_rotation_axis, draw_rotation_arrow, draw_graticules
-export plot_rv, plot2d_binary
+export plot_rv, plot2d_binary, add_tessel_collection!
+
+# Animation
+export binary_movie, binary_frame_maps, frames_to_movie
 export sometimes_visible, never_visible, invisible_neighbors, with_invisible_neighbors, without_invisible_neighbors
 
 # Utilities

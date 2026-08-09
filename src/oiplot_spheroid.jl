@@ -312,6 +312,39 @@ function set_tick_spacing(ax, axis_max)
   ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
 end
 
+"""
+    add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
+                           offset_west=0.0, offset_north=0.0)
+
+Draw a star's visible tessels as a single `matplotlib.collections.PolyCollection`.
+
+One collection instead of one `add_patch` per tessel: at 3072 tessels that is the
+difference between a plot that takes seconds and one that takes milliseconds, which is
+what makes the per-frame rendering in `animation.jl` practical.
+
+`colours` must be indexed by *position within* `star.index_quads_visible` (i.e. the same
+ordering as `tmap[star.index_quads_visible]`).
+"""
+function add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
+                                offset_west=0.0, offset_north=0.0)
+  collections = pyimport("matplotlib.collections")
+  vis = star.index_quads_visible
+  verts = Vector{Matrix{Float64}}(undef, length(vis))
+  @inbounds for (i, idx) in enumerate(vis)
+    # plot coords: x = East = -West
+    verts[i] = hcat(-(Float64.(star.proj_west[idx, :]) .+ offset_west),
+                     Float64.(star.proj_north[idx, :]) .+ offset_north)
+  end
+  # Non-mesh mode strokes each polygon in its own face colour (as the old per-patch loop
+  # did): a zero-width edge leaves antialiasing seams that read as a spurious grid.
+  pc = collections.PolyCollection(verts, facecolors=colours,
+                                  edgecolors = plotmesh ? "lightgrey" : colours,
+                                  linewidths = plotmesh ? 0.2 : 0.35,
+                                  rasterized=false, zorder=zorder)
+  ax.add_collection(pc)
+  return pc
+end
+
 function plot2Dquad(star,i) # plots the ith quad projected onto the imaging plane
   proj_west = star.proj_west;
   proj_north = star.proj_north;
@@ -350,16 +383,34 @@ function plot3d(star_temperature_map,star) # this plots the temperature map
 end
 
 
+"""
+    plot2d(tmap, star; intensity=false, intensity_model=:linear, band=nothing,
+           vmin=nothing, vmax=nothing, kwargs...) -> (fig, ax)
+
+Plot a temperature map on the projected sky plane (East left, North up).
+
+`intensity = false` colours by temperature. `intensity = true` colours by apparent
+surface brightness, i.e. `I(T) × ldmap`, where `I` is selected by `intensity_model`:
+`:linear` (`I = T`, the Rayleigh–Jeans proxy) or `:planck` at wavelength `band` (metres).
+Note the two keywords are different things — `intensity` decides *whether* limb darkening
+and the brightness conversion are applied at all, `intensity_model` decides *which*
+conversion.
+
+`vmin` / `vmax` pin the colour scale. Leave them `nothing` for the usual per-call
+autoscale; set them when rendering a sequence of frames, or a change of scale between
+frames will masquerade as a change in the star.
+"""
 function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5,
     colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="white", flipx=false,
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false,
     contours=Float64[], contour_color="gray", contour_labels=true, contour_fontsize=10,
     inclination=NaN, position_angle=NaN, star_params=nothing,
+    intensity_model::Symbol = :linear, band = nothing,
+    vmin=nothing, vmax=nothing,
     graticule_kwargs=(;))
   # Plot temperature map onto the projected 2D image plane (= observer view)
   # Convention: East left, North up (astronomical standard)
   set_oiplot_defaults()
-  patches = pyimport("matplotlib.patches")
   axdiv= pyimport("mpl_toolkits.axes_grid1.axes_divider")
   facecolor="White"
   if background=="black"
@@ -378,12 +429,15 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
     ax.set_xlim([-axis_max,axis_max]);
   end
   ax.set_ylim([-axis_max,axis_max]);
-  projmap = tmap[star.index_quads_visible];
   if intensity == true
-    projmap .*=star.ldmap[star.index_quads_visible]
+    Imap = intensity_model === :linear ? tmap : ROTIR.intensity(tmap, intensity_model, band)
+    projmap = Imap[star.index_quads_visible] .* star.ldmap[star.index_quads_visible]
+  else
+    projmap = tmap[star.index_quads_visible];
   end
   # Normalize with padded floor so minimum maps to cfloor (~dark red, not black)
-  pmin = minimum(projmap); pmax = maximum(projmap)
+  pmin = vmin === nothing ? minimum(projmap) : vmin
+  pmax = vmax === nothing ? maximum(projmap) : vmax
   prange = pmax - pmin
   if prange < 1.0; prange = max(abs(pmax) * 0.01, 1.0); end
   cfloor = 0.08
@@ -391,12 +445,8 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   norm_plot = matplotlib.colors.Normalize(vmin=vmin_padded, vmax=pmax)
   colours = get_cmap(colormap).(norm_plot.(projmap))
 
+  add_tessel_collection!(ax, star, colours; plotmesh=plotmesh, zorder=2)
   visible = star.index_quads_visible
-  for i=1:star.nquads_visible
-  idx = visible[i]
-  p = patches.Polygon(hcat(-star.proj_west[idx,:],star.proj_north[idx,:]),closed=true,edgecolor= (plotmesh == true) ? "lightgrey" : colours[i],facecolor=colours[i],fill=true,rasterized=false, zorder=2)
-  ax.add_patch(p);
-  end
   xlabel(L"x $\leftarrow$ E (mas)", fontsize=20)
   ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
   # Contours from triangulated visible polygon centers
@@ -422,27 +472,43 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   end
 
 """
-    plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch; ...)
+    plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
+                  intensity=false, intensity_model=:linear, band=nothing,
+                  vmin=nothing, vmax=nothing, ax=nothing, colorbar_on=true, ...) -> (fig, ax)
 
-Plot a binary system on the 2D sky plane with correct occlusion and orbital offset.
-`tepoch` is the observation time in JD; the secondary's offset relative to the primary
-is computed from the orbital elements in `bparams`.
-The farther star (larger z = receding) is drawn behind the nearer one.
+Plot a binary system on the 2D sky plane with correct occlusion ordering and orbital
+offset. `tepoch` is the observation time in JD; the secondary's offset relative to the
+primary comes from the orbital elements in `bparams`. The farther star (larger z =
+receding) is drawn behind the nearer one.
+
+`intensity`, `intensity_model` and `band` work exactly as in [`plot2d`](@ref). The
+intensity model matters more here than for a single star: it sets the *relative*
+brightness of two components at different temperatures, and the linear proxy misstates
+that ratio by ~4 % in H and ~13 % in V.
+
+`vmin` / `vmax` pin the shared colour scale across both components — essential when
+rendering a frame sequence. Pass an existing `ax` (and `colorbar_on=false`) to draw into
+a multi-panel figure instead of creating a new one.
 """
 function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
     intensity=false, plotmesh=false, colormap="gist_heat", pad=1.0, background="white",
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false, figtitle="",
     inclination1=NaN, position_angle1=NaN, inclination2=NaN, position_angle2=NaN,
     star_params1=nothing, star_params2=nothing,
+    intensity_model::Symbol = :linear, band = nothing,
+    vmin=nothing, vmax=nothing, ax=nothing, colorbar_on=true, axis_max=nothing,
     graticule_kwargs=(;))
   set_oiplot_defaults()
-  patches = pyimport("matplotlib.patches")
   axdiv = pyimport("mpl_toolkits.axes_grid1.axes_divider")
   facecolor = background == "black" ? "Black" : "White"
-  fig = figure("Binary epoch", figsize=(10,10), facecolor="White")
-  clf()
-  ax = gca()
-  title(figtitle)
+  if ax === nothing
+    fig = figure("Binary epoch", figsize=(10,10), facecolor="White")
+    clf()
+    ax = gca()
+  else
+    fig = ax.get_figure()
+  end
+  ax.set_title(figtitle)
   ax.set_facecolor(facecolor)
   ax.set_aspect("equal", adjustable="box")
   # Compute orbital offset of secondary relative to primary (West, North) in mas
@@ -454,21 +520,26 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   r2 = maximum(sqrt.(star2.vertices_xyz[:,:,1].^2 .+ star2.vertices_xyz[:,:,2].^2))
   east_offset  = -offset_west  # East = -West
   north_offset = offset_north
-  axis_max = max(r1, r2 + abs(east_offset), r2 + abs(north_offset),
-                 abs(east_offset) + r2, abs(north_offset) + r2) + pad
+  if axis_max === nothing
+    axis_max = max(r1, r2 + abs(east_offset), r2 + abs(north_offset),
+                   abs(east_offset) + r2, abs(north_offset) + r2) + pad
+  end
   ax.set_xlim([axis_max, -axis_max])
   ax.set_ylim([-axis_max, axis_max])
   # Shared color normalization across both stars
   # Pad the bottom of the range so the coolest temperature maps to ~0.15
   # instead of 0.0 (pure black in gist_heat), ensuring both stars are visible.
-  projmap1 = tmap1[star1.index_quads_visible]
-  projmap2 = tmap2[star2.index_quads_visible]
   if intensity
-    projmap1 = projmap1 .* star1.ldmap[star1.index_quads_visible]
-    projmap2 = projmap2 .* star2.ldmap[star2.index_quads_visible]
+    I1 = intensity_model === :linear ? tmap1 : ROTIR.intensity(tmap1, intensity_model, band)
+    I2 = intensity_model === :linear ? tmap2 : ROTIR.intensity(tmap2, intensity_model, band)
+    projmap1 = I1[star1.index_quads_visible] .* star1.ldmap[star1.index_quads_visible]
+    projmap2 = I2[star2.index_quads_visible] .* star2.ldmap[star2.index_quads_visible]
+  else
+    projmap1 = tmap1[star1.index_quads_visible]
+    projmap2 = tmap2[star2.index_quads_visible]
   end
-  tmin = min(minimum(projmap1), minimum(projmap2))
-  tmax = max(maximum(projmap1), maximum(projmap2))
+  tmin = vmin === nothing ? min(minimum(projmap1), minimum(projmap2)) : vmin
+  tmax = vmax === nothing ? max(maximum(projmap1), maximum(projmap2)) : vmax
   trange = tmax - tmin
   if trange < 1.0; trange = max(tmax * 0.01, 1.0); end
   cfloor = 0.15  # minimum colormap fraction (avoids black pixels on dark background)
@@ -480,26 +551,12 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   _, _, z1, _, _, z2 = binary_orbit_abs(bparams, tepoch)
   zord1 = z1 > z2 ? 2 : 3
   zord2 = z1 > z2 ? 3 : 2
-  # Star 1 at origin
-  vis1 = star1.index_quads_visible
-  for i=1:star1.nquads_visible
-    idx = vis1[i]
-    ec = plotmesh ? "lightgrey" : colours1[i]
-    p = patches.Polygon(hcat(-star1.proj_west[idx,:], star1.proj_north[idx,:]),
-      closed=true, edgecolor=ec, facecolor=colours1[i], fill=true, rasterized=false, zorder=zord1)
-    ax.add_patch(p)
-  end
-  # Star 2 shifted by orbital offset
-  vis2 = star2.index_quads_visible
-  for i=1:star2.nquads_visible
-    idx = vis2[i]
-    ec = plotmesh ? "lightgrey" : colours2[i]
-    p = patches.Polygon(hcat(-(star2.proj_west[idx,:] .+ offset_west), star2.proj_north[idx,:] .+ offset_north),
-      closed=true, edgecolor=ec, facecolor=colours2[i], fill=true, rasterized=false, zorder=zord2)
-    ax.add_patch(p)
-  end
-  xlabel(L"x $\leftarrow$ E (mas)", fontsize=20)
-  ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
+  # Star 1 at origin; star 2 shifted by the orbital offset
+  add_tessel_collection!(ax, star1, colours1; plotmesh=plotmesh, zorder=zord1)
+  add_tessel_collection!(ax, star2, colours2; plotmesh=plotmesh, zorder=zord2,
+                         offset_west=offset_west, offset_north=offset_north)
+  ax.set_xlabel(L"x $\leftarrow$ E (mas)", fontsize=20)
+  ax.set_ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
   # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
   if graticules
     draw_graticules(ax, star1; inclination=inclination1, position_angle=position_angle1, star_params=star_params1, graticule_kwargs...)
@@ -518,11 +575,13 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   end
   if compass; draw_compass(ax, axis_max); end
   # Colorbar — use the padded norm so colors match the patches
-  cmap = ColorMap(colormap)
-  divider = axdiv.make_axes_locatable(ax)
-  cax = divider.append_axes("right", size="5%", pad=0.07)
-  cb = colorbar(matplotlib.cm.ScalarMappable(norm=norm_plot, cmap=cmap), cax=cax)
-  if tmin < tmax; cb.ax.set_ylim(tmin, tmax); end  # clip colorbar ticks to actual temperature range
+  if colorbar_on
+    cmap = ColorMap(colormap)
+    divider = axdiv.make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.07)
+    cb = colorbar(matplotlib.cm.ScalarMappable(norm=norm_plot, cmap=cmap), cax=cax)
+    if tmin < tmax; cb.ax.set_ylim(tmin, tmax); end  # clip colorbar ticks to actual temperature range
+  end
   return fig, ax
 end
 

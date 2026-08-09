@@ -166,3 +166,30 @@ v2, t3amp, t3phi = binary_observables(tmap1, star1, tmap2, star2, data, phase)
 # Chi-squared
 chi2 = binary_chi2_f(tmap1, star1, tmap2, star2, data, phase)
 ```
+
+## Two stars in one frame
+
+The snippet above places the secondary with a Fourier phase shift, which is all the
+*visibility* model needs. It says nothing about how each component is oriented in 3-D, so
+it is not enough once the surfaces are tidally distorted or once the components illuminate
+each other: a Roche lobe's tidal bulge has to point at the companion, and mutual
+irradiation needs the companion's direction relative to every surface element.
+
+[`create_binary_geometry`](../api/binary_geometry.md) builds both components in a single
+frame derived from the orbit itself:
+
+```julia
+star1, star2 = create_binary_geometry(tes1, params1, tes2, params2, bparams, tepoch_jd;
+                                      volume_conserving=true)
+tmap1 = parametric_temperature_map(params1, star1)
+tmap2 = parametric_temperature_map(params2, star2; secondary=true)
+heated1, heated2 = handle_reflection(star1, tmap1, star2, tmap2; albedo1=0.6, albedo2=0.6)
+```
+
+Use this instead of calling `create_star` twice with a dummy `t`. `create_star` takes its
+`t` for *both* the Roche shape (through `D(t)`) and the spin phase, with nothing tying the
+bulge to the line of centres — so passing real epoch times rotates the star without
+rotating the bulge with it, and passing `t = 0` freezes both.
+
+See also [`check_binary_overlap`](../api/binary_geometry.md): `binary_cvis` sums the two
+components with no mutual occultation, which is wrong once their disks overlap on the sky.

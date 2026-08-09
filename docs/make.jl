@@ -33,6 +33,8 @@ makedocs(;
             "Tessellation"           => "api/tessellation.md",
             "Geometry & Surfaces"    => "api/geometry.md",
             "Chi-squared & Imaging"  => "api/chi2.md",
+            "Binary Geometry"        => "api/binary_geometry.md",
+            "Mutual Irradiation"     => "api/reflection.md",
             "Fused Polygon Fourier Transform" => "api/fused_polyft.md",
             "Rasterization & NFFT"   => "api/rasterize_nfft.md",
             "Shape Gradients"        => "api/shape_gradient.md",

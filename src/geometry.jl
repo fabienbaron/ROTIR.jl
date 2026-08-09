@@ -154,7 +154,20 @@ function rot_vertex(angle_r1, angle_r2, angle_r3)
 end
   
 
-function compute_radii(tessels::tessellation, star_params, t; secondary=false, T=Float32)
+"""
+    compute_radii(tessels, star_params, t; secondary=false, T=Float32, D=nothing, omega=nothing)
+
+Vertex radii and Cartesian positions in the star's *body* frame.
+
+For a Roche surface (`surface_type == 3`) the shape depends on the instantaneous
+separation, normally `D = compute_separation(star_params, t)` in units of the semi-major
+axis. Pass `D` explicitly to override that — `create_binary_star` does, because in a binary
+the separation comes from the shared orbit rather than from this component's own `t`.
+Pass `omega` to fix the surface equipotential directly instead of deriving it from `rpole`
+(used by the volume-conserving path, see `roche_omega_for_volume`).
+"""
+function compute_radii(tessels::tessellation, star_params, t; secondary=false, T=Float32,
+                       D=nothing, omega=nothing)
   p = convert_params(T, star_params)
   npix = tessels.npix
   xyz = [];
@@ -172,9 +185,10 @@ function compute_radii(tessels::tessellation, star_params, t; secondary=false, T
     xyz = r.*tessels.unit_xyz;
   elseif p.surface_type == 3
     # Star params are actually binary parameters
-    D = T(compute_separation(p, t))
+    Duse = D === nothing ? T(compute_separation(p, t)) : T(D)
     ff = secondary ? p.fillout_factor_secondary : p.fillout_factor_primary
-    r = update_roche_radii(tessels, p, D, use_fillout_factor = ff>-1, secondary=secondary)
+    r = update_roche_radii(tessels, p, Duse, use_fillout_factor = ff>-1, secondary=secondary,
+                           omega=omega, T=T)
     xyz = r.*tessels.unit_xyz;
   end
   return r, xyz
@@ -215,12 +229,29 @@ end
 
 # Generate geometry and ld map from tesselation and stellar parameters
 @views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float32, κ=T(50))
-  npix = tessels.npix;
   # Compute radii
   r, xyz = compute_radii(tessels, star_params, t; secondary=secondary);
 
   # Compute rotation
   xyz = rotate_star(xyz, star_params, t);
+
+  return finish_star(xyz, r, tessels, star_params, t; T=T, κ=κ)
+end
+
+"""
+    finish_star(xyz, r, tessels, star_params, t; T=Float32, κ=T(50)) -> stellar_geometry
+
+Common tail of the geometry pipeline: everything that follows the choice of vertex
+positions. Given already-deformed, already-rotated sky-frame vertices `xyz` (npix,5,3)
+and their radii `r` (npix,5), compute face normals, soft visibility, the orthographic
+projection and the limb-darkening map, and package them into a `stellar_geometry`.
+
+Split out of [`create_star`](@ref) so that alternative orientations — notably
+`create_binary_star`, which rotates into the *orbital* frame instead of spinning about
+a fixed spin axis — reuse this verbatim rather than duplicating it.
+"""
+@views function finish_star(xyz, r, tessels::tessellation, star_params, t; T=Float32, κ=T(50))
+  npix = tessels.npix;
 
   # Determine normals via cross product of quad diagonals
   vecAC = xyz[:, 3, :]-xyz[:, 1, :];

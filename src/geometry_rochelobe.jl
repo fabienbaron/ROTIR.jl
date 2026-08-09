@@ -3,7 +3,7 @@ import Base: Math as math
 
 # The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
 #
-function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float32)
+function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float32, omega = nothing)
     # if wanting to call this for secondary=true, invert roche_parameters.q;
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     secondary == false ? fillout_factor = roche_parameters.fillout_factor_primary : fillout_factor = roche_parameters.fillout_factor_secondary;
@@ -11,8 +11,15 @@ function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fill
     a = roche_parameters.a;
     q = roche_parameters.q;
     rpole = roche_parameters.rpole
-    # Compute surface potentials and good init
-    pot_surface, r_init = get_surface_potential(rpole/a, D, q, async_ratio, fillout_factor, use_fillout_factor = use_fillout_factor, secondary=secondary);
+    # Compute surface potentials and good init.
+    # `omega` (if given) pins the equipotential directly — the volume-conserving path
+    # (roche_omega_for_volume) uses it so the star's volume, not its polar radius, is the
+    # invariant as D(t) changes around an eccentric orbit.
+    if omega === nothing
+        pot_surface, r_init = get_surface_potential(rpole/a, D, q, async_ratio, fillout_factor, use_fillout_factor = use_fillout_factor, secondary=secondary);
+    else
+        pot_surface, r_init = omega, rpole/a
+    end
     # Update the radii r(θ,ϕ) to match the surface potential
     npix = tessels.npix
     r = zeros(T, npix, 5);
@@ -118,35 +125,82 @@ end
 # λ = sin(θ)cos(φ) = direction cosine toward companion.
 # async_ratio = ω_rot/ω_orb (1 = synchronous).
 #
-# Reference: Aufdenberg et al. 2021, ApJ 920 130
-# Potential verified against Leahy 2014 (ROCHE.F90) — see comments below.
+# Reference: Aufdenberg et al. 2015 (papers/spica_the_paper_2015.pdf), appendix A;
+# cross-checked against /home/baron/SOFTWARE/roche/RocheLobe.f90 (`potential`) and
+# PHOEBE 2 (`phoebe/lib/gen_roche.h`).
 #
-# The secondary potential uses the same q = M2/M1 convention but with the
-# potential centered on the secondary. When calling update_roche_radii with
-# secondary=true, the caller must pass q = M1/M2 (inverted).
-# The D² constant terms in Ω2 are required for correct absolute potential
-# values (fillout factor computation); they cancel in root-finding for r(θ,φ).
+# ---------------------------------------------------------------------------
+# The tidal (free-fall) term −q·r·λ/D² — where it comes from
+# ---------------------------------------------------------------------------
+# The frame is centred on the star itself, NOT on the centre of mass. That origin is in
+# free fall, accelerating toward the companion at G·M₂/D². Working in that non-inertial
+# frame adds a uniform pseudo-force, whose potential is −G·M₂·x/D² — in units of G·M₁/a,
+#
+#     −q·x/D²  =  −q·r·λ/D²                                     (the linear term below)
+#
+# This is a purely translational, tidal term: it involves no assumption whatsoever about
+# how fast the frame rotates. The rotational term is then separately the centrifugal
+# potential about the star's OWN spin axis, ½F²(1+q)r²(1−ν²) with F = ω_rot/ω_orb
+# referenced to the MEAN orbital rate — hence carrying no D dependence.
+#
+# Getting this framing right matters, because the tempting alternative derivation — put
+# the origin at the centre of mass and write the linear term as ω²·x_cm·x with
+# x_cm = D·q/(1+q) — is NOT self-consistent with the code. It would force the rotational
+# coefficient to be ω² = (1+q)/D³ as well, i.e. D-dependent, which is not what is
+# implemented and not what any reference code does. (And (1+q)/D³ is in any case the
+# *circular* rate at separation D, not the instantaneous orbital rate, which is larger by
+# a factor 1 + e·cos ν.)  Reference: Sepinsky, Willems & Kalogera 2007, ApJ 660, 1624,
+# who derive exactly this frame for nonsynchronous eccentric binaries.
+#
+# Three independent modern implementations agree on both terms:
+#   PHOEBE 2  `phoebe/lib/gen_roche.h`:  q[(δ²+ρ²−2ρλδ)^(−1/2) − ρλ/δ²] + ½F²(1+q)ρ²(1−ν²)
+#   ELISa     `elisa/binary_system/model.py`, pre_calculate_for_potential_value_primary:
+#             b = d²;  d_coef = q·cs/b = q·λ/D²;  e = ½F²(1+q)sin²θ
+#             Psi1 = 1/r + q/√(b+r²−c·r) − d_coef·r + e·r²
+#   Wilson 1979 (the canonical source both descend from)
+#
+# This term was previously written −q·r·λ·D, matching Aufdenberg et al. 2015 eqs.
+# A18/A27/A30 (which are internally self-consistent with his A1, but wrong by D³ relative
+# to the above). That form overwhelms the tidal attraction past a q- and radius-dependent
+# threshold and points the tidal bulge AWAY from the companion: for Spica
+# (q = 0.619, rpole/a = 0.290) the threshold is D/a = 1.031, and every modern eccentricity
+# determination (0.065–0.123) puts apastron beyond it, so the bulge was inverted for
+# roughly half of every orbit.
+#
+# RocheLobe.f90 does not settle the question directly: it works in units of the
+# instantaneous separation, so D ≡ 1 and the symbol never appears. But rescaling it to
+# units of the semi-major axis (r = D·s) reproduces the /D² form exactly, to machine
+# precision — an independent confirmation. Note that in D-scaled lengths the rotational
+# coefficient picks up δ³ (PHOEBE writes `b = F*F*delta^3*(1+q)`), so a future switch to
+# that convention must carry F² → F²δ³.
+#
+# The secondary potential is centred on the secondary and normalised by G·M1 (as in
+# Aufdenberg A16/A19), so the companion term has coefficient 1 and the self term
+# coefficient q. The D² constant in Ω2 is required for correct absolute potential values
+# (fillout factor); it cancels in root-finding for r(θ,φ).
 # =====================================================================
 
 function compute_potential_primary(r, D, θ, ϕ, q, async_ratio) # r and D are dimensionless (were divided by a)
-    # Note: async_ratio = ω1rot/ωorb
+    # Note: async_ratio = ω1rot/ωorb, referenced to the MEAN orbital rate
     λ = sin(θ)*cos(ϕ);
     ν = cos(θ)
-    Ω1 = 1/r + q/sqrt( D^2 + r^2 - 2*r*λ*D) - q*r*λ*D + async_ratio^2*(1+q)*r^2*(1-ν^2)/2
-    dΩ1 = -1/r^2 - q*(r-λ*D)/sqrt(( D^2 + r^2 - 2*r*λ*D)^3) - q*λ*D + async_ratio^2*(1+q)*r*(1-ν^2)
+    invD2 = 1/D^2                      # instantaneous-rate centre-of-mass term (see above)
+    Ω1 = 1/r + q/sqrt( D^2 + r^2 - 2*r*λ*D) - q*r*λ*invD2 + async_ratio^2*(1+q)*r^2*(1-ν^2)/2
+    dΩ1 = -1/r^2 - q*(r-λ*D)/sqrt(( D^2 + r^2 - 2*r*λ*D)^3) - q*λ*invD2 + async_ratio^2*(1+q)*r*(1-ν^2)
     ddΩ1 =  2/r^3  + 3*(D*λ - r)^2*q/sqrt((D^2 + r^2 - 2*r*λ*D)^5) - q/sqrt((D^2 + r^2 - 2*r*λ*D)^3) + async_ratio^2*(q + 1)*(1 - ν^2)
     return Ω1, dΩ1, ddΩ1
 end
 
 function compute_potential_secondary(r, D, θ, ϕ, q, async_ratio)
-    # Note: async_ratio = ω2rot/ωorb
-    # Centered on secondary; companion (primary) is at distance D along +x (θ=π/2, φ=0).
-    # For asynchronous rotation, the centrifugal term splits into orbital (D-dependent)
-    # and spin (async²) contributions. At async=1 they combine to the standard synchronous form.
+    # Note: async_ratio = ω2rot/ωorb, referenced to the MEAN orbital rate.
+    # Centred on the secondary; the companion (primary) lies at distance D along −x,
+    # hence the +2rλD in the companion term (and L1 sits at λ = −1, see solve_R_L1).
     λ = cos(ϕ)*sin(θ)
     ν = cos(θ)
-    Ω2 = 1/sqrt(D^2+r^2+2*r*λ*D) + q/r + (1+q)/2*(D^2+2*D*r*λ) - q*(D^2+r*λ*D) + async_ratio^2*(1+q)*r^2*(1-ν^2)/2
-    dΩ2 = - (D*λ + r)/sqrt((D^2+r^2+2*r*λ*D)^3) - q/r^2 + λ*D + async_ratio^2*(1+q)*r*(1-ν^2)
+    invD2 = 1/D^2
+    const_D = (1-q)*D^2/2              # = (1+q)D²/2 − qD²; a pure constant at fixed D
+    Ω2 = 1/sqrt(D^2+r^2+2*r*λ*D) + q/r + r*λ*invD2 + const_D + async_ratio^2*(1+q)*r^2*(1-ν^2)/2
+    dΩ2 = - (D*λ + r)/sqrt((D^2+r^2+2*r*λ*D)^3) - q/r^2 + λ*invD2 + async_ratio^2*(1+q)*r*(1-ν^2)
     ddΩ2 =  2*q/r^3 + 3*(D*λ + r)^2/sqrt((2*D*r*λ + D^2 + r^2)^5) - 1/sqrt((2*D*r*λ + D^2 + r^2)^3) + async_ratio^2*(1+q)*(1-ν^2)
     return Ω2, dΩ2, ddΩ2
 end
@@ -335,8 +389,13 @@ end
 # Gravity Functions (for von Zeipel temperature maps)
 # =====================================================================
 
+# |∇Ω| at each surface point. These MUST be the exact gradient of the potentials above —
+# in particular the constant in gx is the derivative of the centre-of-mass term, so it
+# carries the same 1/D² (not ·D) as the potential. `invr3`/`invr3c` are named explicitly
+# rather than reusing `μ`, which is already the y direction cosine.
+
 function compute_gravity_primary(r,θ,ϕ,D,q,async_ratio)
-    # r = dimensionless radius
+    # r = dimensionless radius; body-centred Cartesian, companion at +D x̂
     λ = cos.(ϕ).*sin.(θ)
     μ = sin.(ϕ).*sin.(θ)
     ν = cos.(θ)
@@ -344,28 +403,28 @@ function compute_gravity_primary(r,θ,ϕ,D,q,async_ratio)
     y = r.*μ
     z = r.*ν
     # This means r^2 = x^2 + y^2 + z^2
-    ρ = sqrt.(((D.-x).^2+y.^2+z.^2).^(-3)) # faster than .^(-1.5)
-    μ = r.^(-3)
-    gx = -x.*μ + q*(D.-x).*ρ + async_ratio^2*(1+q)*x.-q*D
-    gy = -y.*μ - q*y.*ρ +async_ratio^2*(1+q)*y
-    gz = -z.*μ - q*z.*ρ
+    invr3c = sqrt.(((D.-x).^2+y.^2+z.^2).^(-3)) # 1/r_companion^3; faster than .^(-1.5)
+    invr3  = r.^(-3)
+    gx = -x.*invr3 + q*(D.-x).*invr3c + async_ratio^2*(1+q)*x .- q/D^2
+    gy = -y.*invr3 - q*y.*invr3c + async_ratio^2*(1+q)*y
+    gz = -z.*invr3 - q*z.*invr3c
     return sqrt.(gx.*gx + gy.*gy + gz.*gz);
 end
 
 function compute_gravity_secondary(r,θ,ϕ,D,q,async_ratio)
-    # r = dimensionless radius
+    # r = dimensionless radius; secondary-centred Cartesian (xs,y,z), companion at −D x̂.
     λ = cos.(ϕ).*sin.(θ)
     μ = sin.(ϕ).*sin.(θ)
     ν = cos.(θ)
-    x = D .+ r.*λ
-    y = r.*μ
-    z = r.*ν
-    # This means r^2 = (D-x)^2 + y^2 + z^2
-    ρ = sqrt.((x.^2+y.^2+z.^2).^(-3))
-    μ = r.^(-3)
-    gx = -x.*ρ + q*(D.-x).*μ + (1-async_ratio^2)*(1+q)*(D.-x)+ x*(1+q).-q*D
-    gy = -y.*ρ - q*y.*μ + async_ratio^2*(1+q)*y
-    gz = -z.*ρ - q*z.*μ
+    xs = r.*λ                 # measured from the SECONDARY's centre
+    y  = r.*μ
+    z  = r.*ν
+    xc = xs .+ D              # measured from the companion (primary) at −D
+    invr3c = sqrt.((xc.^2+y.^2+z.^2).^(-3))   # 1/r_companion^3
+    invr3  = r.^(-3)
+    gx = -xc.*invr3c - q*xs.*invr3 + async_ratio^2*(1+q)*xs .+ 1/D^2
+    gy = -y.*invr3c  - q*y.*invr3  + async_ratio^2*(1+q)*y
+    gz = -z.*invr3c  - q*z.*invr3
     return sqrt.(gx.*gx + gy.*gy + gz.*gz);
 end
 
@@ -495,73 +554,128 @@ function romberg_integrate(f, a, b; N=7)
 end
 
 """
-    roche_volume(q, async_ratio, D; fillout=1.0, secondary=false) -> Float64
+    roche_polar_radius(OmegaF, D, q, async_ratio, potential_function) -> r_pole
 
-Compute the dimensionless Roche lobe volume (in units of a³).
-Uses double Romberg integration over (cos θ, φ), following Leahy (2014).
+Radius of the `Ω = OmegaF` equipotential along the rotation axis (θ = 0), found by
+bracketing outward from the centre and then Brent.
+
+This is the *minimum* radius on the equipotential, which makes it the only universally
+safe starting point for the Halley solve in other directions: starting from anything
+larger (in particular from the L1 radius, which lies outside the star for an under-filled
+lobe) lets Halley step over the saddle and converge to a spurious root beyond L1 —
+silently returning a radius roughly twice too large near the companion.
 """
-function roche_volume(q, async_ratio, D; fillout=1.0, secondary=false)
-    potential_function = secondary ? compute_potential_secondary : compute_potential_primary
-    secondary ? rtry = radius_point_Pathania(1/q) : rtry = radius_point_Pathania(q)
-    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary=secondary)
-    sg = Int(-2*(secondary)+1)
-    pot_L1, _ = potential_function(R_L1, D, sg*pi/2, 0.0, q, async_ratio)
-    OmegaF = (pot_L1 + q^2 / (2*(1+q))) / fillout - q^2 / (2*(1+q))
-    r_init = rtry
-
-    function vol_phi(θ, φ)
-        r = solve_radius(r_init, OmegaF, D, θ, φ, q, async_ratio, potential_function,
-                         verbose=false, fillout=fillout, R_L1=R_L1, secondary=secondary)
-        return (2.0/3.0) * r^3
+function roche_polar_radius(OmegaF, D, q, async_ratio, potential_function)
+    f(r) = potential_function(r, D, 0.0, 0.0, q, async_ratio)[1] - OmegaF
+    # Ω → +∞ like 1/r as r → 0 and decreases outward along the pole, so start where the
+    # 1/r term dominates OmegaF by a factor 1e6 and march out. The starting radius must
+    # scale with 1/Ω, NOT with D: for a widely separated pair (D ≫ 1) a D-scaled guess
+    # lands far outside the star and the bracket fails.
+    rlo = 1e-6 / max(abs(OmegaF), 1e-12)
+    if !(f(rlo) > 0)
+        @warn "roche_polar_radius: Ω = $OmegaF unreachable (D=$D, q=$q)"
+        return rlo
     end
-
-    function vol_mu(mu)
-        θ = acos(mu)
-        # Integrate over φ ∈ [0, π], multiply by 2 for φ-symmetry
-        return 2.0 * romberg_integrate(φ -> vol_phi(θ, φ), 0.0, pi)
+    rhi = rlo
+    for _ in 1:400
+        rhi *= 1.3
+        f(rhi) < 0 && return brent_root(f, rlo, rhi; tol=1e-14 * rhi)
+        rlo = rhi
     end
-
-    # Integrate over μ = cos(θ) ∈ [0, 1], multiply by 2 for hemisphere symmetry
-    return 2.0 * romberg_integrate(vol_mu, 0.0, 1.0)
+    @warn "roche_polar_radius: no bracket found for Ω = $OmegaF (D=$D, q=$q)"
+    return rlo
 end
 
 """
-    roche_area(q, async_ratio, D; fillout=1.0, secondary=false) -> Float64
+    roche_volume(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing) -> Float64
 
-Compute the dimensionless Roche lobe surface area (in units of a²).
-Uses double Romberg integration over (cos θ, φ), following Leahy (2014).
+Dimensionless Roche lobe volume (units of a³), by double Romberg quadrature over
+(cos θ, φ) following Leahy (2014).
+
+By default the surface equipotential comes from `fillout` (relative to L1); pass `omega`
+to give it directly.
+
+Two corrections relative to the original implementation, both verified against a direct
+HEALPix mesh sum `(4π/3npix)·Σrᵢ³`:
+
+* the quadrature carried an extra factor of 2 (the μ- and φ-symmetry factors were applied
+  on top of an integrand that already included them), so every volume came out exactly 2×
+  too large — and hence `R_vol` 2^(1/3) ≈ 1.26× too large;
+* the Halley solve was seeded with the L1 radius; see [`roche_polar_radius`](@ref).
 """
-function roche_area(q, async_ratio, D; fillout=1.0, secondary=false)
+function roche_volume(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
     potential_function = secondary ? compute_potential_secondary : compute_potential_primary
     secondary ? rtry = radius_point_Pathania(1/q) : rtry = radius_point_Pathania(q)
-    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary=secondary)
-    sg = Int(-2*(secondary)+1)
-    pot_L1, _ = potential_function(R_L1, D, sg*pi/2, 0.0, q, async_ratio)
-    OmegaF = (pot_L1 + q^2 / (2*(1+q))) / fillout - q^2 / (2*(1+q))
-    r_init = rtry
+    if omega === nothing
+        R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary=secondary)
+        sg = Int(-2*(secondary)+1)
+        pot_L1, _ = potential_function(R_L1, D, sg*pi/2, 0.0, q, async_ratio)
+        OmegaF = (pot_L1 + q^2 / (2*(1+q))) / fillout - q^2 / (2*(1+q))
+    else
+        OmegaF = omega
+    end
+    r_init = roche_polar_radius(OmegaF, D, q, async_ratio, potential_function)
 
+    # V = ∫∫∫ r² dr dΩ = (1/3) ∮ r³ dΩ, and with both symmetries
+    #   = (1/3)·2∫₀¹dμ·2∫₀^π dφ  r³  = (4/3) ∫₀¹∫₀^π r³
+    function vol_phi(θ, φ)
+        # `solve_radius` ignores fillout/R_L1 (accepted only for call compatibility),
+        # and R_L1 is not even computed on the `omega` path — so do not pass them.
+        r = solve_radius(r_init, OmegaF, D, θ, φ, q, async_ratio, potential_function,
+                         verbose=false, secondary=secondary)
+        return r^3
+    end
+    vol_mu(mu) = romberg_integrate(φ -> vol_phi(acos(mu), φ), 0.0, pi)
+    return (4.0/3.0) * romberg_integrate(vol_mu, 0.0, 1.0)
+end
+
+"""
+    roche_area(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing) -> Float64
+
+Dimensionless Roche lobe surface area (units of a²), by double Romberg quadrature.
+
+Carries the same two fixes as [`roche_volume`](@ref) (spurious factor of 2; L1-seeded
+root solve) and additionally the projection factor that the original omitted: for a
+star-shaped surface `dA = r²/cos γ dΩ`, where γ is the angle between `r̂` and the surface
+normal, so `cos γ = |∂Ω/∂r| / |∇Ω|`. Dropping it underestimates the area of a distorted
+lobe.
+"""
+function roche_area(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
+    potential_function = secondary ? compute_potential_secondary : compute_potential_primary
+    compute_gravity = secondary ? compute_gravity_secondary : compute_gravity_primary
+    secondary ? rtry = radius_point_Pathania(1/q) : rtry = radius_point_Pathania(q)
+    if omega === nothing
+        R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary=secondary)
+        sg = Int(-2*(secondary)+1)
+        pot_L1, _ = potential_function(R_L1, D, sg*pi/2, 0.0, q, async_ratio)
+        OmegaF = (pot_L1 + q^2 / (2*(1+q))) / fillout - q^2 / (2*(1+q))
+    else
+        OmegaF = omega
+    end
+    r_init = roche_polar_radius(OmegaF, D, q, async_ratio, potential_function)
+
+    # A = ∮ r²/cos γ dΩ = 2∫₀¹dμ · 2∫₀^π dφ  r²/cos γ
     function area_phi(θ, φ)
         r = solve_radius(r_init, OmegaF, D, θ, φ, q, async_ratio, potential_function,
-                         verbose=false, fillout=fillout, R_L1=R_L1, secondary=secondary)
-        return 2.0 * r^2
+                         verbose=false, secondary=secondary)
+        dΩdr = potential_function(r, D, θ, φ, q, async_ratio)[2]
+        g = compute_gravity(r, θ, φ, D, q, async_ratio)
+        cosγ = g > 0 ? min(abs(dΩdr) / g, 1.0) : 1.0
+        return r^2 / max(cosγ, 1e-3)
     end
-
-    function area_mu(mu)
-        θ = acos(mu)
-        return 2.0 * romberg_integrate(φ -> area_phi(θ, φ), 0.0, pi)
-    end
-
-    return 2.0 * romberg_integrate(area_mu, 0.0, 1.0)
+    area_mu(mu) = romberg_integrate(φ -> area_phi(acos(mu), φ), 0.0, pi)
+    return 4.0 * romberg_integrate(area_mu, 0.0, 1.0)
 end
 
 """
-    roche_equivalent_radius(q, async_ratio, D; fillout=1.0, secondary=false) -> (R_vol, R_area)
+    roche_equivalent_radius(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
+        -> (R_vol, R_area)
 
-Compute volume-equivalent and area-equivalent radii (dimensionless, in units of a).
+Volume-equivalent and area-equivalent radii (dimensionless, in units of a).
 """
-function roche_equivalent_radius(q, async_ratio, D; fillout=1.0, secondary=false)
-    vol = roche_volume(q, async_ratio, D; fillout=fillout, secondary=secondary)
-    area = roche_area(q, async_ratio, D; fillout=fillout, secondary=secondary)
+function roche_equivalent_radius(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
+    vol = roche_volume(q, async_ratio, D; fillout=fillout, secondary=secondary, omega=omega)
+    area = roche_area(q, async_ratio, D; fillout=fillout, secondary=secondary, omega=omega)
     R_vol = (3*vol / (4*pi))^(1/3)
     R_area = (area / (4*pi))^(1/2)
     return R_vol, R_area

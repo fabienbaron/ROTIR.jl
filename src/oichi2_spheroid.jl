@@ -5,46 +5,83 @@ function poly_to_cvis(x, polyflux, polyft)
   cvis_model = polyft * x / flux;
 end
 
-function poly_to_cvis(x, star)
+"""
+    poly_to_cvis(x, star; intensity_model=:linear, band=nothing)
+
+Normalized complex visibilities of a single component.
+
+`x` is the per-tessel map. With `intensity_model = :linear` (the historical default) it is
+used directly as surface brightness — the Rayleigh–Jeans proxy, adequate in H and K.
+With `:planck` it is treated as a *temperature* map and converted to band intensity by
+[`intensity`](@ref); `band` is the wavelength in metres (see [`band_of`](@ref)). Use the
+Planck form for R/V-band data, where the proxy misstates flux ratios by >10 %.
+"""
+function poly_to_cvis(x, star; intensity_model::Symbol = :linear, band = nothing)
    indx = star.index_quads_visible
-   xw = x[indx] .* star.vis_weights[indx] .* star.ldmap[indx]  # fold in limb darkening
+   I = intensity_model === :linear ? x : intensity(x, intensity_model, band)
+   xw = I[indx] .* star.vis_weights[indx] .* star.ldmap[indx]  # fold in limb darkening
    flux = dot(star.polyflux, xw); # get the total flux
    return star.polyft * xw / flux;
 end
 
-function poly_to_flux(x, star)
+"""
+    poly_to_flux(x, star; intensity_model=:linear, band=nothing)
+
+Total (un-normalized) flux of a single component; see [`poly_to_cvis`](@ref) for the
+intensity-model keywords.
+"""
+function poly_to_flux(x, star; intensity_model::Symbol = :linear, band = nothing)
    indx = star.index_quads_visible
-   xw = x[indx] .* star.vis_weights[indx] .* star.ldmap[indx]  # fold in limb darkening
+   I = intensity_model === :linear ? x : intensity(x, intensity_model, band)
+   xw = I[indx] .* star.vis_weights[indx] .* star.ldmap[indx]  # fold in limb darkening
    flux = dot(star.polyflux, xw); # get the total flux
    return flux;
 end
 
-@views function setup_oi!(data, stars)
+# One epoch's flux/FT operators. Deliberately a separate function rather than the body of
+# the threaded loop below: if `stars` is not concretely typed (e.g. a Vector{Any}), the
+# loop body's locals become type-unstable, Julia boxes them into the closure, and the box
+# is then SHARED by every thread — so one thread's `indx` can be read by another between
+# the proj_west and proj_north lookups, producing a DimensionMismatch. A function call
+# gives each invocation its own frame and cannot be boxed that way.
+@views function _setup_oi_epoch!(star, dat, ::Type{T}; alt::Bool=false) where {T}
+  indx = star.index_quads_visible
+  pjx = star.proj_west[indx, :]
+  pjy = star.proj_north[indx, :]
+  star.polyflux = setup_polyflux_single(pjx, pjy)
+  star.polyft = alt ? setup_polyft_single_alt(dat.uv, pjx, pjy; T=T) :
+                      setup_polyft_single(dat.uv, pjx, pjy; T=T)
+  return nothing
+end
+
+function setup_oi!(data, stars)
   nepochs = size(data,1);
   T = eltype(stars[1].vertices_xyz);
   if nepochs>1
-  Threads.@threads for i=1:nepochs
-       indx = stars[i].index_quads_visible
-       stars[i].polyflux = setup_polyflux_single(stars[i].proj_west[indx,:], stars[i].proj_north[indx,:])
-       stars[i].polyft = setup_polyft_single(data[i].uv, stars[i].proj_west[indx,:], stars[i].proj_north[indx,:]; T=T);
-     end
+    Threads.@threads for i=1:nepochs
+      _setup_oi_epoch!(stars[i], data[i], T)
+    end
   else # single epoch, thread over calculation
-    indx = stars[1].index_quads_visible
-    stars[1].polyflux = setup_polyflux_single(stars[1].proj_west[indx,:], stars[1].proj_north[indx,:])
-    stars[1].polyft = setup_polyft_single_alt(data[1].uv, stars[1].proj_west[indx,:], stars[1].proj_north[indx,:]; T=T);
+    _setup_oi_epoch!(stars[1], data[1], T; alt=true)
   end
 end
 
-@views function setup_polygon_ft(data, star_epoch_geom)
+# Same boxing hazard as _setup_oi_epoch! — keep the per-epoch work in its own function.
+@views function _polygon_ft_epoch(star, dat, ::Type{T}) where {T}
+  indx = star.index_quads_visible
+  pjx = star.proj_west[indx, :]
+  pjy = star.proj_north[indx, :]
+  return setup_polyflux_single(pjx, pjy), setup_polyft_single(dat.uv, pjx, pjy; T=T)
+end
+
+function setup_polygon_ft(data, star_epoch_geom)
   nepochs = size(data,1);
   T = eltype(star_epoch_geom[1].vertices_xyz);
   polyflux = Array{Array{T,1}}(undef,nepochs);
   polyft = Array{Array{Complex{T},2}}(undef,nepochs);
   Threads.@threads for i=1:nepochs
-       indx = star_epoch_geom[i].index_quads_visible
-       polyflux[i] = setup_polyflux_single(star_epoch_geom[i].proj_west[indx,:], star_epoch_geom[i].proj_north[indx,:])
-       polyft[i] = setup_polyft_single(data[i].uv, star_epoch_geom[i].proj_west[indx,:], star_epoch_geom[i].proj_north[indx,:]; T=T);
-     end
+    polyflux[i], polyft[i] = _polygon_ft_epoch(star_epoch_geom[i], data[i], T)
+  end
   return polyflux, polyft
 end
 
@@ -144,13 +181,21 @@ function cvis_to_obs(cvis, data)
   return v2_model, t3amp_model, t3phi_model
 end
 
-function observables(x, star, data)
-  cvis_model = poly_to_cvis(x, star);
+"""
+    observables(x, star, data; intensity_model=:linear, band=nothing) -> (v2, t3amp, t3phi)
+
+Model observables for a single component. See [`poly_to_cvis`](@ref) for the
+intensity-model keywords.
+"""
+function observables(x, star, data; intensity_model::Symbol = :linear, band = nothing)
+  cvis_model = poly_to_cvis(x, star; intensity_model=intensity_model, band=band);
   return cvis_to_obs(cvis_model, data)
 end
 
-function chi2s(x, star, data; verbose::Bool = true)
-  v2_model, t3amp_model, t3phi_model = observables(x, star, data);
+function chi2s(x, star, data; verbose::Bool = true,
+               intensity_model::Symbol = :linear, band = nothing)
+  v2_model, t3amp_model, t3phi_model = observables(x, star, data;
+                                                   intensity_model=intensity_model, band=band);
   chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
   chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
   chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);
@@ -175,8 +220,10 @@ function chi2s2(x, star, data; verbose::Bool = true)
   return chi2_v2, chi2_t3amp, chi2_t3phi
 end
 
-function spheroid_chi2_f(x, star, data; verbose::Bool = false) 
-  v2_model, t3amp_model, t3phi_model = observables(x, star, data);
+function spheroid_chi2_f(x, star, data; verbose::Bool = false,
+                         intensity_model::Symbol = :linear, band = nothing)
+  v2_model, t3amp_model, t3phi_model = observables(x, star, data;
+                                                   intensity_model=intensity_model, band=band);
   chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
   chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp)./data.t3amp_err);
   chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi)./data.t3phi_err);

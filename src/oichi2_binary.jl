@@ -36,22 +36,40 @@ function binary_phase_shift(uv, offset_x, offset_y; T=Float32)
 end
 
 """
-    binary_cvis(x1, star1, x2, star2, phase_shift) -> Vector{Complex}
+    binary_cvis(x1, star1, x2, star2, phase_shift; intensity_model=:linear, band=nothing)
+        -> Vector{Complex}
 
 Compute combined complex visibilities for a binary system.
 Star 1 is at the origin; star 2's visibilities are multiplied by `phase_shift`.
 Each map is weighted by its own soft visibility × limb-darkening map (`ldmap`, built by
 `create_star`), so the two components' fluxes — and hence their flux ratio in the joint
 normalization — are limb-darkened consistently with the single-star path.
+
+`intensity_model = :linear` (default) uses the maps directly as surface brightness, the
+Rayleigh–Jeans proxy. `:planck` treats them as *temperature* maps and converts them with
+[`intensity`](@ref) at wavelength `band` (metres).
+
+The flux ratio is where this matters most: for a 25300 K / 20585 K pair the linear proxy
+misstates it by −4.1 % in H and −13.1 % in V. The non-dimensional Planck form
+(λ⁵ and all constants dropped) stays exact here because both components are evaluated at
+the same `band`, so the discarded prefactor cancels from the ratio as well as from the
+flux normalization.
+
+No mutual occultation is applied: the two components are summed unconditionally. See
+`check_binary_overlap` for the epochs where that assumption breaks.
 """
-function binary_cvis(x1, star1, x2, star2, phase_shift)
+function binary_cvis(x1, star1, x2, star2, phase_shift;
+                     intensity_model::Symbol = :linear, band = nothing)
+    I1 = intensity_model === :linear ? x1 : intensity(x1, intensity_model, band)
+    I2 = intensity_model === :linear ? x2 : intensity(x2, intensity_model, band)
+
     indx1 = star1.index_quads_visible
-    xw1 = x1[indx1] .* star1.vis_weights[indx1] .* star1.ldmap[indx1]  # soft visibility × limb darkening
+    xw1 = I1[indx1] .* star1.vis_weights[indx1] .* star1.ldmap[indx1]  # soft visibility × limb darkening
     flux1 = dot(star1.polyflux, xw1)
     F1 = star1.polyft * xw1
 
     indx2 = star2.index_quads_visible
-    xw2 = x2[indx2] .* star2.vis_weights[indx2] .* star2.ldmap[indx2]  # soft visibility × limb darkening
+    xw2 = I2[indx2] .* star2.vis_weights[indx2] .* star2.ldmap[indx2]  # soft visibility × limb darkening
     flux2 = dot(star2.polyflux, xw2)
     F2 = star2.polyft * xw2
 
@@ -59,23 +77,31 @@ function binary_cvis(x1, star1, x2, star2, phase_shift)
 end
 
 """
-    binary_observables(x1, star1, x2, star2, data, phase_shift) -> (v2, t3amp, t3phi)
+    binary_observables(x1, star1, x2, star2, data, phase_shift;
+                       intensity_model=:linear, band=nothing) -> (v2, t3amp, t3phi)
 
 Compute model observables (V2, T3amp, T3phi) for a binary system.
 Uses `cvis_to_obs` (shared with single-star path) for the cvis→observables step.
+See [`binary_cvis`](@ref) for the intensity-model keywords.
 """
-function binary_observables(x1, star1, x2, star2, data, phase_shift)
-    cvis = binary_cvis(x1, star1, x2, star2, phase_shift)
+function binary_observables(x1, star1, x2, star2, data, phase_shift;
+                            intensity_model::Symbol = :linear, band = nothing)
+    cvis = binary_cvis(x1, star1, x2, star2, phase_shift;
+                       intensity_model=intensity_model, band=band)
     return cvis_to_obs(cvis, data)
 end
 
 """
-    binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose=false) -> Float
+    binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose=false,
+                  intensity_model=:linear, band=nothing) -> Float
 
 Compute chi-squared for a binary model against interferometric data.
+See [`binary_cvis`](@ref) for the intensity-model keywords.
 """
-function binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose::Bool=false)
-    v2_model, t3amp_model, t3phi_model = binary_observables(x1, star1, x2, star2, data, phase_shift)
+function binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose::Bool=false,
+                       intensity_model::Symbol = :linear, band = nothing)
+    v2_model, t3amp_model, t3phi_model = binary_observables(x1, star1, x2, star2, data, phase_shift;
+                                                            intensity_model=intensity_model, band=band)
     chi2_v2 = sum(abs2, (v2_model .- data.v2) ./ data.v2_err)
     chi2_t3amp = sum(abs2, (t3amp_model .- data.t3amp) ./ data.t3amp_err)
     chi2_t3phi = sum(abs2, mod360(t3phi_model .- data.t3phi) ./ data.t3phi_err)
