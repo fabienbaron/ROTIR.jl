@@ -6,7 +6,9 @@
 # the posterior is the same one.
 #
 # Environment knobs (all optional):
-#   FREE=rpole,ld1     which parameters to sample (default), or FREE=all7
+#   FREE=...           which parameters to sample. Default is the six identifiable ones,
+#                      rpole,omega,inc,PA,beta,ld1. FREE=rpole,ld1 gives the sphere + LD
+#                      model (ω frozen at 0). Avoid ld2: ldtype=3 ignores it entirely.
 #   NSIDE=3            healpix resolution exponent (3 → 768 tessels)
 #   DATAFILE=...       OIFITS path
 
@@ -19,25 +21,35 @@ const DATA    = readoifits_multiepochs([DATAFILE]; T = Float64)[1, :]
 const TEPOCHS = [0.0]
 const TESSELS = tessellation_healpix(NSIDE, T = Float64)
 
-# ω is a free parameter only in the all-7 case; frozen at 0 the rapid-rotator surface is
-# exactly a limb-darkened sphere.
+# Values here are only used for parameters that are NOT free (see FREE below). With the
+# default six free, only tpole, ld2, rotation_period and B_rot come from this.
+# Note: with ω frozen at 0 instead, the rapid-rotator surface is exactly a limb-darkened
+# sphere and inc/PA/beta become unobservable — check_identifiability() warns about that.
 const BASE = (surface_type = 2, rpole = 1.1, tpole = 4000.0,
               ldtype = 3, ld1 = 0.75, ld2 = 0.0,
-              inclination = 0.0, position_angle = 0.0, rotation_period = 1e6,
+              inclination = 25.4, position_angle = 94.6, rotation_period = 1e6,
               beta = 0.08, frac_escapevel = 0.0, B_rot = 0.0)
 
-# Starting point: the better of the basins found by demos/rho_cas_basins.jl
-const THETA0 = [1.105, 0.0, 0.0, 0.0, 0.08, 0.745, 0.0]
+# Starting point: the oblate + gravity-darkened optimum (χ²ᵣ = 2.82), which is also a
+# valid interior start for the sphere case. Every free parameter must start strictly
+# inside the box below — the logit transform sends a value sitting on a bound to ±Inf.
+const THETA0 = [0.877, 0.940, 25.4, 94.6, 0.086, 0.696, 0.0]
 
-const FREE_NAMES = let s = get(ENV, "FREE", "rpole,ld1")
+const FREE_NAMES = let s = get(ENV, "FREE", "rpole,omega,inc,PA,beta,ld1")
     s == "all7" ? parametric_param_names() : String.(split(s, ","))
 end
 const IFREE  = parametric_free_indices(FREE_NAMES)
 const LABELS = parametric_param_names()[IFREE]
 
 # ── Prior box (finite: nested sampling needs it, and it keeps every method identical) ──
-const BOX_LO = [0.5, 0.0,   0.0, -180.0, 0.0, 0.0, -1.0][IFREE]
-const BOX_HI = [4.0, 0.99, 180.0, 180.0, 1.0, 2.0,  1.0][IFREE]
+# inc is capped at 90° and PA at 180° deliberately. An oblate star with a symmetric von
+# Zeipel map looks identical under inc → 180−inc and under PA → PA+180, so the full ranges
+# would contain four exact copies of every mode. Sampling them costs effort and makes the
+# posterior look multimodal for a reason that is pure labelling.
+const BOX_LO_FULL = [0.5, 0.0,  0.0,   0.0, 0.0, 0.0, -1.0]
+const BOX_HI_FULL = [4.0, 0.99, 90.0, 180.0, 1.0, 2.0,  1.0]
+const BOX_LO = BOX_LO_FULL[IFREE]
+const BOX_HI = BOX_HI_FULL[IFREE]
 
 const LOGPI = build_parametric_logπ(DATA, TESSELS, TEPOCHS, BASE)
 
@@ -83,10 +95,40 @@ function dispersed_starts(n; rng)
      for _ in 1:n]
 end
 
+"""
+Warn about free parameters the likelihood cannot see. A flat direction is not merely
+wasteful: it returns its prior as if it were a measurement, and for nested sampling it
+costs a whole dimension.
+"""
+function check_identifiability()
+    inert = String[]
+    # ldtype 3 (Hestroffer, I ∝ μ^ld1) ignores ld2 entirely — see compute_ldmap.
+    BASE.ldtype == 3 && "ld2" in LABELS && push!(inert, "ld2 (unused by ldtype=3)")
+    BASE.ldtype == 1 && "ld2" in LABELS && push!(inert, "ld2 (unused by ldtype=1)")
+    # With ω frozen at 0 the surface is a sphere with a rotationally symmetric intensity
+    # map, so orientation is unobservable.
+    if !("omega" in LABELS) && THETA0[2] == 0
+        for p in ("inc", "PA")
+            p in LABELS && push!(inert, "$p (sphere: ω frozen at 0)")
+        end
+        "beta" in LABELS && push!(inert, "beta (sphere: uniform von Zeipel map)")
+    end
+    # tpole cancels in the flux normalisation under the linear intensity proxy.
+    "tpole" in LABELS && push!(inert, "tpole (degenerate unless intensity_model=:planck)")
+
+    isempty(inert) && return nothing
+    @warn """Free parameters the likelihood cannot constrain: $(join(inert, ", ")).
+             Their marginals will reproduce the prior, and every extra dimension costs
+             sampling effort — nested sampling most of all. Consider
+             FREE=rpole,omega,inc,PA,beta,ld1"""
+    return nothing
+end
+
 function describe_model()
     @printf("ρ Cas: %d points, %d tessels, sampling %d parameter(s): %s\n",
             sum(d -> d.nv2 + d.nt3amp + d.nt3phi, DATA), TESSELS.npix, NDIM,
             join(LABELS, ", "))
     @printf("  box prior: %s\n", join([@sprintf("%s ∈ [%.3g, %.3g]", LABELS[j], BOX_LO[j],
                                                 BOX_HI[j]) for j in 1:NDIM], "  "))
+    check_identifiability()
 end

@@ -45,8 +45,8 @@ const SIGMA_CLIP = haskey(ENV, "SIGMA_CLIP") ? parse(Float64, ENV["SIGMA_CLIP"])
 
 b, wall = timed(() -> bootstrap_parametric(DATA, TESSELS, TEPOCHS, BASE;
     θ0 = θ̂, free = FREE_NAMES, refit_full = false, nboot = NBOOT, seed = 42,
-    lb = [0.5, 0.0, 0.0, -180.0, 0.0, 0.0, -1.0], ub = [4.0, 0.99, 180.0, 180.0, 1.0, 2.0, 1.0],
-    sigma_clipping = SIGMA_CLIP, maxiter = 400, verb = true))
+    lb = BOX_LO_FULL, ub = BOX_HI_FULL,      # same box the samplers use
+    sigma_clipping = SIGMA_CLIP, maxiter = 400, verb = true); label = "bootstrap")
 
 @printf("\nwall time %.1f s   %d/%d replicates kept\n", wall, count(b.mask), NBOOT)
 let d = [abs(b.samples[i, 1] - b.median[1]) / max(b.sigma[1], eps()) for i in 1:NBOOT if b.mask[i]]

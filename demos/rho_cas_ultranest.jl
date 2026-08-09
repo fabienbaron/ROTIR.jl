@@ -2,7 +2,7 @@
 # ρ Cas posterior by nested sampling (UltraNest, via PyCall).
 #
 #   julia --project=demos -t auto demos/rho_cas_ultranest.jl
-#   FREE=all7 STEPSAMPLER=1 NLIVE=400 julia --project=demos -t auto demos/rho_cas_ultranest.jl
+#   FREE=rpole,omega,inc,PA,beta,ld1 STEPSAMPLER=1 NLIVE=400 julia --project=demos -t auto demos/rho_cas_ultranest.jl
 #
 # Needs the Python package:  ~/.julia/conda/3/x86_64/bin/pip install ultranest
 #
@@ -33,15 +33,12 @@ describe_model()
 # fit_parametric_ultranest lives in ROTIR core — nested sampling needs no AD backend, and
 # PyCall is already a ROTIR dependency. The box below is the same uniform prior the
 # gradient-based samplers get through their logit transform, so the posteriors match.
-lb_full = copy(THETA0); ub_full = copy(THETA0)
-lb_full[IFREE] .= BOX_LO
-ub_full[IFREE] .= BOX_HI
-
 res, wall = timed(() -> fit_parametric_ultranest(DATA, TESSELS, TEPOCHS, BASE;
-    θ0 = THETA0, free = FREE_NAMES, lb = lb_full, ub = ub_full,
+    θ0 = THETA0, free = FREE_NAMES, lb = BOX_LO_FULL, ub = BOX_HI_FULL,
     min_num_live_points = NLIVE, frac_remain = FRAC_REMAIN,
     use_stepsampler = STEPSAMPLER, nsteps = NSTEPS,
-    log_dir = joinpath(RESULTS_DIR, "ultranest_logs"), resume = "overwrite"))
+    log_dir = joinpath(RESULTS_DIR, "ultranest_logs"), resume = "overwrite");
+    label = "ultranest")
 
 S = res.samples
 @printf("\nwall time %.1f s   log(Z) = %.3f ± %.3f   %d samples\n",

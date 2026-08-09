@@ -2,7 +2,7 @@
 # ρ Cas posterior approximation by multi-path Pathfinder.
 #
 #   julia --project=demos -t auto demos/rho_cas_pathfinder.jl
-#   NRUNS=32 NDRAWS=4000 FREE=all7 julia --project=demos -t auto demos/rho_cas_pathfinder.jl
+#   NRUNS=32 NDRAWS=4000 FREE=rpole,omega,inc,PA,beta,ld1 julia --project=demos -t auto demos/rho_cas_pathfinder.jl
 #
 # Pathfinder runs quasi-Newton optimisation from dispersed starting points, builds a
 # normal approximation along each path, and importance-resamples the mixture. It is the
@@ -39,7 +39,7 @@ result, wall = timed(() -> multipathfinder(logpost_z, NDRAWS;
                                            adtype = ADTypes.AutoZygote(),
                                            executor = PARALLEL_PATHS ? Transducers.ThreadedEx() :
                                                                        Transducers.SequentialEx(),
-                                           rng = rng))
+                                           rng = rng); label = "pathfinder")
 
 # draws are D × ndraws in the unconstrained space
 Zdraws = Array(result.draws)

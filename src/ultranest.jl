@@ -93,6 +93,21 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     end
 
     ultranest = pyimport("ultranest")
+
+    # `log_dir` makes UltraNest store points in HDF5, which needs h5py. Rather than dying
+    # after the setup work — and, for a resumed run, after hours of sampling — fall back to
+    # running without a log directory and say what was lost.
+    if log_dir !== nothing
+        try
+            pyimport("h5py")
+        catch
+            @warn "log_dir requires the Python h5py package; continuing without it " *
+                  "(no resume, no on-disk monitoring). Install with: " *
+                  "`$(PyCall.python) -m pip install h5py`"
+            log_dir = nothing
+        end
+    end
+
     sampler = ultranest.ReactiveNestedSampler(names, loglike, transform;
                                               log_dir=log_dir, resume=resume)
     if use_stepsampler

@@ -140,9 +140,37 @@ function corner_plot(samples::AbstractMatrix, labels::AbstractVector,
     end
 end
 
-"Run `f`, returning `(result, wall_seconds)`."
-function timed(f)
+"""
+    heartbeat(label; every=120) -> stop
+
+Print `label — alive, N min elapsed` every `every` seconds until the returned closure is
+called. Library-agnostic and pipe-proof: the samplers here have their own reporting at
+their own granularity (Pigeons one row per round, UltraNest its status display), but a
+round or a phase can run for many minutes, and this is the only thing that distinguishes
+"working" from "hung" without trusting any of them.
+"""
+function heartbeat(label::AbstractString; every::Real = 120)
+    running = Threads.Atomic{Bool}(true)
     t0 = time()
-    r = f()
-    return r, time() - t0
+    Threads.@spawn begin
+        while running[]
+            sleep(every)
+            running[] || break
+            @printf("[%s] alive, %.1f min elapsed\n", label, (time() - t0) / 60)
+            flush(stdout)
+        end
+    end
+    return () -> (running[] = false)
+end
+
+"Run `f`, returning `(result, wall_seconds)`. With `label`, prints a heartbeat meanwhile."
+function timed(f; label = "", every::Real = 120)
+    stop = isempty(label) ? () -> nothing : heartbeat(label; every = every)
+    t0 = time()
+    try
+        r = f()
+        return r, time() - t0
+    finally
+        stop()
+    end
 end

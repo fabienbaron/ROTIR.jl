@@ -3,7 +3,7 @@
 #
 #   julia --project=demos -t auto demos/rho_cas_pigeons.jl
 #   N_ROUNDS=12 N_CHAINS=16 EXPLORER=mala julia --project=demos -t auto demos/rho_cas_pigeons.jl
-#   FREE=all7 N_ROUNDS=12 julia --project=demos -t auto demos/rho_cas_pigeons.jl
+#   FREE=rpole,omega,inc,PA,beta,ld1 N_ROUNDS=12 julia --project=demos -t auto demos/rho_cas_pigeons.jl
 #
 # Why tempering: the χ² of this fit is multimodal — demos/rho_cas_basins.jl finds several
 # minima between 2.2 and 3.7 mas diameter. A single NUTS chain samples whichever basin it
@@ -15,7 +15,8 @@
 # `EXPLORER=slice` is there because slice sampling is more robust on ragged posteriors.
 # Set EXPLORER=auto (default), mala, or slice.
 
-using Pigeons, Distributions, LogDensityProblems, Zygote, Random, Printf, Statistics
+using Pigeons, Distributions, LogDensityProblems, Zygote, ADTypes
+using LinearAlgebra, Random, Printf, Statistics
 include(joinpath(@__DIR__, "rho_cas_model.jl"))
 include(joinpath(@__DIR__, "posterior_utils.jl"))
 
@@ -46,10 +47,13 @@ end
 
 # Reference: a wide Gaussian in z, which the tempering ladder anneals towards the target.
 Pigeons.default_reference(::RhoCasTarget) =
-    DistributionLogPotential(MvNormal(zeros(NDIM), 9.0 * I(NDIM)))
+    DistributionLogPotential(MvNormal(zeros(NDIM), Diagonal(fill(9.0, NDIM))))
 Pigeons.initialization(::RhoCasTarget, ::AbstractRNG, ::Int) = copy(Z0)
 
-explorer = EXPLORER === :mala  ? Pigeons.AutoMALA() :
+# AutoMALA defaults to ForwardDiff, which would push Dual numbers through ROTIR's complex
+# polygon-FT kernels — slow at best. Point it at Zygote, the backend the rrules were
+# written for and the one test/test_parametric_gradient.jl validates.
+explorer = EXPLORER === :mala  ? Pigeons.AutoMALA(default_autodiff_backend = ADTypes.AutoZygote()) :
            EXPLORER === :slice ? Pigeons.SliceSampler() : nothing
 
 # checkpoint=true writes state after every round, so a run that turns out to need more
@@ -62,11 +66,15 @@ kw = (target = RhoCasTarget(), n_chains = N_CHAINS, n_rounds = N_ROUNDS,
       record = [Pigeons.traces, Pigeons.round_trip])
 
 pt, wall = timed(() -> explorer === nothing ? pigeons(; kw...) :
-                                              pigeons(; kw..., explorer = explorer))
+                                              pigeons(; kw..., explorer = explorer);
+                 label = "pigeons")
 
 # ── Results in physical units ───────────────────────────────────────────────
-Z = Pigeons.get_sample(pt)
-S = reduce(vcat, transpose.(z_to_theta.(Z)))          # nsamples × NDIM
+# get_sample returns a Pigeons.SampleArray whose entries carry NDIM parameters *plus* the
+# log potential as a trailing component — take the parameters only. (It also does not
+# broadcast elementwise the way a Vector{Vector} does, hence the comprehension.)
+Z = collect(Pigeons.get_sample(pt))
+S = reduce(vcat, [transpose(z_to_theta(z[1:NDIM])) for z in Z])      # nsamples × NDIM
 logz = Pigeons.stepping_stone(pt)
 
 @printf("\nwall time %.1f s   log(Z) = %.3f   %d samples\n", wall, logz, size(S, 1))
