@@ -19,6 +19,9 @@
 #      significance quoted at fixed β is not a detection of irradiation.
 #
 # Knobs: NSIDE1=4 NSIDE2=3 NSIDE_FIT1=3 NSIDE_FIT2=2 VCONS=1 MAXFIT=400 OUTDIR=...
+#        OCC=exact|soft|false   mutual occultation
+#        ASYNC=1|0  APSIDAL=1|0  (see spica_params.jl) — both ON by default, since Spica
+#        is neither synchronous (F = 1.92/1.65) nor free of apsidal motion (U = 139 yr).
 
 ENV["MPLBACKEND"] = get(ENV, "MPLBACKEND", "Agg")
 using ROTIR, PyPlot, Printf, Statistics, LinearAlgebra
@@ -30,6 +33,8 @@ nside2  = parse(Int, get(ENV, "NSIDE2", "3"))
 nsidef1 = parse(Int, get(ENV, "NSIDE_FIT1", "3"))   # coarser mesh for the nuisance re-fit
 nsidef2 = parse(Int, get(ENV, "NSIDE_FIT2", "2"))
 vcons   = get(ENV, "VCONS", "1") == "1"
+# Mutual occultation: :exact area clipping, :soft centre test, or false.
+const OCC = let o = get(ENV, "OCC", "exact"); o == "false" ? false : Symbol(o) end
 maxfit  = parse(Int, get(ENV, "MAXFIT", "400"))
 outdir  = get(ENV, "OUTDIR", joinpath(@__DIR__, "results", "spica_detect"))
 mkpath(outdir)
@@ -101,11 +106,10 @@ phases = [binary_phase_shift(data[i].uv, orbit_to_rotir_offset(SPICA_BP, tepochs
 println()
 overlap = check_binary_overlap(stars1, stars2, SPICA_BP, tepochs; verbose=true)
 if any(overlap)
-    println("\n*** $(count(overlap))/$nepochs epochs have overlapping disks. `binary_cvis` sums")
-    println("    the two components with NO mutual occultation, so at those epochs the far")
-    println("    component's hidden face still contributes flux. Spica is a known grazing")
-    println("    eclipser (Desmet+2009), so this is a real limitation of the forward model,")
-    println("    not a numerical edge case — treat those epochs' Δχ² with caution.\n")
+    println("\n*** $(count(overlap))/$nepochs epochs have overlapping disks (Spica is a known")
+    println("    grazing eclipser, Desmet+2009). Mutual occultation is $(OCC === false ? "OFF" : "ON ($(OCC))");")
+    println("    with it off, the far component's hidden face would keep contributing flux —")
+    println("    ~10% of the secondary's light, ~1.7% of the total, at closest approach.\n")
 end
 
 # Intrinsic (gravity-darkened) maps, and the reflection kernels, per epoch.
@@ -133,13 +137,71 @@ function chi2_split(A; imodel=:planck)
     for i in 1:nepochs
         h1, h2 = heat(i, A)
         v2, t3a, t3p = binary_observables(h1, stars1[i], h2, stars2[i], data[i], phases[i];
-                                          intensity_model=imodel, band=bands[i])
+                                          intensity_model=imodel, band=bands[i],
+                                          occultation=OCC)
         cv2 += sum(abs2, (v2 .- data[i].v2) ./ data[i].v2_err)
         ca  += sum(abs2, (t3a .- data[i].t3amp) ./ data[i].t3amp_err)
         cp  += sum(abs2, mod360(t3p .- data[i].t3phi) ./ data[i].t3phi_err)
     end
     return cv2, ca, cp
 end
+
+# =======================================================================================
+# 1b. Ablation: what does each newly-available systematic actually do?
+# =======================================================================================
+# Each of these is larger than the irradiation signature, so a detectability number
+# computed without them is not meaningful. Rebuild the whole model under each
+# configuration and report both the absolute fit and the irradiation Δχ².
+println("\n" * "="^78)
+println("1b. Ablation over the systematics")
+println("="^78)
+println("Each row rebuilds the geometry from scratch. `Δχ²(A)` is χ²(A=0) − χ²(A=0.6),")
+println("i.e. how much the data would prefer irradiation under that model.\n")
+
+function full_chi2(p1, p2, bp; occ = false, A = 0.0)
+    o1t = vcons ? roche_omega_table(tes1, p1, bp; secondary=false, npoints=9) : nothing
+    o2t = vcons ? roche_omega_table(tes2, p2, bp; secondary=true,  npoints=9) : nothing
+    c = 0.0
+    for i in 1:nepochs
+        D = compute_separation(bp, tepochs[i])
+        a, b = create_binary_geometry(tes1, p1, tes2, p2, bp, tepochs[i];
+                                      omega1 = o1t === nothing ? nothing : o1t(D),
+                                      omega2 = o2t === nothing ? nothing : o2t(D))
+        setup_oi!([data[i]], [a]); setup_oi!([data[i]], [b])
+        m1 = parametric_temperature_map(p1, a)
+        m2 = parametric_temperature_map(p2, b; secondary=true)
+        if A > 0
+            m1, m2 = handle_reflection(a, m1, b, m2; albedo1=A, albedo2=A)
+        end
+        pshift = binary_phase_shift(data[i].uv, orbit_to_rotir_offset(bp, tepochs[i])...)
+        c += binary_chi2_f(m1, a, m2, b, data[i], pshift;
+                           intensity_model=:planck, band=bands[i],
+                           occultation = occ ? :exact : false)
+    end
+    return c
+end
+
+P1sync = merge(SPICA_P1, (rotation_period = P_ORB,))
+P2sync = merge(SPICA_P2, (rotation_period = P_ORB,))
+BPnoap = merge(SPICA_BP, (dω = 0.0,))
+P1noap = merge(SPICA_P1, (dω = 0.0,)); P2noap = merge(SPICA_P2, (dω = 0.0,))
+P1both = merge(P1sync,   (dω = 0.0,)); P2both = merge(P2sync,   (dω = 0.0,))
+
+configs = (("baseline (as originally run)", P1both, P2both, BPnoap, false),
+           ("+ apsidal motion dω",          P1sync, P2sync, SPICA_BP, false),
+           ("+ asynchronous rotation",      P1noap, P2noap, BPnoap,  false),
+           ("+ mutual occultation",         P1both, P2both, BPnoap,  true),
+           ("ALL THREE",                    SPICA_P1, SPICA_P2, SPICA_BP, true))
+@printf("  %-30s %12s %10s %12s\n", "configuration", "χ²/n", "vs base", "Δχ²(A=0.6)")
+base_c = NaN
+for (lab, p1, p2, bp, occ) in configs
+    c0 = full_chi2(p1, p2, bp; occ=occ, A=0.0)
+    cA = full_chi2(p1, p2, bp; occ=occ, A=0.6)
+    isnan(base_c) && (global base_c = c0)
+    @printf("  %-30s %12.2f %+10.0f %12.1f\n",
+            lab, c0/sum(ndata), c0 - base_c, c0 - cA)
+end
+println("\n(a POSITIVE Δχ² means the data prefer irradiation; negative means they disprefer it)")
 
 println("\n" * "="^78)
 println("2. χ² against the real Spica data vs bolometric albedo")
@@ -200,7 +262,7 @@ function chi2_vs(dat, A; s1=stars1, s2=stars2, t1=tm1, t2=tm2, k=kern, ph=phases
         h1, h2 = A == 0 ? (t1[i], t2[i]) :
                  handle_reflection(s1[i], t1[i], s2[i], t2[i]; albedo1=A, albedo2=A, kernels=k[i])
         v2, t3a, t3p = binary_observables(h1, s1[i], h2, s2[i], dat[i], ph[i];
-                                          intensity_model=:planck, band=bd[i])
+                                          intensity_model=:planck, band=bd[i], occultation=OCC)
         c += sum(abs2, (v2 .- dat[i].v2) ./ dat[i].v2_err)
         c += sum(abs2, (t3a .- dat[i].t3amp) ./ dat[i].t3amp_err)
         c += sum(abs2, mod360(t3p .- dat[i].t3phi) ./ dat[i].t3phi_err)
@@ -284,7 +346,7 @@ function chi2_nuisance(θ, A)
         h1, h2 = A == 0 ? (t1[i], t2[i]) :
                  handle_reflection(s1[i], t1[i], s2[i], t2[i]; albedo1=A, albedo2=A, kernels=k[i])
         v2, t3a, t3p = binary_observables(h1, s1[i], h2, s2[i], synth_f[i], phases[i];
-                                          intensity_model=:planck, band=bands[i])
+                                          intensity_model=:planck, band=bands[i], occultation=OCC)
         c += sum(abs2, (v2 .- synth_f[i].v2) ./ synth_f[i].v2_err)
         c += sum(abs2, (t3a .- synth_f[i].t3amp) ./ synth_f[i].t3amp_err)
         c += sum(abs2, mod360(t3p .- synth_f[i].t3phi) ./ synth_f[i].t3phi_err)

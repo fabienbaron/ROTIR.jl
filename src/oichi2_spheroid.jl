@@ -104,7 +104,7 @@ function stcis(x1,x2,y1,y2,kx,ky)
   return sinc.(kx*(x2-x1) + ky*(y2-y1)).*cis.(-π*(kx*(x2+x1)+ ky*(y2+y1))).*(ky*(x2-x1)-kx*(y2-y1))
 end
 
-@views function setup_polyft_single_alt(uv, pjx, pjy; T=Float32)
+@views function setup_polyft_single_alt(uv, pjx, pjy; T = float(real(eltype(pjx))))
   kx =  uv[1,:] * T(-pi / (180*3600000))
   ky =  uv[2,:] * T( pi / (180*3600000))
   x = [Array(pjx[:,i])' for i in 1:4]
@@ -127,7 +127,7 @@ end
   return polyft
 end
 
-@views function setup_polyft_single(uv, pjx, pjy; T=Float32)
+@views function setup_polyft_single(uv, pjx, pjy; T = float(real(eltype(pjx))))
   kx =  uv[1,:] * T(-pi / (180*3600000));
   ky =  uv[2,:] * T( pi / (180*3600000));
   # note: check definition sinc(x) = sin(pi*x)/(pi*x)
@@ -138,7 +138,7 @@ end
 
 
 
-@views function setup_polyft_single(kx, ky, pjx, pjy; T=Float32)
+@views function setup_polyft_single(kx, ky, pjx, pjy; T = float(real(eltype(pjx))))
   polyft = -im*T(1/(2pi))*(((sinc.( (kx*transpose(pjx[:,2]-pjx[:,1])) + (ky*transpose(pjy[:,2]-pjy[:,1])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,2]+pjx[:,1])) +  (ky*transpose(pjy[:,2]+pjy[:,1])) )).* ( (ky*transpose(pjx[:,2]-pjx[:,1]))  - (kx*transpose(pjy[:,2]-pjy[:,1])) ) + sinc.( (kx*transpose(pjx[:,3]-pjx[:,2])) + (ky*transpose(pjy[:,3]-pjy[:,2])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,3]+pjx[:,2])) +  (ky*transpose(pjy[:,3]+pjy[:,2])) )).* ( (ky*transpose(pjx[:,3]-pjx[:,2]))  - (kx*transpose(pjy[:,3]-pjy[:,2])) )+ sinc.( (kx*transpose(pjx[:,4]-pjx[:,3])) + (ky*transpose(pjy[:,4]-pjy[:,3])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,4]+pjx[:,3])) +  (ky*transpose(pjy[:,4]+pjy[:,3])) )).* ( (ky*transpose(pjx[:,4]-pjx[:,3]))  - (kx*transpose(pjy[:,4]-pjy[:,3])) ) + sinc.( (kx*transpose(pjx[:,1]-pjx[:,4])) + (ky*transpose(pjy[:,1]-pjy[:,4])) ).*cis.(-T(pi)*( (kx*transpose(pjx[:,1]+pjx[:,4])) +  (ky*transpose(pjy[:,1]+pjy[:,4])) )).* ( (ky*transpose(pjx[:,1]-pjx[:,4]))  - (kx*transpose(pjy[:,1]-pjy[:,4])) )))./((kx.*kx+ky.*ky)));
   return polyft;
 end
@@ -155,7 +155,10 @@ function cvis_to_v2(cvis, indx)
   v2_model = abs2.(cvis[indx]);
 end
 
-function cvis_to_t3(cvis, indx1, indx2, indx3; T=Float32)
+# T follows the visibilities rather than defaulting to Float32: it sets the precision of the
+# 180/π conversion, and Float32(180/π) = 57.2957802 is only 7 digits, which shifted χ²_t3phi
+# by ~1e-8 relative against an otherwise-Float64 chain.
+function cvis_to_t3(cvis, indx1, indx2, indx3; T = real(float(eltype(cvis))))
   t3 = cvis[indx1].*cvis[indx2].*cvis[indx3];
   t3amp = abs.(t3);
   t3phi = angle.(t3)*T(180/pi);
@@ -179,6 +182,58 @@ function cvis_to_obs(cvis, data)
   v2_model = cvis_to_v2(cvis, data.indx_v2);
   _, t3amp_model, t3phi_model = cvis_to_t3(cvis, data.indx_t3_1, data.indx_t3_2, data.indx_t3_3);
   return v2_model, t3amp_model, t3phi_model
+end
+
+"V², T3amp, T3phi on; visamp, visphi, flux, differential phase off."
+const OI_DEFAULT_WEIGHTS = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+
+"""
+    cvis_chi2(cvis, data, weights = OI_DEFAULT_WEIGHTS) -> chi2
+
+χ² of complex visibilities against an `OIdata` block, **with a hand-written adjoint**.
+
+Thin wrapper over OITOOLS' `cvis_to_chi2_fg`, which returns the value *and* the complex
+adjoint source `g_cvis` from a single pass over the data. The `rrule` below simply hands
+that back, so reverse-mode AD through this call costs one hand-written sweep rather than a
+tape of `abs2`/`angle`/`mod360` broadcasts.
+
+Use this instead of `cvis_to_obs` + three `sum(abs2, …)` whenever the χ² is going to be
+differentiated. It is the analytic-component counterpart of
+[`interferometric_chi2`](@ref), whose rrule is fused to the polygon-FT image path and so
+cannot be reused here.
+
+# Adjoint convention
+
+OITOOLS documents `g_params = real(Jᵀ · g_cvis)` with `J = ∂V/∂p` — a **transpose, not an
+adjoint**, i.e. no conjugation. ChainRules/Zygote instead want the cotangent
+`∂L/∂Re(cvis) + i ∂L/∂Im(cvis)`, which is the *complex conjugate* of that. Hence the
+`conj(g)` in the pullback.
+
+Getting this backwards is not a uniformly wrong answer, which is what makes it dangerous:
+it leaves flux-like parameters nearly right (they move `V` along the real direction) while
+making phase-like parameters — separation, position angle, T0 — wrong by ~100%. Verified
+against finite differences to 1e-11 in both directions; `test_reflection.jl` pins it.
+"""
+# Pass the visibilities through at whatever complex float type they already are — do NOT
+# force ComplexF64. OITOOLS accepts `AbstractVector{<:Complex}` and (in recent versions)
+# derives its working eltype from the inputs, so widening here would throw away the point
+# of carrying Float32 through the forward model.
+@inline _ascomplexfloat(v::AbstractVector{<:Complex{<:AbstractFloat}}) = v
+@inline _ascomplexfloat(v::AbstractVector) = complex.(float.(v))
+
+cvis_chi2(cvis, data) = cvis_chi2(cvis, data, OI_DEFAULT_WEIGHTS)
+# Value-only path uses `cvis_to_chi2_f`, NOT `first(cvis_to_chi2_fg(...))`: the latter also
+# builds and fills the adjoint source, which cost ~40 % on the primal for nothing whenever
+# no gradient was wanted. The rrule below still uses `_fg`, which returns both in one sweep.
+cvis_chi2(cvis, data, weights) =
+    cvis_to_chi2_f(_ascomplexfloat(cvis), data; weights = weights)
+
+function ChainRulesCore.rrule(::typeof(cvis_chi2), cvis, data, weights)
+    chi2, g = cvis_to_chi2_fg(_ascomplexfloat(cvis), data; weights = weights)
+    function cvis_chi2_pullback(c̄raw)
+        return (NoTangent(), unthunk(c̄raw) .* conj(g), NoTangent(), NoTangent())
+    end
+    return chi2, cvis_chi2_pullback
 end
 
 """
@@ -282,8 +337,10 @@ end
 return f;
 end
 
-function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[], verbose=false, T=Float32)
-  T = eltype(x)
+function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[],
+                                    verbose=false, T=eltype(x))
+  # (the keyword used to default to Float32 and then be overwritten by `T = eltype(x)` on the
+  #  next line, so anything a caller passed was silently discarded)
   #g[:] .= T(0);
   nepochs = length(data)
   chi2_t = zeros(T, nepochs);

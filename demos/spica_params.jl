@@ -90,6 +90,34 @@ const RPOLE2 = ang_radius_mas(R2_RSUN, D_PC)
 
 const TPOLE1 = 25300.0     # K
 const TPOLE2 = 20585.0     # K
+
+# --- asynchronous rotation --------------------------------------------------------
+# Spica's components are NOT tidally locked. From v sin i = 161 ± 2 / 70 ± 5 km/s
+# (Smith 1985; Tkachenko+2016) with R = 7.40 / 3.74 R☉ and i = 116°:
+#     v_eq(synchronous) = 2πR/P = 93.3 / 47.1 km/s
+#     v_eq(observed)    = v sin i / |sin i| = 179.1 / 77.9 km/s
+#     F = ω_rot/ω_orb   = 1.92 / 1.65
+# The centrifugal term goes as F², so this is a 3.7× / 2.7× change: the primary's
+# equatorial bulge is 9.4%, not the 2.1% a synchronous model gives. Aufdenberg+2015 note
+# the same ("asynchronous rotation factors").
+#
+# NB the Roche shape is still taken to be static in the frame where the tidal bulge points
+# at the companion — the standard approximation (PHOEBE does the same). That is exact here
+# because our surface maps (gravity darkening + irradiation) are symmetric about that
+# frame; it would need revisiting for spots, which would rotate at ω_rot.
+const F1_SYNC = parse(Float64, get(ENV, "F1", "1.92"))
+const F2_SYNC = parse(Float64, get(ENV, "F2", "1.65"))
+const USE_ASYNC = get(ENV, "ASYNC", "1") == "1"
+_frot(F) = USE_ASYNC ? P_ORB / F : P_ORB          # rotation period in days
+
+# --- apsidal motion ---------------------------------------------------------------
+# U = 139 ± 6 yr (Robinette & Aufdenberg 2015, MCMC on 1889-2000 RVs; P/U = 7.91e-5).
+# Also 105 ± 2 yr (Wages & Aufdenberg poster) and ~110 yr (Aufdenberg+2015). Over the
+# 2007-2015 CHARA span ω advances ~21°, moving the predicted secondary position by up to
+# 0.44 mas — ten to forty times the MIRC astrometric precision.
+const U_APSIDAL  = parse(Float64, get(ENV, "UAPS", "139.0"))     # yr
+const USE_APSIDAL = get(ENV, "APSIDAL", "1") == "1"
+const DOMEGA = USE_APSIDAL ? 360.0 / (U_APSIDAL * 365.25) : 0.0   # deg/day
 const BETA   = 0.25        # von Zeipel exponent for a radiative envelope.
                            # NB PHOEBE's gravb_bol is 4× this (T = Tpole·(g/gpole)^β here,
                            # T = Tpole·((g/gpole)^gravb_bol)^0.25 there).
@@ -107,25 +135,27 @@ const SPICA_BASE = (surface_type = 3,                # Roche
                     ldtype = LDTYPE, ld1 = LD1_H, ld2 = LD2_H,
                     inclination = 180.0 - I_ORB,     # equivalent prograde viewing angle
                     position_angle = OMEGA_NODE - 180.0,
-                    rotation_period = P_ORB,
+                    rotation_period = P_ORB,         # overridden per component below
                     beta = BETA, d = D_PC,
                     fillout_factor_primary = -1,     # -1 ⇒ rpole defines the potential
                     fillout_factor_secondary = -1,
                     i = I_ORB, Ω = OMEGA_NODE, ω = OMEGA_PERI,
                     P = P_ORB, a = A_ORB, e = E_ORB, T0 = T0_ORB,
-                    dP = 0.0, dω = 0.0)
+                    dP = 0.0, dω = DOMEGA)
 
 # q convention: the primary's potential uses q = M2/M1; the secondary's potential is
 # centred on the secondary and needs the INVERTED ratio M1/M2.
-const SPICA_P1 = merge(SPICA_BASE, (rpole = RPOLE1, tpole = TPOLE1, q = Q_BIN))
-const SPICA_P2 = merge(SPICA_BASE, (rpole = RPOLE2, tpole = TPOLE2, q = 1.0 / Q_BIN))
+const SPICA_P1 = merge(SPICA_BASE, (rpole = RPOLE1, tpole = TPOLE1, q = Q_BIN,
+                                    rotation_period = _frot(F1_SYNC)))
+const SPICA_P2 = merge(SPICA_BASE, (rpole = RPOLE2, tpole = TPOLE2, q = 1.0 / Q_BIN,
+                                    rotation_period = _frot(F2_SYNC)))
 
 const SPICA_S1 = starparameters(RPOLE1, TPOLE1, 0.0, LDTYPE, LD1_H, LD2_H, BETA, 0.0,
-                                180.0 - I_ORB, OMEGA_NODE - 180.0, 0.0, P_ORB)
+                                180.0 - I_ORB, OMEGA_NODE - 180.0, 0.0, _frot(F1_SYNC))
 const SPICA_S2 = starparameters(RPOLE2, TPOLE2, 0.0, LDTYPE, LD1_H, LD2_H, BETA, 0.0,
-                                180.0 - I_ORB, OMEGA_NODE - 180.0, 0.0, P_ORB)
+                                180.0 - I_ORB, OMEGA_NODE - 180.0, 0.0, _frot(F2_SYNC))
 const SPICA_BP = binaryparameters(SPICA_S1, SPICA_S2, D_PC, I_ORB, OMEGA_NODE, OMEGA_PERI,
-                                  P_ORB, A_ORB, E_ORB, T0_ORB, Q_BIN, [1.0, 1.0], 0.0, 0.0)
+                                  P_ORB, A_ORB, E_ORB, T0_ORB, Q_BIN, [1.0, 1.0], 0.0, DOMEGA)
 
 """
     spica_audit()
@@ -162,6 +192,11 @@ function spica_audit()
         @printf("  ΔT_substellar (A=%.1f, %-10s)  secondary %+6.0f K   primary %+5.0f K\n",
                 ALBEDO_DEFAULT, lab, TPOLE2 * (f2^0.25 - 1), TPOLE1 * (f1^0.25 - 1))
     end
+    @printf("  synchronicity F = ω_rot/ω_orb : primary %.2f, secondary %.2f  %s\n",
+            synchronicity(SPICA_P1), synchronicity(SPICA_P2),
+            USE_ASYNC ? "(from v sin i = 161/70 km/s)" : "(FORCED SYNCHRONOUS, ASYNC=0)")
+    @printf("  apsidal motion dω = %.5f deg/day (U = %.0f yr)  %s\n",
+            DOMEGA, U_APSIDAL, USE_APSIDAL ? "→ Δω = $(round(DOMEGA*2910, digits=1))° over the data span" : "(DISABLED, APSIDAL=0)")
     @printf("  eccentricity e = %.3f  →  peri/apo irradiation contrast %.2f\n",
             E_ORB, ((1 + E_ORB) / (1 - E_ORB))^2)
     println("     (modern e determinations span 0.065–0.119, a disagreement the")

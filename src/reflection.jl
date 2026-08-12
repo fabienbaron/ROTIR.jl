@@ -176,6 +176,18 @@ multiply the flux vectors inside [`solve_radiosity`](@ref).
 Memory is `3·n₁·n₂` elements — 57 MB at 3072×768 in Float64. Pass `T=Float32` (ample: the
 radiosity ratios are O(1) and the mesh truncation error dominates) or coarsen the
 tessellation when running many frames.
+
+This is the dominant single cost of a reflection evaluation, so the pair loop is threaded
+over `j`; each thread owns a disjoint set of columns of `G`/`L12`/`L21`, so no
+synchronisation is needed. Measured at 3072×768 (BenchmarkTools, minimum):
+
+    1 thread                6.83 ms
+    32 threads              2.07 ms      (3.3×, not 32× — it is memory-bandwidth bound,
+    32 threads, Float32     1.14 ms       writing 54 MiB across three matrices; Float32
+                                          halves the traffic and nearly halves the time)
+
+For context, a full frame (geometry + two temperature maps + kernels + solve) is ~5 ms,
+of which the Roche root solve is ~1 ms and `solve_radiosity` itself ~0.5 ms.
 """
 function crossbody_kernels(c1::AbstractMatrix, n1::AbstractMatrix, ld1,
                            c2::AbstractMatrix, n2::AbstractMatrix, ld2;
@@ -191,7 +203,8 @@ function crossbody_kernels(c1::AbstractMatrix, n1::AbstractMatrix, ld1,
     invD01 = 1.0 / ld_bol_D0(l1.ldtype, l1.ld1, l1.ld2)
     invD02 = 1.0 / ld_bol_D0(l2.ldtype, l2.ld1, l2.ld2)
     invπ = 1 / pi
-    @inbounds for j in 1:n
+    Threads.@threads for j in 1:n
+        @inbounds begin
         c2x = Float64(c2[j,1]); c2y = Float64(c2[j,2]); c2z = Float64(c2[j,3])
         n2x = Float64(n2[j,1]); n2y = Float64(n2[j,2]); n2z = Float64(n2[j,3])
         for i in 1:m
@@ -210,6 +223,7 @@ function crossbody_kernels(c1::AbstractMatrix, n1::AbstractMatrix, ld1,
             L12[i,j] = g * ld_bol(l2.ldtype, l2.ld1, l2.ld2, μj) * invD02
             L21[i,j] = g * ld_bol(l1.ldtype, l1.ld1, l1.ld2, μi) * invD01
         end
+        end # @inbounds
     end
     return G, L12, L21
 end

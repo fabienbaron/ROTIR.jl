@@ -1,13 +1,33 @@
 include("orbits.jl")
 import Base: Math as math
 
+"""
+    synchronicity(p) -> F
+
+Synchronicity parameter `F = ω_rot/ω_orb = P_orb/P_rot` — 1 synchronous, >1
+supersynchronous, <1 subsynchronous. This is the quantity that enters the Roche
+potential's centrifugal term as `½F²(1+q)r²(1−ν²)`, and it is the same `F` as PHOEBE's
+`syncpar`, ELISa's `synchronicity`, and `P` in `RocheLobe.f90`.
+
+Note it is the ratio of *angular rates*, i.e. the RECIPROCAL of the ratio of periods.
+This was previously computed as `rotation_period/P` throughout, which is `P_rot/P_orb` —
+inverted, and contradicting the code's own comments. It is invisible for a synchronous
+binary (both give 1), which is every configuration in the demos and the tests, but for
+Spica's primary (v sin i = 161 km/s ⇒ F ≈ 1.92) the centrifugal term was wrong by
+F⁴ ≈ 13.6× and the rotational flattening came out 0.5% instead of 9.4%.
+
+Verified against `libphoebe.roche_Omega(q, F, d, [x,y,z])` at F = 0.521, 1.0 and 1.92 —
+see the "synchronicity convention" testset in `test/test_reflection.jl`.
+"""
+@inline synchronicity(p) = p.P / p.rotation_period
+
 # The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
 #
-function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=Float32, omega = nothing)
+function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=eltype(tessels), omega = nothing)
     # if wanting to call this for secondary=true, invert roche_parameters.q;
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     secondary == false ? fillout_factor = roche_parameters.fillout_factor_primary : fillout_factor = roche_parameters.fillout_factor_secondary;
-    async_ratio = roche_parameters.rotation_period/roche_parameters.P
+    async_ratio = synchronicity(roche_parameters)
     a = roche_parameters.a;
     q = roche_parameters.q;
     rpole = roche_parameters.rpole
@@ -38,8 +58,8 @@ function update_roche_radii_binary(star1_geom::tessellation, star2_geom::tessell
 ## TEST star1_geom = star1; star2_geom =  star2; use_fillout_factor = false;
     fillout_factor1 = binary_parameters.fillout_factor[1];
     fillout_factor2 = binary_parameters.fillout_factor[1];
-    async_ratio1 = binary_parameters.star1.rotation_period/binary_parameters.P
-    async_ratio2 = binary_parameters.star2.rotation_period/binary_parameters.P
+    async_ratio1 = binary_parameters.P/binary_parameters.star1.rotation_period
+    async_ratio2 = binary_parameters.P/binary_parameters.star2.rotation_period
     a = binary_parameters.a
     q = binary_parameters.q;
 
@@ -53,7 +73,8 @@ function update_roche_radii_binary(star1_geom::tessellation, star2_geom::tessell
     return star1_roche_geom, star2_roche_geom
 end
 
-function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false, T=Float32)
+function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false,
+                               T = float(promote_type(typeof(rpole_a), typeof(D), typeof(q))))
   secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
   if (use_fillout_factor == true)
     #
@@ -86,7 +107,7 @@ end
 
 function rl1(roche_parameters; secondary = false)
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
-    async_ratio = roche_parameters.rotation_period/roche_parameters.P
+    async_ratio = synchronicity(roche_parameters)
     a = roche_parameters.a;
     q = roche_parameters.q;
     D = 1.0 # circular orbit approximation
@@ -99,7 +120,7 @@ function max_rpole(D, roche_parameters; secondary = false)
     # The maximum rpole will be gotten for a fillout factor of 1.0
     a = roche_parameters.a;
     q = roche_parameters.q;
-    async_ratio = roche_parameters.rotation_period/roche_parameters.P
+    async_ratio = synchronicity(roche_parameters)
     return fillout_to_rpole(1.0, D, q, async_ratio)*a;
 end
 
@@ -243,6 +264,10 @@ end
 
 Find the L2 Lagrange point (behind the primary, away from secondary).
 Returns the radial distance from the primary along θ=π/2, φ=π.
+!!! note "Returns `Float64` on purpose"
+    Not an oversight and not a candidate for the element-type-follows-input rule: this is a
+    root solve / quadrature whose nested Halley stack needs the headroom. Float32 inputs are
+    accepted and widened.
 """
 function solve_R_L2(D, q, async_ratio)
     # L2 is behind the primary (direction away from secondary: θ=π/2, φ=π)
@@ -259,6 +284,10 @@ end
 
 Find the L3 Lagrange point (behind the secondary, past x=D).
 Returns the radial distance from the primary along θ=π/2, φ=0 (r > D).
+!!! note "Returns `Float64` on purpose"
+    Not an oversight and not a candidate for the element-type-follows-input rule: this is a
+    root solve / quadrature whose nested Halley stack needs the headroom. Float32 inputs are
+    accepted and widened.
 """
 function solve_R_L3(D, q, async_ratio)
     # L3 is behind the secondary: along θ=π/2, φ=0 but at r > D
@@ -442,14 +471,14 @@ function temperature_map_vonZeipel_roche_single(parameters, star_geom, t::Array{
     return Tmap
 end
 
-function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=Float32)
+function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; secondary = false, T=eltype(star_geom))
     p = convert_params(T, parameters)
     rpole = p.rpole/p.a
     r = star_geom.vertices_spherical[:, 5 ,1]/p.a
     θ = star_geom.vertices_spherical[:, 5, 2]
     ϕ = star_geom.vertices_spherical[:, 5, 3]
     D = T(compute_separation(p, t))
-    async_ratio = p.rotation_period/p.P
+    async_ratio = synchronicity(p)
     # Compute gravity
     compute_gravity = compute_gravity_primary;
     if secondary == true
@@ -471,7 +500,7 @@ function temperature_map_vonZeipel_roche(binary_parameters, star_geom, t; second
     θ = star_geom.vertices_spherical[:, 5, 2]
     ϕ = star_geom.vertices_spherical[:, 5, 3]
     D = T(compute_separation(binary_parameters, t))
-    async_ratio = T(sp.rotation_period/binary_parameters.P)
+    async_ratio = T(binary_parameters.P/sp.rotation_period)
     q = T(binary_parameters.q)
     β = T(sp.beta)
     # Compute gravity
@@ -530,6 +559,10 @@ end
 
 Single-variable Romberg integration of `f` over [a, b] with `N` refinement levels.
 Uses 2^(N-1) function evaluations. Equivalent to the Fortran ROMBERG subroutines.
+!!! note "Returns `Float64` on purpose"
+    Not an oversight and not a candidate for the element-type-follows-input rule: this is a
+    root solve / quadrature whose nested Halley stack needs the headroom. Float32 inputs are
+    accepted and widened.
 """
 function romberg_integrate(f, a, b; N=7)
     R = zeros(N, N)
@@ -602,6 +635,10 @@ HEALPix mesh sum `(4π/3npix)·Σrᵢ³`:
   on top of an integrand that already included them), so every volume came out exactly 2×
   too large — and hence `R_vol` 2^(1/3) ≈ 1.26× too large;
 * the Halley solve was seeded with the L1 radius; see [`roche_polar_radius`](@ref).
+!!! note "Returns `Float64` on purpose"
+    Not an oversight and not a candidate for the element-type-follows-input rule: this is a
+    root solve / quadrature whose nested Halley stack needs the headroom. Float32 inputs are
+    accepted and widened.
 """
 function roche_volume(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
     potential_function = secondary ? compute_potential_secondary : compute_potential_primary
@@ -639,6 +676,10 @@ root solve) and additionally the projection factor that the original omitted: fo
 star-shaped surface `dA = r²/cos γ dΩ`, where γ is the angle between `r̂` and the surface
 normal, so `cos γ = |∂Ω/∂r| / |∇Ω|`. Dropping it underestimates the area of a distorted
 lobe.
+!!! note "Returns `Float64` on purpose"
+    Not an oversight and not a candidate for the element-type-follows-input rule: this is a
+    root solve / quadrature whose nested Halley stack needs the headroom. Float32 inputs are
+    accepted and widened.
 """
 function roche_area(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
     potential_function = secondary ? compute_potential_secondary : compute_potential_primary

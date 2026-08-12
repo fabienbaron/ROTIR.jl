@@ -41,6 +41,38 @@ mutable struct stellar_geometry{T} # typically one per epoch, rotation and proje
   t::T # epoch time
 end
 
+# =====================================================================
+# PRECISION CONVENTION
+# =====================================================================
+# Element types FOLLOW THE INPUTS. Never hardcode `Float32`/`Float64` in a keyword default
+# or an array allocation: `tessellation_healpix(n; T=Float64)` is the root of the type
+# chain, and a hardcoded `T=Float32` downstream silently narrows the whole mesh back at the
+# first step. Write `T = eltype(tessels)` / `float(real(eltype(x)))` instead.
+#
+# Float32 is the right default for interferometry — the observables carry ~1 % errors, and
+# the orbit forward model costs ~1e-6 mas in predicted separation at Float32, five orders
+# below CHARA astrometry. There are exactly four documented exceptions:
+#
+#  1. ABSOLUTE MJD/JD. `eps(Float32(2.45e6)) = 0.25 d`. Epoch arguments are annotated
+#     `::Float64` (`binary_orbit_abs`, `binary_RV`) or forced with `Float64(tepoch_jd)`.
+#     Time DIFFERENCES are fine in Float32 (21 s over a 2450 d span ⇒ 1e-4 mas).
+#  2. SUMMED SCALARS. Per-element values take the data's type; a scalar accumulated over the
+#     whole mesh or dataset takes the wider one. Julia's `sum` is pairwise so the summation
+#     itself is near-exact — the issue is REPRESENTING a large result: `eps(Float32(2e6))`
+#     is 0.125, against a Δχ² = 1 confidence contour. See `betlyr/betlyr_model.jl`.
+#  3. GEOMETRIC PREDICATES. Sutherland–Hodgman clipping decides inside/outside from the
+#     sign of a cross product; a Float32 sign flip changes vertex COMBINATORICS, not just
+#     the area. Exact predicates on inexact input — see `occultation_weights`.
+#  4. ROOT SOLVES / QUADRATURE with a nested Halley stack (`roche_volume`, `roche_area`,
+#     `romberg_integrate`, `solve_R_L2/L3`), which need the headroom. Their docstrings
+#     say so explicitly.
+#
+# Element type accessors, so callers write `T = eltype(tessels)` rather than a literal.
+Base.eltype(::tessellation{T}) where {T} = T
+Base.eltype(::Type{tessellation{T}}) where {T} = T
+Base.eltype(::stellar_geometry{T}) where {T} = T
+Base.eltype(::Type{stellar_geometry{T}}) where {T} = T
+
 function Base.display(x::tessellation)
   if x.tessellation_type==0
     println("Tessellation type: Healpix")
@@ -155,7 +187,7 @@ end
   
 
 """
-    compute_radii(tessels, star_params, t; secondary=false, T=Float32, D=nothing, omega=nothing)
+    compute_radii(tessels, star_params, t; secondary=false, T=eltype(tessels), D=nothing, omega=nothing)
 
 Vertex radii and Cartesian positions in the star's *body* frame.
 
@@ -166,7 +198,7 @@ the separation comes from the shared orbit rather than from this component's own
 Pass `omega` to fix the surface equipotential directly instead of deriving it from `rpole`
 (used by the volume-conserving path, see `roche_omega_for_volume`).
 """
-function compute_radii(tessels::tessellation, star_params, t; secondary=false, T=Float32,
+function compute_radii(tessels::tessellation, star_params, t; secondary=false, T=eltype(tessels),
                        D=nothing, omega=nothing)
   p = convert_params(T, star_params)
   npix = tessels.npix
@@ -194,7 +226,7 @@ function compute_radii(tessels::tessellation, star_params, t; secondary=false, T
   return r, xyz
 end
 
-function rotate_star(xyz, star_params, t; T=Float32)
+function rotate_star(xyz, star_params, t; T = float(real(eltype(xyz))))
   # TODO: reimplement differential rotation for compatible surfaces (see old ROTIR)
   # Right multiply: xyz * R where R = rot_vertex(ψ, inc, PA)
   #   ψ  = rotation phase (spinning surface features)
@@ -215,7 +247,7 @@ end
 @inline limb_mu(nz::T) where {T} = nz > zero(T) ? nz : zero(T)
 @inline mu_and_dmu(nz::T) where {T} = nz > zero(T) ? (nz, one(T)) : (zero(T), zero(T))
 
-function compute_ldmap(μ,star_params; T=Float32)
+function compute_ldmap(μ, star_params; T = float(real(eltype(μ))))
   p = convert_params(T, star_params)
   # Limb-darkening map
   if (p.ldtype == 1) # 1: quadratic
@@ -228,7 +260,7 @@ function compute_ldmap(μ,star_params; T=Float32)
 end
 
 # Generate geometry and ld map from tesselation and stellar parameters
-@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=Float32, κ=T(50))
+@views function create_star(tessels::tessellation, star_params, t; secondary=false, T=eltype(tessels), κ=T(50))
   # Compute radii
   r, xyz = compute_radii(tessels, star_params, t; secondary=secondary);
 
@@ -239,7 +271,7 @@ end
 end
 
 """
-    finish_star(xyz, r, tessels, star_params, t; T=Float32, κ=T(50)) -> stellar_geometry
+    finish_star(xyz, r, tessels, star_params, t; T=eltype(tessels), κ=T(50)) -> stellar_geometry
 
 Common tail of the geometry pipeline: everything that follows the choice of vertex
 positions. Given already-deformed, already-rotated sky-frame vertices `xyz` (npix,5,3)
@@ -250,7 +282,7 @@ Split out of [`create_star`](@ref) so that alternative orientations — notably
 `create_binary_star`, which rotates into the *orbital* frame instead of spinning about
 a fixed spin axis — reuse this verbatim rather than duplicating it.
 """
-@views function finish_star(xyz, r, tessels::tessellation, star_params, t; T=Float32, κ=T(50))
+@views function finish_star(xyz, r, tessels::tessellation, star_params, t; T=eltype(tessels), κ=T(50))
   npix = tessels.npix;
 
   # Determine normals via cross product of quad diagonals

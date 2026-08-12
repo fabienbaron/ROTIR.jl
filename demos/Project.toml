@@ -1,10 +1,14 @@
 [deps]
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 FiniteDifferences = "26cc04aa-876d-5657-8c51-4c34ba976000"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Pathfinder = "b1d3bc72-d0e7-4279-b92f-7fa5d6d2d454"
 Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
@@ -13,12 +17,17 @@ ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
 PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
 ROTIR = "1effc416-1cd3-435e-ba3b-8cf647137d25"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 TerminalLoggers = "5d786b92-1e48-4d6f-9151-6b4477ca9bed"
 Transducers = "28d57a85-8fef-5791-bfe6-a80928e7c999"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
+# `[sources]` does NOT propagate from a dependency, so ROTIR's entry for the unregistered
+# OITOOLS does not cover this environment — it needs its own, or a fresh `Pkg.instantiate()`
+# here cannot find it. No `rev`: track the default branch.
 [sources]
+OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
 ROTIR = {path = ".."}
 
 [compat]

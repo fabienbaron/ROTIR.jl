@@ -100,17 +100,99 @@ Note that the pre-existing `demos/spica_binary_roche.jl` predates this and uses 
 fixed-polar-radius convention (`fillout_factor_primary = -1`); the irradiation demos
 default to `volume_conserving = true`.
 
-## Mutual occultation is NOT modelled
+## Mutual occultation
 
-`binary_cvis` sums the two components' visibilities unconditionally — the hidden part of
-the far star still contributes flux. That is harmless while the disks are well separated
-and wrong once they overlap. `check_binary_overlap` flags the epochs where
-`ρ < R₁ + R₂`; it does not change the model.
+| Function | Description |
+|----------|-------------|
+| `occultation_weights(star1, star2; method, softness, nbins)` | Per-tessel occultation factors `(w1, w2, occulting)` |
+| `convex_hull_2d(xs, ys)` | CCW convex hull (Andrew's monotone chain) |
+| `polygon_convex_clip_area(...)` | Exact clipped area against a convex polygon (in `rasterize.jl`) |
+| `projected_limb_profile(star; nbins=72)` | Azimuthal profile of a component's projected outline |
+| `limb_radius(profile, φ)` | Interpolated limb radius at position angle `φ` |
+| `silhouette_polygon(star; nbins=72)` | That profile as a closed CCW polygon |
+| `check_binary_overlap(...)` | Diagnostic: which epochs overlap at all |
+
+`binary_cvis` sums the two components unconditionally by default, so the hidden face of
+the far star keeps contributing flux once the disks overlap. Pass `occultation=true` to
+fix that, or a precomputed `(w1, w2)` to reuse it across a scan:
+
+```julia
+v2, t3a, t3p = binary_observables(tm1, star1, tm2, star2, data, phase; occultation=true)
+```
+
+Treating the components as disjoint convex bodies — the same assumption the radiosity
+solver makes — whichever centre has the larger toward-observer coordinate is in front
+*everywhere*, so only the far star is masked. This is why a silhouette test suffices and
+tessel-by-tessel intersection is unnecessary: with a global depth ordering, "is this
+tessel hidden?" reduces exactly to "is it inside the near body's projected outline?", at
+O(n₁+n₂) instead of O(n₁·n₂).
+
+Two methods:
+
+* **`method = :exact`** (default) — the fraction of each far tessel's projected quad that
+  survives, by Sutherland–Hodgman clipping against the near component's **convex hull**
+  (`convex_hull_2d` → `polygon_convex_clip_area`). No free parameters. A genuine hull is
+  required: `polygon_convex_clip_area` intersects half-planes, which only reproduces the
+  clip polygon when it is convex, and the projection of a convex body always is.
+* **`method = :soft`** — the tessel *centre* is in or out, smoothed by
+  `wᵢ = σ((dᵢ − R_limb(φᵢ))/width)` against the azimuthal `projected_limb_profile`.
+  Needs no convexity (it degrades gracefully for a near-fillout L1 cusp) and is C∞ rather
+  than C0, so it is the one to use if you ever differentiate through occultation.
+
+Accuracy matters because centre-testing ties the answer to the tessellation. Occulted
+fraction of the secondary's flux at Spica's closest approach, converged value 9.80 %:
+
+| nside₁/₂ | npix₂ | `:soft` | `:exact` |
+|---|---|---|---|
+| 2/1 | 48 | 6.14 (−37 %) | 8.20 (−16 %) |
+| 3/2 | 192 | 5.83 (**−41 %**) | 9.32 (**−5 %**) |
+| 4/3 | 768 | 10.13 (+3.3 %) | 9.68 (−1.2 %) |
+| 5/4 | 3072 | 9.88 (+0.9 %) | 9.77 (−0.3 %) |
+| 6/5 | 12288 | 9.83 | 9.79 |
+
+`:exact` costs 1.15 ms against 0.22 ms at nside 4/3 — negligible next to a ~5 ms frame,
+and only on epochs that actually overlap. Only tessels that straddle the limb pay for the
+clip; the rest are settled by a per-tessel circle test against the hull's inscribed and
+circumscribed radii.
+
+An O(1) bounding-circle test short-circuits the overwhelmingly common non-overlapping
+case, returning `(nothing, nothing, 0)` with no allocation.
 
 For Spica this is not academic: with R₁ = 7.40 R☉, R₂ = 3.74 R☉ and a = 25.5 R☉ the
-minimum projected separation is 0.594 mas against R₁+R₂ = 0.673 mas, i.e. a grazing
-eclipse — independently consistent with the MOST photometry (Desmet et al. 2009, reported
-in Aufdenberg et al. 2015).
+minimum projected separation is 0.594 mas against R₁+R₂ = 0.673 mas — a grazing eclipse,
+independently consistent with the MOST photometry (Desmet et al. 2009, reported in
+Aufdenberg et al. 2015). At closest approach the near component hides **~10% of the far
+component's projected flux, ~1.7% of the system total** — an order of magnitude larger
+than the irradiation signature being looked for.
+
+## Apsidal motion and period change
+
+`omega_at(bparams, tepoch)` advances the argument of periapsis, `ω(t) = ω₀ + dω·(t − T0)`
+with `dω` in degrees/day. It is applied by `binary_orbit_rel`, `binary_orbit_abs`,
+`binary_RV`, `binary_proj_plane` and `binary_frame`. `dω` was previously declared in
+`binaryparameters` and used nowhere; for Spica (U ≈ 139 yr, dω/dt ≈ 2.6°/yr) ω advances
+~21° across the 2007–2015 CHARA campaigns, displacing the predicted secondary position by
+up to **0.44 mas** against MIRC's ~0.01–0.05 mas precision.
+
+`compute_eccentric_anomaly` applies `dP` (= Ṗ in days/day) through the quadratic ephemeris
+`t_n = T0 + P·n + ½·Ṗ·P·n²`. Both signs are honoured; the guard was previously
+`dP > 1e-12`, which silently dropped shrinking periods back onto a constant period — worth
+65° of orbital phase after 10⁴ d at β Lyrae's rate.
+
+## Synchronicity
+
+`synchronicity(p) = p.P / p.rotation_period` is `F = ω_rot/ω_orb`, the ratio of **angular
+rates** — the same `F` as PHOEBE's `syncpar`, ELISa's `synchronicity` and `P` in
+`RocheLobe.f90`, and the quantity entering the centrifugal term as `½F²(1+q)r²(1−ν²)`.
+
+This was previously computed as `rotation_period/P`, the reciprocal, contradicting the
+code's own comments. Invisible for a synchronous binary, but Spica's primary is strongly
+supersynchronous (v sin i = 161 km/s ⇒ F ≈ 1.92), where the inversion scales the
+centrifugal term by F⁴ ≈ 13.6 and gives 0.5% rotational flattening instead of 9.4%.
+Verified against `libphoebe.roche_Omega(q, F, d, [x,y,z])` at F = 0.521, 1.0 and 1.92.
+
+Note the demos still set `rotation_period = P_orb` (synchronous). Modelling Spica properly
+means setting `rotation_period = P/1.92` for the primary and `P/1.65` for the secondary.
 
 ## The tidal term for an eccentric orbit
 

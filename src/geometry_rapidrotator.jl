@@ -79,7 +79,7 @@ end
 # end
 
 # von Zeipel law
-@views function temperature_map_vonZeipel_rapid_rotator(stellar_parameters,star; offsets = [0.0,0.0,0.0], GM = 1.0, T=Float32)
+@views function temperature_map_vonZeipel_rapid_rotator(stellar_parameters, star; offsets = [0.0,0.0,0.0], GM = 1.0, T=eltype(star))
   p = convert_params(T, stellar_parameters)
   toff= T.(offsets)'
   GM = T(GM)

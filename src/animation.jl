@@ -19,7 +19,8 @@
                       reflection=true, albedo1=0.6, albedo2=0.6,
                       ldbol1=(ldtype=0,), ldbol2=(ldtype=0,), method=:horvat,
                       volume_conserving=false, omega1=nothing, omega2=nothing,
-                      T=Float32, kernel_eltype=Float64)
+                      T=promote_type(eltype(tessels1), eltype(tessels2)),
+                      kernel_eltype=Float64)
         -> (star1, star2, tmap1, tmap2, tmap1_intrinsic, tmap2_intrinsic)
 
 One frame's worth of physics: both meshes in the common orbital frame, their intrinsic
@@ -36,7 +37,8 @@ function binary_frame_maps(tessels1::tessellation, params1,
                            method::Symbol = :horvat,
                            volume_conserving::Bool = false,
                            omega1 = nothing, omega2 = nothing,
-                           T = Float32, kernel_eltype::Type = Float64,
+                           T = promote_type(eltype(tessels1), eltype(tessels2)),
+                           kernel_eltype::Type = Float64,
                            kernels = nothing)
     star1, star2 = create_binary_geometry(tessels1, params1, tessels2, params2,
                                           bparams, tepoch_jd;
@@ -94,7 +96,8 @@ function binary_movie(bparams, tessels1::tessellation, params1,
                       reflection::Bool = true, albedo1 = 0.6, albedo2 = 0.6,
                       ldbol1 = (ldtype = 0,), ldbol2 = (ldtype = 0,),
                       method::Symbol = :horvat, volume_conserving::Bool = false,
-                      T = Float32, kernel_eltype::Type = Float64,
+                      T = promote_type(eltype(tessels1), eltype(tessels2)),
+                      kernel_eltype::Type = Float64,
                       intensity::Bool = true, intensity_model::Symbol = :planck,
                       band = 1.65e-6, colormap = "gist_heat",
                       diff_colormap = "inferno", figsize = nothing, pad = 0.25,

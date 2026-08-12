@@ -75,7 +75,10 @@ function binary_frame(bparams, tepoch_jd)
     # the relative position is r ∝ cos(ν) e₁ + sin(ν) e₂, so h ∝ e₁ × e₂.
     Ω = bparams.Ω * pi / 180.0
     i = bparams.i * pi / 180.0
-    ω = bparams.ω * pi / 180.0
+    # ẑ below is the orbit-plane normal, which is set by Ω and i alone — apsidal motion
+    # rotates e1/e2 *within* the plane and leaves e1×e2 invariant. `omega_at` is used
+    # anyway so this stays consistent with binary_orbit_abs if the derivation changes.
+    ω = omega_at(bparams, tepoch_jd)
     L1, M1, N1, L2, M2, N2 = compute_coeff(Ω, i, ω)
     e1 = collect(sky_of_orbit(L1, M1, -N1))   # compute_xyz_abs returns z = -astro_z
     e2 = collect(sky_of_orbit(L2, M2, -N2))
@@ -88,7 +91,7 @@ end
 
 """
     create_binary_star(tessels, star_params, bparams, tepoch_jd;
-                       secondary=false, T=Float32, κ=T(50),
+                       secondary=false, T=eltype(tessels), κ=T(50),
                        volume_conserving=false, omega=nothing)
 
 One component of a binary, deformed by the *shared* instantaneous separation `D(t)` and
@@ -108,7 +111,7 @@ The vertices are centred on this component. Its offset from the primary lives in
 `center_offsets`, set by [`create_binary_geometry`](@ref).
 """
 function create_binary_star(tessels::tessellation, star_params, bparams, tepoch_jd;
-                            secondary=false, T=Float32, κ=T(50),
+                            secondary=false, T=eltype(tessels), κ=T(50),
                             volume_conserving=false, omega=nothing)
     R, D_mas, _ = binary_frame(bparams, tepoch_jd)
     p = convert_params(T, star_params)
@@ -132,7 +135,8 @@ end
 
 """
     create_binary_geometry(tessels1, params1, tessels2, params2, bparams, tepoch_jd;
-                           T=Float32, κ=T(50), volume_conserving=false,
+                           T=promote_type(eltype(tessels1), eltype(tessels2)), κ=T(50),
+                           volume_conserving=false,
                            omega1=nothing, omega2=nothing) -> (star1, star2)
 
 Both components at one epoch, in one frame. The secondary is built with `secondary=true`
@@ -149,7 +153,8 @@ arrays themselves stay centred on their own component, so `polyft` and
 function create_binary_geometry(tessels1::tessellation, params1,
                                 tessels2::tessellation, params2,
                                 bparams, tepoch_jd;
-                                T=Float32, κ=T(50), volume_conserving=false,
+                                T=promote_type(eltype(tessels1), eltype(tessels2)), κ=T(50),
+                                volume_conserving=false,
                                 omega1=nothing, omega2=nothing)
     star1 = create_binary_star(tessels1, params1, bparams, tepoch_jd;
                                secondary=false, T=T, κ=κ,
@@ -203,14 +208,16 @@ quantity is exactly the thing the forward model sees. It is also ~5× cheaper th
 function roche_mesh_volume(tessels::tessellation, star_params, D, Ω; secondary=false)
     p = star_params
     pf = secondary ? compute_potential_secondary : compute_potential_primary
-    async_ratio = p.rotation_period / p.P
+    async_ratio = synchronicity(p)
     q = p.q
     r0 = p.rpole / p.a          # the pole is the minimum radius: always inside the surface
     dΩ = tessel_solid_angles(tessels)
+    # Angles follow the mesh; the ACCUMULATOR stays Float64 regardless. Same rule as the χ²:
+    # per-element quantities take the data's type, a summed scalar takes the wider one.
     V = 0.0
     @inbounds for i in 1:tessels.npix
-        θ = Float64(tessels.unit_spherical[i, 5, 2])
-        φ = Float64(tessels.unit_spherical[i, 5, 3])
+        θ = tessels.unit_spherical[i, 5, 2]
+        φ = tessels.unit_spherical[i, 5, 3]
         r = solve_radius(r0, Ω, D, θ, φ, q, async_ratio, pf; verbose=false, secondary=secondary)
         V += r^3 * dΩ[i]
     end
@@ -218,24 +225,32 @@ function roche_mesh_volume(tessels::tessellation, star_params, D, Ω; secondary=
 end
 
 """
-    tessel_solid_angles(tessels) -> Vector
+    tessel_solid_angles(tessels) -> Vector{eltype(tessels)}
 
 Solid angle subtended by each tessel on the unit sphere, from the two-triangle area of
 its unit-sphere corners. For HEALPix these are all equal (`≈ 4π/npix`); for the
 latitude/longitude scheme they are not, hence the explicit computation.
+
+Returns the **mesh's own float type**. The renormalising sum is accumulated in `Float64`
+and the scale factor narrowed back, so a Float32 mesh gives `Σ ΔΩ = 4π` to ~3e-8 relative
+rather than being silently widened to `Float64`.
 """
 function tessel_solid_angles(tessels::tessellation)
     n = tessels.npix
     u = tessels.unit_xyz
-    A = Vector{Float64}(undef, n)
+    Tel = float(eltype(tessels))
+    A = Vector{Tel}(undef, n)
     @inbounds for i in 1:n
         e1 = (u[i,2,1]-u[i,1,1], u[i,2,2]-u[i,1,2], u[i,2,3]-u[i,1,3])
         e2 = (u[i,3,1]-u[i,1,1], u[i,3,2]-u[i,1,2], u[i,3,3]-u[i,1,3])
         e3 = (u[i,4,1]-u[i,1,1], u[i,4,2]-u[i,1,2], u[i,4,3]-u[i,1,3])
         A[i] = (_cross_norm(e1, e2) + _cross_norm(e2, e3)) / 2
     end
-    # Flat quads slightly under-cover the sphere; renormalise so Σ ΔΩ = 4π exactly.
-    return A .* (4pi / sum(A))
+    # Flat quads slightly under-cover the sphere; renormalise so Σ ΔΩ = 4π.
+    # The normalising sum is accumulated WIDE and the scale factor is then narrowed back to
+    # the mesh type — `A .* (4pi / sum(A))` would have promoted the whole array to Float64,
+    # because `4pi` is Float64, silently undoing the element type chosen just above.
+    return A .* Tel(4π / sum(Float64, A))
 end
 
 """
@@ -264,7 +279,7 @@ Wilson–Devinney and PHOEBE legacy reference **periastron** (`D = 1 − e`). PH
 function roche_omega_for_volume(tessels::tessellation, star_params, D; secondary=false,
                                 V_target=nothing, D_ref=1.0, rtol=1e-6)
     p = star_params
-    async_ratio = p.rotation_period / p.P
+    async_ratio = synchronicity(p)
     q = p.q
     pot_fun = secondary ? compute_potential_secondary : compute_potential_primary
 
@@ -331,6 +346,252 @@ two components overlap on the image plane, as opposed to the 3-D separation retu
 function projected_separation(bparams, tepoch_jd)
     ox, oy = orbit_to_rotir_offset(bparams, Float64(tepoch_jd))
     return hypot(ox, oy)
+end
+
+"""
+    projected_limb_profile(star; nbins=72) -> (r_max, nbins)
+
+Azimuthal profile of a component's projected outline: the maximum projected radius of any
+vertex, binned by position angle about the component's own projected centre.
+
+A tidally distorted lobe is not a circle on the sky, so a single radius would either
+over- or under-occult depending on orientation. `nbins = 72` (5° bins) resolves the ~10%
+tidal elongation of a Spica-like lobe with margin.
+"""
+function projected_limb_profile(star; nbins::Int = 72)
+    T = float(real(eltype(star.proj_west)))
+    rmax = zeros(T, nbins)
+    pw = star.proj_west; pn = star.proj_north
+    @inbounds for i in 1:star.npix, v in 1:4
+        x = -pw[i, v]; y = pn[i, v]                       # East, North
+        r = hypot(x, y)
+        b = mod(floor(Int, (atan(y, x) + pi) / (2pi) * nbins), nbins) + 1
+        rmax[b] = max(rmax[b], r)
+    end
+    # Empty bins happen whenever nbins is comparable to the vertex count (a coarse mesh).
+    # Fill them by interpolating between the nearest occupied neighbours — filling with
+    # the global maximum instead would put radial spikes in the profile.
+    if any(iszero, rmax)
+        occupied = findall(!iszero, rmax)
+        isempty(occupied) && error("projected_limb_profile: no vertices?")
+        @inbounds for b in 1:nbins
+            iszero(rmax[b]) || continue
+            # nearest occupied bin on each side, wrapping
+            lo = hi = 0
+            for d in 1:nbins
+                l = mod(b - d - 1, nbins) + 1; h = mod(b + d - 1, nbins) + 1
+                lo == 0 && !iszero(rmax[l]) && (lo = l)
+                hi == 0 && !iszero(rmax[h]) && (hi = h)
+                lo != 0 && hi != 0 && break
+            end
+            rmax[b] = (rmax[lo] + rmax[hi]) / 2
+        end
+    end
+    return rmax
+end
+
+"""
+    convex_hull_2d(xs, ys) -> (hx, hy)
+
+Convex hull of a 2-D point set, counter-clockwise, by Andrew's monotone chain
+(O(n log n)).
+
+Used for the exact occultation path: `polygon_convex_clip_area` intersects half-planes,
+which only reproduces the clip polygon if that polygon is genuinely convex. An
+azimuthally-sampled outline is *not* — with a coarse mesh it is spiky, and the half-plane
+intersection then collapses to nothing. The hull of the projected vertices is convex by
+construction and is also the geometrically correct silhouette, since the projection of a
+convex body is convex.
+
+(For a lobe close to filling its Roche surface the true silhouette has an L1 cusp and is
+slightly non-convex; the hull then very slightly over-occults near the tip. Detached
+systems, where the silhouette really is convex, are exact.)
+"""
+function convex_hull_2d(xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real})
+    T = float(promote_type(eltype(xs), eltype(ys)))
+    n = length(xs)
+    n < 3 && return (collect(T.(xs)), collect(T.(ys)))
+    idx = sortperm(collect(zip(T.(xs), T.(ys))))
+    cross3(o, a, b) = (xs[a]-xs[o])*(ys[b]-ys[o]) - (ys[a]-ys[o])*(xs[b]-xs[o])
+    hull = Int[]
+    for i in idx                                   # lower hull
+        while length(hull) >= 2 && cross3(hull[end-1], hull[end], i) <= 0; pop!(hull); end
+        push!(hull, i)
+    end
+    lower = length(hull) + 1
+    for i in Iterators.reverse(idx)                # upper hull
+        while length(hull) >= lower && cross3(hull[end-1], hull[end], i) <= 0; pop!(hull); end
+        push!(hull, i)
+    end
+    pop!(hull)                                     # last point repeats the first
+    return (T.(xs[hull]), T.(ys[hull]))
+end
+
+"""
+    limb_radius(profile, φ) -> r
+
+Projected limb radius at position angle `φ` (radians, measured as `atan(North, East)`),
+by linear interpolation between the bin centres of [`projected_limb_profile`](@ref).
+"""
+@inline function limb_radius(profile::AbstractVector{<:Real}, φ::Real)
+    n = length(profile)
+    u = (mod(φ + pi, 2pi) / (2pi)) * n - 0.5      # position in bin-centre coordinates
+    b0 = floor(Int, u)
+    w = u - b0
+    i0 = mod(b0, n) + 1
+    i1 = mod(b0 + 1, n) + 1
+    return (1 - w) * profile[i0] + w * profile[i1]
+end
+
+"""
+    silhouette_polygon(star; nbins=72) -> (sx, sy)
+
+The component's projected outline as an explicit closed polygon in `(East, North)`,
+**relative to its own projected centre** and wound counter-clockwise (as
+`polygon_convex_clip_area` requires).
+
+Built from [`projected_limb_profile`](@ref): vertex `k` sits at the bin-centre angle with
+that bin's maximum projected vertex radius. For a detached lobe the true silhouette is
+convex — the projection of a convex body always is — so this is its convex hull sampled
+azimuthally; for a near-fillout lobe with an L1 cusp it degrades gracefully to the
+star-shaped outline rather than over-occulting the way a strict hull would.
+"""
+function silhouette_polygon(star; nbins::Int = 72)
+    prof = projected_limb_profile(star; nbins=nbins)
+    sx = Vector{eltype(prof)}(undef, nbins); sy = similar(sx)
+    @inbounds for k in 1:nbins
+        φ = -pi + (k - 0.5) * 2pi / nbins
+        sx[k] = prof[k] * cos(φ); sy[k] = prof[k] * sin(φ)
+    end
+    return sx, sy, prof
+end
+
+"""
+    occultation_weights(star1, star2; method=:exact, softness=nothing, nbins=72)
+        -> (w1, w2, occulting)
+
+Soft mutual-occultation factors in `[0,1]`, one per tessel, to multiply into each
+component's `vis_weights`.
+
+`binary_cvis` otherwise sums the two components unconditionally, so the hidden face of the
+far star keeps contributing flux once the disks overlap on the sky. This supplies the
+missing factor, in the same differentiable sigmoid style as `soft_visibility`.
+
+The two components are treated as disjoint convex bodies (the same assumption the
+radiosity solver makes), so whichever centre has the larger toward-observer coordinate is
+in front *everywhere*: only the far star is occulted, and its returned weights are
+
+    wᵢ = σ( (dᵢ − R_limb(φᵢ)) / width )
+
+with `dᵢ`, `φᵢ` the tessel centre's projected distance and position angle from the near
+star's projected centre. `R_limb` follows the near star's actual (possibly tidally
+distorted) outline via [`projected_limb_profile`](@ref).
+
+`method`:
+
+* `:exact` (default) — the **fraction of each far tessel's projected area** that survives,
+  by clipping its quad against the silhouette polygon
+  ([`polygon_convex_clip_area`](@ref)). No free parameters, and the answer no longer
+  depends on the mesh: a tessel straddling the limb is partially occulted, as it should
+  be. Only tessels that actually straddle pay for the clip — the rest are settled by a
+  cheap per-tessel circle test — so this costs about the same as `:soft`.
+* `:soft` — the tessel *centre* is either in or out, smoothed by a sigmoid of width
+  `softness` (a fraction of the limb radius, defaulting to the mesh scale
+  `√(4π/npix)/2`). Cheaper to differentiate through (C∞ rather than C0), but its accuracy
+  is tied to the tessellation: at Spica's closest approach it gives 5.8 % of the
+  secondary's flux occulted at nside 3/2 against a converged 9.8 %, a 40 % error, because
+  the straddling band is a large fraction of a coarse mesh.
+
+**Fast path:** an O(1) bounding-circle test on the projected separation against the sum of
+the two maximum projected radii. When the disks are disjoint — the overwhelmingly common
+case — both weight vectors are `nothing`, which callers treat as "no occultation" with no
+allocation. `occulting` is `0` (none), `1` (star 1 occults star 2) or `2`.
+"""
+function occultation_weights(star1, star2; method::Symbol = :exact,
+                             softness = nothing, nbins::Int = 72)
+    method in (:exact, :soft) ||
+        error("occultation_weights: method must be :exact or :soft (got $(method))")
+    # Geometry follows the meshes; only the epoch (an absolute JD) is forced wide elsewhere.
+    G  = float(promote_type(eltype(star1), eltype(star2)))
+    o1 = G.(star1.center_offsets)
+    o2 = G.(star2.center_offsets)
+    # projected (East, North) centres and the maximum projected radius of each component
+    c1 = (-o1[1], o1[2]); c2 = (-o2[1], o2[2])
+    rad(s) = sqrt(maximum(s.proj_west .^ 2 .+ s.proj_north .^ 2))
+    r1 = rad(star1); r2 = rad(star2)
+    ρ = hypot(c2[1] - c1[1], c2[2] - c1[2])
+    ρ >= r1 + r2 && return (nothing, nothing, 0)          # O(1) reject: disks disjoint
+
+    # Larger toward-observer coordinate is nearer.
+    near_is_1 = o1[3] > o2[3]
+    near, far, cn, cf = near_is_1 ? (star1, star2, c1, c2) : (star2, star1, c2, c1)
+
+    prof = projected_limb_profile(near; nbins=nbins)
+    # The exact path clips against a true convex hull (half-plane intersection is only
+    # valid for a convex clip region); the soft path uses the azimuthal profile, which
+    # needs no convexity.
+    sx, sy = if method === :exact
+        convex_hull_2d(vec(-near.proj_west), vec(near.proj_north))
+    else
+        (G[], G[])
+    end
+    nc = length(sx)
+    Rmax = maximum(prof); Rmin = minimum(prof)
+    w = softness === nothing ? sqrt(4pi / near.npix) / 2 : G(softness)
+    dx = cf[1] - cn[1]; dy = cf[2] - cn[2]     # far centre relative to near centre
+
+    T = eltype(far.proj_west)
+    n = far.npix
+    wf = Vector{T}(undef, n)
+    pw = far.proj_west; pn = far.proj_north
+    # Scratch for the clipper: a 4-gon clipped by an nc-gon has ≤ 4+nc vertices.
+    #
+    # DELIBERATELY Float64 regardless of the mesh type, unlike everything else here. This is
+    # the standard "exact predicates on inexact input" pattern: Sutherland–Hodgman decides
+    # inside/outside from the sign of a cross product, and at a grazing intersection that
+    # sign is the difference of two nearly equal products. In Float32 the sign can flip
+    # spuriously, which does not perturb the clipped area slightly — it changes the vertex
+    # COMBINATORICS and can drop or duplicate a whole corner. Widening the coordinates is
+    # lossless and costs a few hundred bytes of scratch per call.
+    Ax = Vector{Float64}(undef, nc + 8); Ay = similar(Ax)
+    Bx = similar(Ax); By = similar(Ax)
+    qx = Vector{Float64}(undef, 4); qy = Vector{Float64}(undef, 4)
+
+    @inbounds for i in 1:n
+        # the tessel's four projected corners, relative to the near star's centre
+        cx = 0.0; cy = 0.0
+        for v in 1:4
+            qx[v] = -Float64(pw[i, v]) + dx
+            qy[v] =  Float64(pn[i, v]) + dy
+            cx += qx[v]; cy += qy[v]
+        end
+        cx /= 4; cy /= 4
+        d = hypot(cx, cy)
+
+        if method === :soft
+            wf[i] = T(sigmoid((d - limb_radius(prof, atan(cy, cx))) / (w * limb_radius(prof, atan(cy, cx)))))
+            continue
+        end
+
+        # cheap per-tessel accept/reject: circumradius of the quad about its centroid
+        rt = 0.0
+        for v in 1:4; rt = max(rt, hypot(qx[v] - cx, qy[v] - cy)); end
+        if d - rt >= Rmax
+            wf[i] = one(T); continue           # wholly outside the silhouette
+        elseif d + rt <= Rmin
+            wf[i] = zero(T); continue          # wholly inside it (Rmin disc ⊂ silhouette)
+        end
+        # straddling: exact clipped-area fraction
+        atot = _shoelace(qx, qy, 4)
+        if atot <= 0
+            wf[i] = one(T)
+        else
+            ahid = polygon_convex_clip_area(qx, qy, 4, sx, sy, nc, Ax, Ay, Bx, By)
+            wf[i] = T(clamp(1 - ahid / atot, 0, 1))
+        end
+    end
+    ones_near = ones(T, near.npix)
+    return near_is_1 ? (ones_near, wf, 1) : (wf, ones_near, 2)
 end
 
 """

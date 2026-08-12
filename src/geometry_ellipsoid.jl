@@ -1,4 +1,4 @@
-@views function temperature_map_vonZeipel_ellipsoid(stellar_parameters,star; offsets = [0.0,0.0,0.0], T=Float32)
+@views function temperature_map_vonZeipel_ellipsoid(stellar_parameters, star; offsets = [0.0,0.0,0.0], T=eltype(star))
     p = convert_params(T, stellar_parameters)
     toff= T.(offsets)'
     r_theta = sqrt.(dropdims(sum(abs2, (star.vertices_xyz[:,5,:] .- toff), dims=2), dims=2));

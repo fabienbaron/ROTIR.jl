@@ -5,7 +5,10 @@ import OITOOLS: OIdata,
     plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_residuals,
     DataBlocks, data_blocks, resample_blocks, block_counts, block_weights,
     apply_block_counts, apply_block_weights, perturb_data,
-    BootstrapResult, bootstrap_driver
+    BootstrapResult, bootstrap_driver,
+    visibility_ud, visibility_ldlin, visibility_ldquad, visibility_ldpow,
+    visibility_Gaussian,
+    cvis_to_chi2_f, cvis_to_chi2_fg
 using Statistics
 using LinearAlgebra
 using Printf
@@ -42,6 +45,10 @@ export plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_resid
 export DataBlocks, data_blocks, resample_blocks, block_counts, block_weights
 export apply_block_counts, apply_block_weights, perturb_data
 export BootstrapResult, bootstrap_driver
+# Analytic component visibilities — useful for quick parametric fits (e.g. per-epoch
+# binary astrometry) alongside ROTIR's tessellated surface models.
+export visibility_ud, visibility_ldlin, visibility_ldquad, visibility_ldpow
+export visibility_Gaussian
 
 # Tessellation
 export tessellation
@@ -63,6 +70,9 @@ export oblate_const
 export binary_frame, sky_of_orbit
 export create_binary_star, create_binary_geometry, create_binary_geometry_multiepochs
 export projected_separation, check_binary_overlap
+export occultation_weights, projected_limb_profile, limb_radius, silhouette_polygon, convex_hull_2d
+export polygon_convex_clip_area
+export omega_at
 export roche_omega_for_volume, roche_omega_table, roche_mesh_volume, tessel_solid_angles
 export finish_star
 
@@ -74,7 +84,7 @@ export reflection_kernels, solve_radiosity, handle_reflection
 export intensity, planck_and_dT, band_of
 
 # Geometry: Roche lobe
-export update_roche_radii, get_surface_potential
+export update_roche_radii, get_surface_potential, synchronicity
 export compute_potential_primary, compute_potential_secondary, solve_radius
 export solve_R_L1, solve_R_L2, solve_R_L3, solve_lagrange_points
 export brent_root, roche_polar_radius
@@ -92,12 +102,12 @@ export parametric_temperature_map, spheroid_parametric_f
 
 # Orbits
 export compute_eccentric_anomaly, compute_true_anomaly
-export compute_E_NR, compute_coeff, compute_xyz_rel
+export compute_E_NR, kepler_E, kepler_E_vec, compute_coeff, compute_xyz_rel
 export binary_orbit_rel, binary_orbit_abs, binary_RV, binary_proj_plane
 
 # OI chi2 and reconstruction
 export setup_oi!, setup_polygon_ft, setup_polyflux_single, setup_polyft_single, setup_polyft_single_alt
-export observables, cvis_to_obs, chi2s, mod360
+export observables, cvis_to_obs, cvis_chi2, OI_DEFAULT_WEIGHTS, chi2s, mod360
 export spheroid_chi2_f, spheroid_chi2_fg
 export spheroid_chi2_allepochs_fg, spheroid_chi2_allepochs_f
 export spheroid_total_variation, spheroid_crit_multiepochs_fg

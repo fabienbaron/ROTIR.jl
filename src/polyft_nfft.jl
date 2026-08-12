@@ -54,7 +54,8 @@ const _GL_WEIGHTS = Dict{Int,Vector{Float64}}(
 )
 
 """
-    build_gauss_samples(proj_west, proj_north, x_weighted; ngauss=4, nsub=1, T=Float32)
+    build_gauss_samples(proj_west, proj_north, x_weighted; ngauss=4, nsub=1,
+                        T=float(real(eltype(proj_west))))
 
 Build Gauss-Legendre quadrature samples for each quadrilateral by subdividing
 the reference square `[-1,1]^2` into `nsub x nsub` equal sub-squares and
@@ -69,7 +70,8 @@ Returns `(xs, ys, fs)` with length `(ngauss*nsub)^2 * Npix`.
 """
 function build_gauss_samples(proj_west::AbstractMatrix, proj_north::AbstractMatrix,
                               x_weighted::AbstractVector;
-                              ngauss::Int=4, nsub::Int=1, T::Type=Float32)
+                              ngauss::Int=4, nsub::Int=1,
+                              T::Type = float(real(eltype(proj_west))))
     @assert haskey(_GL_NODES, ngauss) "ngauss must be one of $(sort(collect(keys(_GL_NODES))))"
     @assert nsub >= 1 "nsub must be >= 1"
     nodes_f64 = _GL_NODES[ngauss]
@@ -135,7 +137,7 @@ end
 
 """
     polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize, nx;
-                        ngauss=4, nsub=1, T=Float32)
+                        ngauss=4, nsub=1, T=float(real(eltype(proj_west))))
 
 Compute `F[k] ~ sum_p x_weighted[p] * integral_polygon_p exp(-2*pi*i * k . r) dA`
 via an adjoint NFFT at Gauss-Legendre samples inside each quadrilateral.
@@ -165,7 +167,7 @@ Convention notes:
 """
 function polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize::Real,
                               nx::Integer; ngauss::Int=4, nsub::Int=1,
-                              T::Type=Float32, fftflags=FFTW.MEASURE)
+                              T::Type = float(real(eltype(proj_west))), fftflags=FFTW.MEASURE)
     xs, ys, fs = build_gauss_samples(proj_west, proj_north, x_weighted;
                                       ngauss=ngauss, nsub=nsub, T=T)
     Ns = length(xs)
@@ -188,7 +190,7 @@ end
 
 """
     polyft_nfft_image(proj_west, proj_north, x_weighted, pixsize, nx;
-                      ngauss=4, nsub=1, T=Float32)
+                      ngauss=4, nsub=1, T=float(real(eltype(proj_west))))
 
 Convenience function: compute the NFFT-based Fourier coefficients and
 immediately inverse-FFT them to produce a real-space `(nx, nx)` image.
@@ -198,7 +200,7 @@ Same as `polyft_nfft_forward`.
 """
 function polyft_nfft_image(proj_west, proj_north, x_weighted, pixsize::Real,
                             nx::Integer; ngauss::Int=4, nsub::Int=1,
-                            T::Type=Float32, fftflags=FFTW.MEASURE)
+                            T::Type = float(real(eltype(proj_west))), fftflags=FFTW.MEASURE)
     F = polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize, nx;
                              ngauss=ngauss, nsub=nsub, T=T, fftflags=fftflags)
     return fftshift(irfft(F, nx))

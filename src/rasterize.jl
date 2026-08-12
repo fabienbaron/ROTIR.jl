@@ -105,6 +105,80 @@ end
     return m
 end
 
+# --- Sutherland-Hodgman clip against an arbitrary half-plane -----------------
+# The four routines above are specialised to axis-aligned half-planes (fast path for
+# pixel rasterization). This is the general case: keep the part of the subject polygon
+# lying to the LEFT of the directed edge a -> b, which for a counter-clockwise clip
+# polygon is its interior. Used by `polygon_convex_clip_area` for mutual occultation,
+# where the clip region is a star's projected silhouette rather than a pixel.
+
+@inline function _clip_halfplane!(in_x, in_y, n::Int, ax::T, ay::T, bx::T, by::T,
+                                  out_x, out_y) where T
+    m = 0
+    ex = bx - ax; ey = by - ay
+    @inbounds for i in 1:n
+        j = i == n ? 1 : i + 1
+        xi = in_x[i]; yi = in_y[i]
+        xj = in_x[j]; yj = in_y[j]
+        si = ex*(yi - ay) - ey*(xi - ax)      # >= 0 ⇒ inside (left of a→b)
+        sj = ex*(yj - ay) - ey*(xj - ax)
+        if sj >= 0
+            if si < 0
+                t = si / (si - sj)
+                m += 1; out_x[m] = xi + t*(xj - xi); out_y[m] = yi + t*(yj - yi)
+            end
+            m += 1; out_x[m] = xj; out_y[m] = yj
+        elseif si >= 0
+            t = si / (si - sj)
+            m += 1; out_x[m] = xi + t*(xj - xi); out_y[m] = yi + t*(yj - yi)
+        end
+    end
+    return m
+end
+
+@inline function _shoelace(x, y, n::Int)
+    n < 3 && return zero(eltype(x))
+    s = zero(eltype(x))
+    @inbounds for i in 1:n
+        j = i == n ? 1 : i + 1
+        s += x[i]*y[j] - x[j]*y[i]
+    end
+    return abs(s) / 2
+end
+
+"""
+    polygon_convex_clip_area(px, py, np, cx, cy, nc, Ax, Ay, Bx, By) -> area
+
+Exact area of the intersection between a subject polygon `(px, py)` of `np` vertices and a
+**convex, counter-clockwise** clip polygon `(cx, cy)` of `nc` vertices, by Sutherland–
+Hodgman clipping followed by the shoelace formula.
+
+Scratch buffers `Ax, Ay, Bx, By` must each hold at least `np + nc` elements (the clip of an
+n-gon by an m-gon has at most n + m vertices).
+
+This is the general-clip-region counterpart of [`quad_box_area`](@ref); it is what makes
+mutual occultation exact rather than a per-tessel centre test — see
+`occultation_weights(...; method = :exact)`.
+"""
+function polygon_convex_clip_area(px, py, np::Int, cx, cy, nc::Int, Ax, Ay, Bx, By)
+    T = eltype(Ax)
+    np < 3 && return zero(T)
+    @inbounds for i in 1:np; Ax[i] = T(px[i]); Ay[i] = T(py[i]); end
+    n = np
+    src_is_A = true
+    @inbounds for k in 1:nc
+        k2 = k == nc ? 1 : k + 1
+        if src_is_A
+            n = _clip_halfplane!(Ax, Ay, n, T(cx[k]), T(cy[k]), T(cx[k2]), T(cy[k2]), Bx, By)
+        else
+            n = _clip_halfplane!(Bx, By, n, T(cx[k]), T(cy[k]), T(cx[k2]), T(cy[k2]), Ax, Ay)
+        end
+        src_is_A = !src_is_A
+        n < 3 && return zero(T)      # clipped away entirely
+    end
+    return src_is_A ? _shoelace(Ax, Ay, n) : _shoelace(Bx, By, n)
+end
+
 """
     quad_box_area(q1x,q1y,q2x,q2y,q3x,q3y,q4x,q4y, xmin,xmax,ymin,ymax, Ax,Ay,Bx,By)
 
@@ -229,7 +303,7 @@ end
 
 """
     rasterize_polygon_image(proj_west, proj_north, x_weighted, pixsize, nx;
-                            cx=nx/2+1, cy=nx/2+1, T=Float32)
+                            cx=nx/2+1, cy=nx/2+1, T=float(real(eltype(x_weighted))))
 
 Non-mutating convenience wrapper: allocates and returns an `(nx, nx)` image.
 
@@ -241,7 +315,7 @@ Non-mutating convenience wrapper: allocates and returns an `(nx, nx)` image.
 """
 function rasterize_polygon_image(proj_west, proj_north, x_weighted, pixsize, nx;
                                   cx::Real=nx ÷ 2 + 1, cy::Real=nx ÷ 2 + 1,
-                                  T::Type=Float32)
+                                  T::Type = float(real(eltype(x_weighted))))
     img = zeros(T, nx, nx)
     rasterize_polygon_image!(img, proj_west, proj_north, x_weighted, pixsize; cx=cx, cy=cy)
     return img

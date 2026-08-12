@@ -38,13 +38,15 @@ ROTIRZygoteExt = "Zygote"
 # OITOOLS is unregistered: this tells Pkg where to get it, so a fresh clone can
 # `Pkg.instantiate()` with no local checkout. To work against a
 # local checkout instead, `Pkg.develop(path="../OITOOLS.jl")` — that wins in the Manifest.
+# Deliberately no `rev`: that tracks the default branch. (`Pkg.add(url=...)` will rewrite
+# this file and pin `rev = "main"`; prefer `Pkg.update("OITOOLS")` to move it forward.)
 [sources]
 OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
 
 [compat]
 ChainRulesCore = "1.26.1"
 FiniteDifferences = "0.12.34"
-OITOOLS = "0.9"
+OITOOLS = "0.10"
 PrecompileTools = "1.2"
 Zygote = "0.7.11"
 julia = "1.11"   # `[sources]` (see above) requires Pkg ≥ 1.11
