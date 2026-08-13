@@ -32,7 +32,7 @@
 # Knobs: LIVE=400  FREEDIAM=1  FITDW=1  OUTDIR=...
 
 ENV["MPLBACKEND"] = get(ENV, "MPLBACKEND", "Agg")
-using ROTIR, PyPlot, PyCall, Printf, Statistics, LinearAlgebra, DelimitedFiles
+using ROTIR, PythonPlot, PythonCall, Printf, Statistics, LinearAlgebra, DelimitedFiles
 using SpecialFunctions: besselj1
 include(joinpath(@__DIR__, "spica_params.jl"))
 

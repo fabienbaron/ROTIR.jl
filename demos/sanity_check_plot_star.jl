@@ -1,5 +1,5 @@
 using ROTIR
-using PyPlot
+using PythonPlot
 
 # Simple limb-darkened sphere: inclination 35°, PA 20°
 star_params = (

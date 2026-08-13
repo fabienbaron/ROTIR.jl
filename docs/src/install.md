@@ -10,7 +10,7 @@
 | SparseArrays | Sparse total variation matrices |
 | Statistics | Mean, standard deviation |
 | FITSIO | Reading/writing FITS images |
-| PyCall / PyPlot | Matplotlib-based plotting |
+| PythonCall / PythonPlot | Matplotlib-based plotting |
 
 ## Step 1: Julia registry
 
@@ -36,18 +36,21 @@ Pkg.add(url="https://github.com/fabienbaron/ROTIR.jl.git")
 
 ## Python / matplotlib
 
-ROTIR uses PyPlot.jl for plotting, which requires a Python environment with
-matplotlib installed. If you see a `PyImport_ImportModule` error when loading
-ROTIR, the simplest fix is to let Julia manage its own Python via Conda.jl:
+ROTIR uses PythonPlot.jl for plotting, which needs a Python environment with
+matplotlib. You normally do not have to do anything: PythonCall manages a private
+environment through CondaPkg, and installs matplotlib (plus `ultranest` and
+`astroquery`, declared by OITOOLS) on first use.
 
-```julia
-ENV["PYTHON"] = ""
-using Pkg
-Pkg.build("PyCall")
-```
+Two notes if you are coming from the PyCall era:
 
-Then restart Julia. PyCall will use a private Conda Python with matplotlib
-installed automatically.
+* `ENV["PYTHON"]` and `Pkg.build("PyCall")` no longer apply. To point PythonCall at an
+  interpreter you already have, set `JULIA_PYTHONCALL_EXE` to its absolute path and
+  `JULIA_CONDAPKG_BACKEND=Null`; that environment must then supply matplotlib itself.
+* OITOOLS ≥ 0.11.1 requires **numpy ≥ 2**. PythonCall's `__array__` passes
+  `copy=None`, the numpy-2 spelling of "copy only if needed", which numpy 1.x rejects
+  with `ValueError: NoneType copy mode not allowed`. The failure is data-dependent —
+  dense arrays convert fine while nested vertex lists do not — so an old numpy tends to
+  surface as plots failing rather than as an import error.
 
 ## Verify
 

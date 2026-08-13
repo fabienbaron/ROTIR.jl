@@ -99,7 +99,7 @@ F = polyft_nfft_forward(pw, pn, x_weighted, pixsize, nx; ngauss=6)
 #   cols match fftfreq  (standard FFT order)
 
 # Step 3: Inspect visibilities (fftshift for centered display)
-using PyPlot
+using PythonPlot
 imshow(log10.(abs.(fftshift(F, 2))), origin="lower", cmap="inferno")
 
 # Step 4: Inverse real-FFT to recover the image

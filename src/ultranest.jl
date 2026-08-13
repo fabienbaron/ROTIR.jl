@@ -81,38 +81,50 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
                                  intensity_model=intensity_model, band=band,
                                  κ=κ, GM=GM, tpole_free=tpole_free, logprior=logprior)
 
-    # UltraNest works on the unit hypercube; the transform makes it a uniform box prior.
-    transform(cube) = lo .+ (hi .- lo) .* collect(Float64, cube)
-
-    # NOTE: UltraNest applies `transform` itself and passes `loglike` the PHYSICAL parameters,
-    # NOT the unit cube. This function previously re-applied the transform here, which
-    # double-maps every parameter (a radius of 1.465 with bounds [0.05, 20] became 29.3) and
-    # makes the sampler converge confidently on nonsense — tight error bars around a χ² many
-    # orders of magnitude worse than the true optimum. Fixed 2026-08-12; any result obtained
-    # from this function before that date should be discarded.
-    function loglike(params)
+    # VECTORISED likelihood and transform, following OITOOLS' fit_model_ultranest. UltraNest
+    # hands over a whole BATCH of points as an n x d numpy array and expects arrays back, so
+    # the Julia<->Python crossing is paid once per batch rather than once per live point.
+    #
+    # Three PythonCall details, each of which PyCall used to hide:
+    #   * ARGUMENTS arrive as `Py`. Annotating the closure `::AbstractMatrix{<:Real}` makes
+    #     PythonCall convert the numpy batch to a Julia matrix; without it, `collect` raises
+    #     `MethodError: no method matching (Array{Float64})(::Py)`.
+    #   * RETURN values need `.to_numpy()`. A bare Julia array reaches Python as a
+    #     `juliacall.VectorValue`, on which UltraNest calls numpy methods (`.transpose`).
+    #   * `names` must be a real Python list: UltraNest evaluates `names + [...]`, and a
+    #     `VectorValue` does not support `+`.
+    #
+    # UltraNest applies `transform` itself and passes the likelihood the PHYSICAL parameters,
+    # NOT the unit cube. This function previously re-applied the transform inside the
+    # likelihood, double-mapping every parameter (a radius of 1.465 with bounds [0.05, 20]
+    # became 29.3) so the sampler converged confidently on nonsense — tight error bars around
+    # a chi2 many orders of magnitude worse than the true optimum. Fixed 2026-08-12; discard
+    # any result from this function predating that.
+    transform_v = let lo = lo, hi = hi
+        (U::AbstractMatrix{<:Real}) ->
+            Py(reduce(vcat, (u -> (lo .+ (hi .- lo) .* u)').(eachrow(U)))).to_numpy()
+    end
+    function loglike_1(params)
         θtry = copy(θ)
         θtry[idx] .= T.(collect(Float64, params))
         v = logπ(θtry)
         # NaN/Inf (e.g. a degenerate geometry) must not reach the sampler
         return isfinite(v) ? Float64(v) : -1e30
     end
+    loglike_v = (X::AbstractMatrix{<:Real}) -> Py(loglike_1.(eachrow(X))).to_numpy()
 
-    # PyCall is not thread-safe: `pydecref_` calls Py_DecRef with no GIL check, so a PyObject
-    # finalizer running on a worker thread kills the process with SIGSEGV — part-way through
-    # the run, discarding the sampling done so far. This happens even though the likelihood
-    # never touches Python, and it is easy to hit without realising because JULIA_NUM_THREADS
-    # may be set in the environment. Fail immediately with an actionable message instead.
-    if Threads.nthreads() > 1
-        error("""
-              UltraNest cannot be used with $(Threads.nthreads()) Julia threads: PyCall is not
-              thread-safe and the run will segfault. Restart single-threaded, e.g.
-
-                  JULIA_NUM_THREADS=1 julia --project=... yourscript.jl
-                  julia -t 1 --project=... yourscript.jl
-
-              (JULIA_NUM_THREADS is currently $(get(ENV, "JULIA_NUM_THREADS", "unset")).)""")
-    end
+    # NOTE: no thread guard here any more. Under PyCall this had to fail fast, because
+    # `pydecref_` called `Py_DecRef` straight from a Julia GC finalizer with no GIL check,
+    # so a PyObject finalized on a worker thread killed the process with SIGSEGV part-way
+    # through a run. PythonCall does not have that failure mode: its finalizer enqueues the
+    # pointer (`GC.enqueue`), and the queue is only drained by a thread that actually holds
+    # the GIL (`PyGILState_Check`, PythonCall/src/GC/GC.jl). Verified empirically -- a full
+    # UltraNest run completes under `julia -t 8` with Py objects being finalized on worker
+    # threads throughout.
+    #
+    # Still true: Python must only be CALLED from a thread holding the GIL. Driving the
+    # sampler from one thread (as here) is fine; calling Python from inside a
+    # `Threads.@threads` body without `PythonCall.GIL.@lock` still segfaults.
     ultranest = pyimport("ultranest")
     GC.gc(true); GC.gc(true)      # finalize stray PyObjects on the main thread first
 
@@ -130,8 +142,12 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
         end
     end
 
-    sampler = ultranest.ReactiveNestedSampler(names, loglike, transform;
-                                              log_dir=log_dir, resume=resume)
+    # `names` MUST be a Python list. PythonCall wraps a Julia Vector as a
+    # `juliacall.VectorValue`, and UltraNest concatenates paramnames with a list
+    # internally, which then raises `TypeError: unsupported operand type(s) for +`.
+    sampler = ultranest.ReactiveNestedSampler(pylist(names), loglike_v;
+                                              transform = transform_v, vectorized = true,
+                                              log_dir = log_dir, resume = resume)
     if use_stepsampler
         stepsampler = pyimport("ultranest.stepsampler")
         sampler.stepsampler = stepsampler.SliceSampler(
@@ -144,15 +160,16 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
                       show_status = verb)
     verb && sampler.print_results()
 
-    S = Array{Float64}(res["samples"])                    # nsamples × nfree
+    # `res[...]` entries are `Py`; convert here rather than leaking them to callers.
+    S = pyconvert(Matrix{Float64}, res["samples"])        # nsamples × nfree
     q(p) = [quantile(view(S, :, j), p) for j in eachindex(idx)]
     out = (θ_mean   = vec(mean(S, dims=1)),
            θ_median = q(0.5),
            θ_std    = vec(std(S, dims=1)),
            q16      = q(0.16),
            q84      = q(0.84),
-           logz     = res["logz"],
-           logzerr  = res["logzerr"],
+           logz     = pyconvert(Float64, res["logz"]),
+           logzerr  = pyconvert(Float64, res["logzerr"]),
            samples  = S,
            free     = idx,
            list_free_params = names,

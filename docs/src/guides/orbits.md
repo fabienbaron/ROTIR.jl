@@ -272,26 +272,42 @@ Two traps:
 
 ### Choosing the sampler
 
-**UltraNest** (`ultranest` via PyCall) gives log Z out of the box and needs no tuning.
-Vectorize it, following OITOOLS' `fit_model_ultranest` idiom — the essential detail is
-*declaring* the argument types so PyCall converts the numpy batch:
+**UltraNest** (`ultranest` via PythonCall) gives log Z out of the box and needs no
+tuning. Vectorize it, following OITOOLS' `fit_model_ultranest` idiom, so the
+Julia↔Python crossing is paid once per batch instead of once per live point:
 
 ```julia
-prior_v(U::AbstractMatrix{<:Real}) = reduce(vcat, (u -> prior_1(u)').(eachrow(U)))
-loglike_v(X::AbstractMatrix{<:Real}) = loglike_1.(eachrow(X))
-sampler = ultranest.ReactiveNestedSampler(names, loglike_v;
+prior_v(U::AbstractMatrix{<:Real}) =
+    Py(reduce(vcat, (u -> prior_1(u)').(eachrow(U)))).to_numpy()
+loglike_v(X::AbstractMatrix{<:Real}) = Py(loglike_1.(eachrow(X))).to_numpy()
+sampler = ultranest.ReactiveNestedSampler(pylist(names), loglike_v;
                                           transform = prior_v, vectorized = true)
 ```
 
-Passing these through `pyfunction(..., PyObject)` instead *suppresses* conversion and the
-transform receives a `Vector{Any}` of rows, which fails to broadcast.
+Three details, each of which PyCall used to hide:
 
-!!! warning "Do not thread an UltraNest likelihood"
-    PyCall is not thread-safe. `pydecref_` calls `Py_DecRef` with no GIL check, so when
-    Julia's GC runs a `PyObject` finalizer on a worker thread the process segfaults — even
-    though the likelihood itself never touches Python. With UltraNest the likelihood is
-    single-threaded, full stop. `UltraNest.jl` does not help: it is a 51-line PythonCall
-    shim around the same Python package.
+* **Declare the argument types.** `::AbstractMatrix{<:Real}` is what makes PythonCall
+  convert the numpy batch to a Julia matrix. Without it the argument stays a `Py` and
+  `collect` raises `MethodError: no method matching (Array{Float64})(::Py)`.
+* **Return numpy, via `.to_numpy()`.** A bare Julia array reaches Python as a
+  `juliacall.VectorValue`, and UltraNest calls numpy methods (`.transpose`) on it.
+* **`pylist(names)`, not a Julia `Vector`.** UltraNest evaluates `names + [...]`
+  internally, and a `VectorValue` does not support `+`.
+
+!!! note "Threading and UltraNest, under PythonCall"
+    This used to be a hard prohibition. Under PyCall, `pydecref_` called `Py_DecRef` with
+    no GIL check, so Julia's GC finalizing a `PyObject` on a worker thread segfaulted the
+    process — even when the likelihood never touched Python. **PythonCall does not have
+    that failure mode**: its finalizer enqueues the pointer, and the queue is only drained
+    by a thread holding the GIL (`PyGILState_Check`, `PythonCall/src/GC/GC.jl`). A full
+    UltraNest run completes under `julia -t 8` with Py objects being finalized on worker
+    threads throughout.
+
+    What is still true: Python may only be **called** from a thread that holds the GIL.
+    Driving the sampler from one thread is fine; calling Python inside a
+    `Threads.@threads` body without `PythonCall.GIL.@lock` still segfaults. So a
+    likelihood that itself touches Python must stay single-threaded, while one that is
+    pure Julia may now run in a threaded session.
 
 **Pigeons** (`Pigeons.jl`, native Julia) is the way to use more than one core, and it
 reports round trips — the diagnostic that tells you whether the chain actually moved
@@ -310,11 +326,12 @@ Sample in an unconstrained space so the reference can be a plain wide Gaussian �
 uniform after the change of variables (`z_to_theta`, `log_jacobian`, `theta_to_z` in
 `betlyr_model.jl`).
 
-!!! warning "The PyCall hazard survives a change of sampler"
-    `using ROTIR` loads PyCall and PyPlot unconditionally, so `PyObject`s exist in a
-    Pigeons session too. Keep the fit free of live ones: plot only *after* sampling
-    (`@eval using PyPlot` at the end), and force `GC.gc(true)` before `pigeons(...)` so
-    anything left from reading the OIFITS is finalized on the main thread.
+!!! note "Deferring plotting is no longer required"
+    `using ROTIR` loads PythonPlot unconditionally, so `Py` objects exist in a Pigeons
+    session too. Under PyCall that was dangerous and the demos worked around it by
+    plotting only *after* sampling (`@eval using PythonPlot` at the end) and forcing
+    `GC.gc(true)` before `pigeons(...)`. With PythonCall's deferred decrefs neither step
+    is needed; they are harmless if left in place, and the demos still carry them.
 
 Always check `Pigeons.n_round_trips(pt)` before believing an interval. Zero round trips
 means the chain never travelled between reference and target, so it has not demonstrated

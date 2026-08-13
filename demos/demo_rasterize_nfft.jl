@@ -10,7 +10,7 @@
 
 using ROTIR
 using FFTW
-using PyPlot
+using PythonPlot
 
 # --- Create a rapid rotator star with gravity darkening --------------------
 n = 4  # HEALPix refinement level
