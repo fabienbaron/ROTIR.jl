@@ -1,0 +1,26 @@
+# Python dependencies ROTIR needs beyond what OITOOLS already declares.
+#
+# CondaPkg aggregates specs across the whole dependency tree, so matplotlib, numpy,
+# ultranest and astroquery all arrive via OITOOLS' own CondaPkg.toml and are deliberately
+# not repeated here.
+#
+# scipy is the exception. `ultranest.plot` imports it, and that submodule is what draws the
+# corner plots — both in ROTIR's own fit drivers and in OITOOLS' `fit_model_ultranest`,
+# where `cornerplot = true` is the DEFAULT. UltraNest's core sampler does not need scipy,
+# so without this line the sampling runs happily and only the plotting fails, with a bare
+# `ModuleNotFoundError: No module named 'scipy'` after the fit has already finished.
+#
+# scipy is being added to OITOOLS' own CondaPkg.toml, which is where it belongs (OITOOLS
+# is what calls `ultranest.plot` by default). Once ROTIR's OITOOLS floor is bumped to that
+# release, DELETE the scipy line below — CondaPkg intersects duplicate specs so keeping it
+# is harmless, but a redundant pin here will drift out of step with upstream's bound.
+#
+# `corner` is what `ultranest.plot.cornerplot` actually draws with. It happens to be
+# present as a transitive dependency today, but nothing declares it, so a future resolve
+# could drop it. Pin it explicitly rather than rely on that.
+
+channels = ["conda-forge"]
+
+[deps]
+scipy = ">=1.10"
+corner = ">=2.2"

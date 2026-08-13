@@ -27,6 +27,7 @@ makedocs(;
             "Image Reconstruction"    => "guides/reconstruction.md",
             "Direct Imaging Methods"  => "guides/imaging_methods.md",
             "Binary Orbits"           => "guides/orbits.md",
+            "Orbit Fitting"           => "guides/orbit_fitting.md",
             "Multi-resolution"        => "guides/multires.md",
             "Plotting"                => "guides/plotting.md",
         ],

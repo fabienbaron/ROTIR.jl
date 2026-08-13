@@ -56,6 +56,9 @@ end
     # structural checks are what catch a corrupted Julia->Python array conversion.
     include(joinpath(TESTDIR, "test_plotting.jl"))
 
+    # Generic orbit fitter: component library, spec assembly, and a synthetic round trip.
+    include(joinpath(TESTDIR, "test_orbit_fit.jl"))
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions

@@ -35,6 +35,7 @@ include("shape_gradient.jl");
 include("parametric_gradient.jl");
 include("bootstrap.jl");
 include("parametric_fit.jl");
+include("orbit_fit.jl");
 include("ultranest.jl");
 include("rasterize.jl");
 include("polyft_nfft.jl");
@@ -150,6 +151,13 @@ export project_geometry, interferometric_chi2, build_parametric_logπ
 export epoch_blocks, resample_epochs, bootstrap_parametric, ParametricBootstrap
 export fit_parametric, default_parametric_bounds, parametric_param_names
 export parametric_chi2, fit_sphere_ld, fit_ellipsoid_ld
+# Generic orbit fitting from OIFITS (orbit_fit.jl)
+export OrbitComponent, PointSource, UniformDisk, LimbDarkenedDisk, GaussianDisk,
+       EllipticalGaussian
+export OrbitFitData, OrbitFitSpec, orbit_fit_data, orbit_fit_spec
+export orbit_model_cvis, orbit_chi2, fit_orbit
+export ORBIT_ELEMENTS
+
 export parametric_free_indices
 export fit_parametric_ultranest
 
