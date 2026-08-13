@@ -153,5 +153,21 @@ res.chi2, res.chi2_split      # total, and (V², T3amp, T3φ)
 `model = :tessellated` is reserved for fitting orbits with resolved ROTIR surfaces (Roche
 shapes, gravity darkening, irradiation) and is **not yet implemented** — it needs its own
 parameterisation rather than the analytic component library. For a tessellated binary today,
-drive [`create_binary_geometry`](@ref) and [`binary_chi2_f`](@ref) directly; see
+drive `create_binary_geometry` and `binary_chi2_f` directly; see
 `demos/spica_binary_roche.jl`.
+
+## API
+
+```@docs
+fit_orbit
+OrbitComponent
+PointSource
+UniformDisk
+LimbDarkenedDisk
+GaussianDisk
+EllipticalGaussian
+orbit_fit_data
+orbit_fit_spec
+orbit_model_cvis
+orbit_chi2
+```

@@ -132,8 +132,8 @@ These take an existing axes, so they can be added to a figure you build yourself
 | `graticule_kwargs` | `(;)` | Graticule style overrides (shared by both components) |
 
 !!! warning "`inclination1` / `position_angle1` are rarely what you want"
-    [`create_binary_geometry`](@ref) orients **both** components by the shared
-    [`binary_frame`](@ref), built from the orbital elements `(i, Ω, ω)`. A component's own
+    `create_binary_geometry` orients **both** components by the shared
+    `binary_frame`, built from the orbital elements `(i, Ω, ω)`. A component's own
     `inclination` / `position_angle` play no part. Passing the single-star angles here
     therefore decorates a differently-oriented star — for a Spica-like system the two
     answers differ by over 100°. Leave them at `NaN` and the mesh orientation is used.

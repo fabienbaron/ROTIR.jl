@@ -6,7 +6,7 @@ dataset a 55 % radius error gave a reconstruction with `χ²/n ≈ 4000` where t
 gives `≈ 4`. The map cannot absorb a wrong size — it will try, and produce nonsense.
 
 This page covers fitting a star whose surface carries no structure beyond limb darkening.
-For a gravity-darkened rapid rotator see [`fit_parametric`](@ref) and
+For a gravity-darkened rapid rotator see `fit_parametric` and
 [Parametric Model & AD](../api/parametric_gradient.md), which solve the Roche problem
 properly; the wrappers here are deliberately simpler models for stars that do not rotate fast
 enough to be oblate.
@@ -137,7 +137,7 @@ fitting a triaxial ellipsoid to interferometry is rarely justified.
     `temperature_map_vonZeipel_ellipsoid`. That function is a placeholder — `g ∝ 1/r²` with
     an unverified `rpole = radius_x` and a `# to check` comment in the source — so folding it
     into a shape fit would attribute its errors to the shape. For a physically
-    gravity-darkened oblate star use `surface_type = 2` and [`fit_parametric`](@ref).
+    gravity-darkened oblate star use `surface_type = 2` and `fit_parametric`.
 
 !!! warning "Degeneracies, and the convergence guard"
     Pole-on (`inc → 0`) the projection is circular whatever the flattening, so `f`, `inc` and
@@ -235,7 +235,7 @@ parametric_chi2(params, tessels, data, tepochs; weights = [1,1,0], uniform = tru
 
 Useful for scanning a parameter by hand, or for checking a published model against your data.
 `uniform = true` forces uniform surface brightness instead of calling
-[`parametric_temperature_map`](@ref); for `surface_type = 0` that is already what the map is,
+`parametric_temperature_map`; for `surface_type = 0` that is already what the map is,
 so it changes nothing.
 
 ## Where to go next

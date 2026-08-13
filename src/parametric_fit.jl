@@ -99,7 +99,7 @@ compare to `data`. No surface reconstruction and no regularizer are involved.
 [`fit_sphere_ld`](@ref) for why you usually do **not** want T3φ in a symmetric fit.
 
 `uniform = true` forces a UNIFORM surface brightness (`tpole` everywhere) instead of calling
-[`parametric_temperature_map`](@ref), so the only structure left is limb darkening. For
+`parametric_temperature_map`, so the only structure left is limb darkening. For
 `surface_type = 0` that is what the map already is, so it changes nothing; for the ellipsoid
 it matters, because `temperature_map_vonZeipel_ellipsoid` is a placeholder gravity model
 (`g ∝ 1/r²`, with an unverified `rpole = radius_x`) that you do not want silently folded into

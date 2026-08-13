@@ -351,7 +351,7 @@ When `star_params` is omitted, semi-axes are estimated from the tessellation (ba
 """
 function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8, alpha=0.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
-    npoints=200, star_params=nothing, limb=true)
+    npoints=200, star_params=nothing, limb=true, zorder=5)
     collections = pyimport("matplotlib.collections")
 
     # Determine surface model
@@ -465,11 +465,11 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
     # disappears entirely). `silhouette_polygon` already works in x = -proj_west, the same
     # convention used here, so its output needs only the offsets applied.
     limb && draw_limb!(ax, star; offset_west=offset_west, offset_north=offset_north,
-                       color=color, linewidth=linewidth, alpha=alpha)
+                       color=color, linewidth=linewidth, alpha=alpha, zorder=zorder-1)
 
     if !isempty(graticule_lines)
         ax.add_collection(collections.PolyCollection(graticule_lines, closed=false,
-            ec=color, fc="none", linewidths=[linewidth], alpha=alpha, zorder=5))
+            ec=color, fc="none", linewidths=[linewidth], alpha=alpha, zorder=zorder))
     end
 end
 
@@ -813,17 +813,21 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   # background — becomes invisible, taking its rotation axis and spin arrow with it into
   # apparently empty space. Drawn here rather than inside the graticule block so it appears
   # whether or not graticules were asked for.
+  # Each component's decorations sit just above ITS OWN surface, NOT above both. Drawing
+  # every limb at one fixed zorder paints the FAR star's outline over the NEAR star, which
+  # reads as the near star being transparent. Fractional zorders interleave them:
+  #   far surface 2 < far limb 2.4 < near surface 3 < near limb 3.4
   if limb && !graticules
-    draw_limb!(ax, star1; color=limb_color, linewidth=limb_linewidth)
+    draw_limb!(ax, star1; color=limb_color, linewidth=limb_linewidth, zorder=zord1+0.4)
     draw_limb!(ax, star2; offset_west=offset_west, offset_north=offset_north,
-               color=limb_color, linewidth=limb_linewidth)
+               color=limb_color, linewidth=limb_linewidth, zorder=zord2+0.4)
   end
   if graticules
     draw_graticules(ax, star1; inclination=inclination1, position_angle=position_angle1,
-        star_params=star_params1, limb=limb, graticule_kwargs...)
+        star_params=star_params1, limb=limb, zorder=zord1+0.5, graticule_kwargs...)
     draw_graticules(ax, star2; offset_west=offset_west, offset_north=offset_north,
         inclination=inclination2, position_angle=position_angle2, star_params=star_params2,
-        limb=limb, graticule_kwargs...)
+        limb=limb, zorder=zord2+0.5, graticule_kwargs...)
   end
   if rotation_axis
     draw_rotation_axis(ax, star1, inclination=inclination1, position_angle=position_angle1, star_params=star_params1)
