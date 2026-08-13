@@ -19,3 +19,18 @@ Manifest.toml
 # Generated demo output
 /demos/results/
 /results/
+
+# PythonCall/CondaPkg resolved environments — ~1.9 GB across the three project dirs, and
+# entirely reproducible from the CondaPkg.toml specs.
+.CondaPkg/
+/demos/.CondaPkg/
+/docs/.CondaPkg/
+
+# Diagnostic figures written by the test suite under ROTIR_TEST_FIGURES=1. ~30 MB at the
+# default 300 dpi, regenerated in ~20 s, and they churn on every matplotlib upgrade.
+/test/figures/
+
+# beta Lyr: the 2013 MIRC-X nights are large and not used by the default fit
+# (DATASET=old). older_data/ — the 2006-2007 nights Zhao et al. fitted — is committed.
+/demos/betlyr/*.oifits
+/demos/betlyr/*.pdf
