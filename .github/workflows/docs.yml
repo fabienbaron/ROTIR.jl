@@ -11,22 +11,35 @@ jobs:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
-          version: '1.10'
+          # Must match `julia = "1.11"` in Project.toml. That bound is not cosmetic: the
+          # `[sources]` sections used to locate the unregistered OITOOLS need Pkg >= 1.11,
+          # and on 1.10 they are silently ignored — which is why this workflow used to add
+          # OITOOLS by hand.
+          version: '1.11'
       - uses: julia-actions/cache@v2
       - name: Install dependencies
-        env:
-          PYTHON: ''
         run: |
           julia --project=docs -e '
             using Pkg
             Pkg.Registry.add("General")
             Pkg.Registry.add(RegistrySpec(url="https://github.com/emmt/EmmtRegistry"))
-            Pkg.add(url="https://github.com/fabienbaron/OITOOLS.jl.git")
-            Pkg.develop(PackageSpec(path=pwd()))
-            Pkg.instantiate()
-            Pkg.build("PyCall")'
+            Pkg.instantiate()'
       - name: Build and deploy docs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PYTHON: ''
         run: julia --project=docs docs/make.jl
+
+# Notes on what is deliberately NOT here any more:
+#
+#   Pkg.build("PyCall")  — ROTIR moved to PythonCall in 0.6.0, so PyCall is not in the
+#     manifest at all and this failed with "PyCall (not found in project or manifest)".
+#     PythonCall needs no build step: CondaPkg resolves its environment on first `using`,
+#     from the CondaPkg.toml specs in ROTIR and OITOOLS.
+#
+#   PYTHON: ''  — a PyCall convention meaning "use your own Conda". PythonCall ignores it;
+#     its equivalents are JULIA_PYTHONCALL_EXE / JULIA_CONDAPKG_BACKEND, and the default
+#     (a managed environment) is what we want in CI.
+#
+#   Pkg.add(url=".../OITOOLS.jl.git")  — now covered by `[sources]` in docs/Project.toml.
+#     Adding by URL also rewrites Project.toml and pins `rev = "main"`, which is exactly
+#     what the comment in ROTIR's own Project.toml warns against.

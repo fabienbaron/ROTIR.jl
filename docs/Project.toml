@@ -2,9 +2,17 @@
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 ROTIR = "1effc416-1cd3-435e-ba3b-8cf647137d25"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+# Listed explicitly even though it arrives through ROTIR: a `[sources]` entry is only
+# valid for a package that is also in `[deps]`, and OITOOLS is unregistered so it needs
+# one here (sources do not propagate from a dependency).
+OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
 
 # ROTIR is unregistered: without this a fresh clone cannot instantiate the docs
 # environment (the old Manifest carried a machine-specific dev path instead). OITOOLS
-# comes in through ROTIR's own [sources] entry.
+# needs its OWN entry: `[sources]` does NOT propagate from a dependency, so ROTIR's entry
+# for the unregistered OITOOLS does not cover this environment. (An earlier comment here
+# claimed it did; the CI workflow was quietly compensating with an explicit
+# `Pkg.add(url=...)`, which also pinned `rev = "main"`.) No `rev`: track the default branch.
 [sources]
 ROTIR = {path = ".."}
+OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
