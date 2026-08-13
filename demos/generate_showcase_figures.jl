@@ -8,15 +8,30 @@
 #
 # Output: docs/src/assets/*.png (15 files)
 
-# Force non-interactive backend BEFORE loading PyPlot (via ROTIR)
+# NOTE ON LIMB-DARKENING COEFFICIENTS
+# Every star below uses ldtype = 3 (Hestroffer): ldmap = mu^ld1.
+#
+# Before commit 0b0b3a3 the limb cosine was double-counted -- `mu = abs(nz*max(nz,0))`,
+# i.e. nz^2 -- so the surface was really rendered as nz^(2*ld1). The committed reference
+# figures in docs/src/assets predate that fix and show the over-darkened result.
+#
+# The ld1 values here are therefore DOUBLED relative to the physical coefficients
+# (0.23 -> 0.46, 0.3 -> 0.6) so the regenerated figures match the published ones. Because
+# the law is a pure power of mu the correspondence is exact, not approximate. Halve them
+# if you would rather the docs show physically typical coefficients.
+
+# Force non-interactive backend BEFORE loading PythonPlot (via ROTIR)
 ENV["MPLBACKEND"] = "agg"
 
 using ROTIR
-using PyPlot, PyCall
+using PythonPlot, PythonCall
 
-const OUTDIR = joinpath(@__DIR__, "..", "docs", "src", "assets")
+# Override to regenerate somewhere else and diff against the committed references:
+#   ROTIR_SHOWCASE_OUTDIR=/tmp/shots julia --project=demos demos/generate_showcase_figures.jl
+const OUTDIR = get(ENV, "ROTIR_SHOWCASE_OUTDIR",
+                   joinpath(@__DIR__, "..", "docs", "src", "assets"))
 mkpath(OUTDIR)
-const DPI = 150
+const DPI = parse(Int, get(ENV, "ROTIR_SHOWCASE_DPI", "150"))
 
 # --- Helpers ---
 
@@ -24,7 +39,7 @@ const DPI = 150
 function save_and_close(fig, filename)
     path = joinpath(OUTDIR, filename)
     fig.savefig(path, dpi=DPI, bbox_inches="tight", facecolor="white")
-    close(fig)
+    pyplot.close(fig)
     println("  Saved $filename")
 end
 
@@ -43,7 +58,7 @@ sphere_params = (
     radius          = 1.0,      # mas
     tpole           = 5800.0,   # K (solar-like)
     ldtype          = 3,        # Hestroffer power law
-    ld1             = 0.3,
+    ld1             = 0.6,
     ld2             = 0.0,
     inclination     = 60.0,     # degrees
     position_angle  = 30.0,     # degrees
@@ -57,7 +72,7 @@ ellipsoid_params = (
     radius_z        = 1.1,
     tpole           = 5000.0,   # K
     ldtype          = 3,
-    ld1             = 0.23,
+    ld1             = 0.46,
     ld2             = 0.0,
     inclination     = 60.0,
     position_angle  = 30.0,
@@ -70,7 +85,7 @@ rotator_params = (
     rpole           = 1.37,     # mas
     tpole           = 4800.0,   # K
     ldtype          = 3,
-    ld1             = 0.23,
+    ld1             = 0.46,
     ld2             = 0.0,
     inclination     = 70.0,
     position_angle  = 20.0,
@@ -85,7 +100,7 @@ roche_params = (
     rpole           = 0.355,    # mas
     tpole           = 4800.0,   # K
     ldtype          = 3,
-    ld1             = 0.23,
+    ld1             = 0.46,
     ld2             = 0.0,
     inclination     = 60.0,
     position_angle  = 0.0,
@@ -286,28 +301,27 @@ grat_configs = [
 ]
 
 fig_grat, axes_grat = subplots(2, 2, figsize=(12, 12))
-patches_grat = pyimport("matplotlib.patches")
 for (idx, (gkw, ttl)) in enumerate(grat_configs)
-    local ax = axes_grat[(idx-1) ÷ 2 + 1, (idx-1) % 2 + 1]
+    # 0-BASED: subplots(2,2) returns a Py numpy array under PythonCall, not the Julia
+    # Matrix PyCall used to convert it into. 1-based indices silently shift a panel and
+    # then run off the end.
+    local ax = axes_grat[(idx-1) ÷ 2, (idx-1) % 2]
     ax.set_aspect("equal", adjustable="box")
     ax.set_title(ttl, fontsize=14)
     axis_max = maximum(sqrt.(star_ell.vertices_xyz[:,:,1].^2 .+ star_ell.vertices_xyz[:,:,2].^2 .+ star_ell.vertices_xyz[:,:,3].^2)) + 0.3
     ax.set_xlim([axis_max, -axis_max])
     ax.set_ylim([-axis_max, axis_max])
+    # Use ROTIR's own normalisation and collection rather than re-deriving them here:
+    # this block used to keep a private copy of the cfloor padding and draw one
+    # matplotlib Polygon per tessel, so it neither picked up the colour-ceiling fix nor
+    # survived PythonCall (a Vector{Py} of colours is not an RGBA array).
     projmap = tmap_ell[star_ell.index_quads_visible] .* star_ell.ldmap[star_ell.index_quads_visible]
     pmin = minimum(projmap); pmax = maximum(projmap)
     prange = pmax - pmin
     if prange < 1.0; prange = max(abs(pmax) * 0.01, 1.0); end
-    cfloor = 0.08
-    vmin_padded = pmin - cfloor / (1.0 - cfloor) * prange
-    norm_plot = matplotlib.colors.Normalize(vmin=vmin_padded, vmax=pmax)
-    colours = get_cmap("gist_heat").(norm_plot.(projmap))
-    for i in 1:star_ell.nquads_visible
-        ii = star_ell.index_quads_visible[i]
-        p = patches_grat.Polygon(hcat(-star_ell.proj_west[ii,:], star_ell.proj_north[ii,:]),
-            closed=true, edgecolor=colours[i], facecolor=colours[i], fill=true, rasterized=false, zorder=2)
-        ax.add_patch(p)
-    end
+    norm_plot = ROTIR._padded_norm(pmin, pmax, prange; cfloor = 0.08)
+    colours = ROTIR.rgba(get_cmap("gist_heat"), norm_plot.(projmap))
+    add_tessel_collection!(ax, star_ell, colours; zorder = 2)
     draw_graticules(ax, star_ell;
         inclination=ellipsoid_params.inclination, position_angle=ellipsoid_params.position_angle,
         star_params=ellipsoid_params, gkw...)
@@ -351,7 +365,7 @@ conv_params = (
     radius          = 1.0,
     tpole           = 5800.0,
     ldtype          = 3,
-    ld1             = 0.3,
+    ld1             = 0.6,
     ld2             = 0.0,
     inclination     = 45.0,
     position_angle  = 35.0,
@@ -385,7 +399,7 @@ for (omega, label) in [(0.0, "00"), (0.5, "50"), (0.9, "90"), (0.99, "99")]
         rpole           = 1.37,
         tpole           = 4800.0,
         ldtype          = 3,
-        ld1             = 0.23,
+        ld1             = 0.46,
         ld2             = 0.0,
         inclination     = 70.0,
         position_angle  = 20.0,
@@ -419,7 +433,7 @@ for (fillout, label) in [(0.90, "90"), (0.95, "95"), (0.98, "98"), (0.99, "99")]
         rpole           = 0.355,              # overridden by fillout_factor_primary
         tpole           = 4800.0,
         ldtype          = 3,
-        ld1             = 0.23,
+        ld1             = 0.46,
         ld2             = 0.0,
         inclination     = 60.0,
         position_angle  = 0.0,
@@ -476,9 +490,9 @@ bparams = binaryparameters(star1p, star2p, 77.0, i_orb, Omega_orb, omega_orb,
     P_orb, a_orb, e_orb, T0_orb, q_binary, [1.0, 1.0], 0.0, 0.0)
 
 # --- Binary sky-plane image at widest separation ---
-star1_nt = (surface_type=0, radius=0.93/2, tpole=25300.0, ldtype=3, ld1=0.15, ld2=0.0,
+star1_nt = (surface_type=0, radius=0.93/2, tpole=25300.0, ldtype=3, ld1=0.3, ld2=0.0,
     inclination=inc_star, position_angle=pa_star, rotation_period=P_orb)
-star2_nt = (surface_type=0, radius=0.57/2, tpole=20585.0, ldtype=3, ld1=0.15, ld2=0.0,
+star2_nt = (surface_type=0, radius=0.57/2, tpole=20585.0, ldtype=3, ld1=0.3, ld2=0.0,
     inclination=inc_star, position_angle=pa_star, rotation_period=P_orb)
 
 tessels_b1 = tessellation_healpix(3)
@@ -492,8 +506,10 @@ tmap_b2 = parametric_temperature_map(star2_nt, star2_geom)
 t_wide = T0_orb + 0.25 * P_orb
 fig, ax = plot2d_binary(tmap_b1, tmap_b2, star1_geom, star2_geom, bparams, t_wide;
     intensity=true, graticules=true, compass=true,
-    inclination1=inc_star, position_angle1=pa_star,
-    inclination2=inc_star, position_angle2=pa_star,
+    # NB: no inclination1/position_angle1 here. create_binary_geometry orients both
+    # components by the shared binary_frame built from the ORBIT, ignoring each star's own
+    # inclination/position_angle, so passing the single-star angles would draw decorations
+    # for a differently-oriented star. The decorations take the orientation from the mesh.
     star_params1=star1_nt, star_params2=star2_nt)
 save_and_close(fig, "binary_skyplane.png")
 

@@ -193,7 +193,7 @@ function binary_movie(bparams, tessels1::tessellation, params1,
         push!(files, f)
         verbose && (k % 25 == 0 || k == nframes) && @info "binary_movie: frame $k/$nframes"
     end
-    PyPlot.close(fig)
+    pyplot.close(fig)
 
     movie = encode ? frames_to_movie(outdir, prefix; fps=fps, verbose=verbose) : nothing
     return outdir, movie

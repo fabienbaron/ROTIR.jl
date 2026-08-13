@@ -15,7 +15,7 @@
 # Against: it ignores the gradients the model can supply (a gradient costs ~3.6× a
 # likelihood here), and the cost grows steeply with the number of free parameters.
 
-using PyCall
+using PythonCall
 
 """
     fit_parametric_ultranest(data_epochs, tessels, tepochs, base_params; kwargs...)
@@ -84,15 +84,37 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     # UltraNest works on the unit hypercube; the transform makes it a uniform box prior.
     transform(cube) = lo .+ (hi .- lo) .* collect(Float64, cube)
 
-    function loglike(cube)
+    # NOTE: UltraNest applies `transform` itself and passes `loglike` the PHYSICAL parameters,
+    # NOT the unit cube. This function previously re-applied the transform here, which
+    # double-maps every parameter (a radius of 1.465 with bounds [0.05, 20] became 29.3) and
+    # makes the sampler converge confidently on nonsense — tight error bars around a χ² many
+    # orders of magnitude worse than the true optimum. Fixed 2026-08-12; any result obtained
+    # from this function before that date should be discarded.
+    function loglike(params)
         θtry = copy(θ)
-        θtry[idx] .= T.(transform(cube))
+        θtry[idx] .= T.(collect(Float64, params))
         v = logπ(θtry)
         # NaN/Inf (e.g. a degenerate geometry) must not reach the sampler
         return isfinite(v) ? Float64(v) : -1e30
     end
 
+    # PyCall is not thread-safe: `pydecref_` calls Py_DecRef with no GIL check, so a PyObject
+    # finalizer running on a worker thread kills the process with SIGSEGV — part-way through
+    # the run, discarding the sampling done so far. This happens even though the likelihood
+    # never touches Python, and it is easy to hit without realising because JULIA_NUM_THREADS
+    # may be set in the environment. Fail immediately with an actionable message instead.
+    if Threads.nthreads() > 1
+        error("""
+              UltraNest cannot be used with $(Threads.nthreads()) Julia threads: PyCall is not
+              thread-safe and the run will segfault. Restart single-threaded, e.g.
+
+                  JULIA_NUM_THREADS=1 julia --project=... yourscript.jl
+                  julia -t 1 --project=... yourscript.jl
+
+              (JULIA_NUM_THREADS is currently $(get(ENV, "JULIA_NUM_THREADS", "unset")).)""")
+    end
     ultranest = pyimport("ultranest")
+    GC.gc(true); GC.gc(true)      # finalize stray PyObjects on the main thread first
 
     # `log_dir` makes UltraNest store points in HDF5, which needs h5py. Rather than dying
     # after the setup work — and, for a resumed run, after hours of sampling — fall back to
@@ -102,8 +124,8 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
             pyimport("h5py")
         catch
             @warn "log_dir requires the Python h5py package; continuing without it " *
-                  "(no resume, no on-disk monitoring). Install with: " *
-                  "`$(PyCall.python) -m pip install h5py`"
+                  "(no resume, no on-disk monitoring). Install it into the environment " *
+                  "PythonCall is using, e.g. via CondaPkg."
             log_dir = nothing
         end
     end

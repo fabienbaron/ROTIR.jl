@@ -1,4 +1,5 @@
 module ROTIR
+import OITOOLS          # for OITOOLS.set_oiplot_defaults — see src/oiplot_spheroid.jl
 import OITOOLS: OIdata,
     readoifits, readoifits_multiepochs, readfits, writefits,
     set_data_filter, filter_data,
@@ -11,6 +12,7 @@ import OITOOLS: OIdata,
     cvis_to_chi2_f, cvis_to_chi2_fg
 using Statistics
 using LinearAlgebra
+using NLopt
 using Printf
 using PrecompileTools
 using ChainRulesCore
@@ -32,6 +34,7 @@ include("fused_polyft.jl");
 include("shape_gradient.jl");
 include("parametric_gradient.jl");
 include("bootstrap.jl");
+include("parametric_fit.jl");
 include("ultranest.jl");
 include("rasterize.jl");
 include("polyft_nfft.jl");
@@ -111,6 +114,7 @@ export observables, cvis_to_obs, cvis_chi2, OI_DEFAULT_WEIGHTS, chi2s, mod360
 export spheroid_chi2_f, spheroid_chi2_fg
 export spheroid_chi2_allepochs_fg, spheroid_chi2_allepochs_f
 export spheroid_total_variation, spheroid_crit_multiepochs_fg
+export spheroid_radflat_fg, radflat_bins
 export spheroid_l2_fg, spheroid_harmon_bias_fg, spheroid_regularization
 export image_reconstruct_oi, image_reconstruct_oi_crit, image_reconstruct_oi_chi2, image_reconstruct_oi_chi2_fg
 export multires_reconstruct_oi
@@ -145,6 +149,7 @@ export project_geometry, interferometric_chi2, build_parametric_logπ
 # Bootstrap uncertainties for parametric fits (fit_parametric needs `using Zygote`)
 export epoch_blocks, resample_epochs, bootstrap_parametric, ParametricBootstrap
 export fit_parametric, default_parametric_bounds, parametric_param_names
+export parametric_chi2, fit_sphere_ld, fit_ellipsoid_ld
 export parametric_free_indices
 export fit_parametric_ultranest
 
@@ -152,7 +157,7 @@ export fit_parametric_ultranest
 export plot2d, plot2d_wireframe, plot2d_allepochs
 export plot3d
 export plot_mollweide
-export draw_compass, draw_rotation_axis, draw_rotation_arrow, draw_graticules
+export draw_compass, draw_rotation_axis, draw_rotation_arrow, draw_graticules, draw_limb!
 export plot_rv, plot2d_binary, add_tessel_collection!
 
 # Animation

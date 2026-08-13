@@ -30,10 +30,10 @@ let T = Float32, NT = @NamedTuple{surface_type::Int, radius::Float32, tpole::Flo
         inclination::Float32, position_angle::Float32, rotation_period::Float32}
     precompile(plot2d, (Vector{T}, stellar_geometry{T}))
     precompile(plot2d_wireframe, (stellar_geometry{T},))
-    precompile(draw_compass, (PyCall.PyObject, T))
-    precompile(draw_rotation_axis, (PyCall.PyObject, stellar_geometry{T}))
-    precompile(draw_rotation_arrow, (PyCall.PyObject, stellar_geometry{T}))
-    precompile(draw_graticules, (PyCall.PyObject, stellar_geometry{T}))
+    precompile(draw_compass, (Py, T))
+    precompile(draw_rotation_axis, (Py, stellar_geometry{T}))
+    precompile(draw_rotation_arrow, (Py, stellar_geometry{T}))
+    precompile(draw_graticules, (Py, stellar_geometry{T}))
     precompile(create_star, (tessellation{T}, NT, T))
     precompile(parametric_temperature_map, (NT, stellar_geometry{T}))
 end

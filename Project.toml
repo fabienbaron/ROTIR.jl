@@ -3,7 +3,7 @@ uuid = "1effc416-1cd3-435e-ba3b-8cf647137d25"
 keywords = ["astronomy", "interferometry", "imaging", "stellar surfaces"]
 license = "GPLv3"
 desc = "Regularized imaging of stellar surfaces from optical interferometry, Doppler imaging, and light curves"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Fabien Baron <fbaron@gsu.edu>"]
 
 # NOTE: the parametric model in src/parametric_gradient.jl is AD-agnostic — it defines
@@ -19,12 +19,13 @@ FITSIO = "525bcba6-941b-5504-bd06-fd0dc1a4d2eb"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NFFT = "efe261a4-0d2b-5849-be55-fc731d526b0d"
+NLopt = "76087f3c-5699-56af-9a33-bf431cd00edd"
 OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
 OptimPackNextGen = "080ffe24-4a27-4ab0-ad71-7b624e73ef8d"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
-PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
-PyPlot = "d330b81b-6aea-500a-939a-2ce795aea3ee"
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+PythonPlot = "274fc56d-3b97-40fa-a1cd-1b4a50311bf9"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
@@ -46,7 +47,10 @@ OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
 [compat]
 ChainRulesCore = "1.26.1"
 FiniteDifferences = "0.12.34"
-OITOOLS = "0.10"
+NLopt = "1"
+OITOOLS = "0.11.1"
+PythonCall = "0.9"
+PythonPlot = "1"
 PrecompileTools = "1.2"
 Zygote = "0.7.11"
 julia = "1.11"   # `[sources]` (see above) requires Pkg ≥ 1.11

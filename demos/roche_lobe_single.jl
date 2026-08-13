@@ -56,7 +56,7 @@ tmap = parametric_temperature_map(roche_parameters,stars[1]);
 # Examples of plots
 plot2d_wireframe(stars[1])
 plot2d_allepochs(tmap, stars)
-plot3d_vertices(stars[1])
+# plot3d_vertices(stars[1])   # removed: no such function in ROTIR (was never defined)
 plot3d(tmap, stars[1])
 plot_mollweide(tmap, stars[1])
 ##plot3d_makie(tmap, stars[1]) # Work in progress

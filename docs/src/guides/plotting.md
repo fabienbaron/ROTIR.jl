@@ -1,7 +1,7 @@
 # Plotting
 
 ROTIR provides several visualization functions for temperature maps and stellar
-geometry. All plotting uses PyPlot (Matplotlib).
+geometry. All plotting uses PythonPlot (Matplotlib).
 
 ## 2D projection
 
@@ -85,21 +85,36 @@ any rotational phase.
 
 ### Decorations
 
-Three annotation overlays are available on top of the surface plot:
+Four annotation overlays are available on top of the surface plot:
 
+- **Limb** (`limb = true`, the default) — outline of the projected stellar disc. Worth keeping: a surface whose values sit at the pale end of the colormap is indistinguishable from a white background, and without the outline the disc — and any decoration drawn on it — appears to float in empty space.
 - **Pole line** (`rotation_axis = true`) — dashed line through the projected rotation axis (north to south pole), with an arrow at the north pole
-- **Spin arrow** (`rotation_arrow = true`) — curved arrow at the north pole showing the sense of prograde rotation (solid in front, dashed behind the limb)
-- **Compass** (`compass = true`) — E/N compass arrows in the lower-right corner (East points left, following astronomical convention)
+- **Spin arrow** (`rotation_arrow = true`) — curved arrow just beyond the north pole showing the sense of rotation, reversed when `rotation_period < 0`. The near-side arc is solid and the far side dashed, though for a pole tipped towards the observer the whole loop lies in front.
+- **Compass** (`compass = true`, the default) — E/N compass arrows in the lower-right corner (East points left, following astronomical convention). Sized to stay legible in a small multi-panel subplot.
 
 ```julia
 plot2d(tmap, star;
     rotation_axis  = true,
     rotation_arrow = true,
     compass        = true,
-    inclination    = 60.0,   # degrees from LOS (for exact axis placement)
-    position_angle = 30.0,   # degrees, N through E
+    limb           = true,   # outline the disc (default)
 )
 ```
+
+The decorations take their orientation from the **mesh** unless you override it, so they
+follow whatever built the star. Pass `inclination` / `position_angle` only to force a
+different orientation:
+
+```julia
+plot2d(tmap, star; rotation_axis = true,
+       inclination = 60.0, position_angle = 30.0)   # degrees from LOS; N through E
+```
+
+!!! warning "Not for binary components"
+    A component built by `create_binary_geometry` is oriented by the shared `binary_frame`
+    from the ORBIT, not by its own `inclination` / `position_angle`. Passing the
+    single-star angles to `plot2d_binary` therefore decorates a differently-oriented star.
+    Leave them unset.
 
 | Pole line | Spin arrow | Compass | All three |
 |:---------:|:----------:|:-------:|:---------:|
@@ -120,17 +135,35 @@ plot2d_allepochs(tmap, stars;
     plotmesh = false,
     tepochs  = tepochs,       # epoch labels
     colormap = "gist_heat",
-    arr_box  = 23,            # subplot layout: 2 rows, 3 columns
+    ncols    = 3,             # columns; the row count and figure size follow
 )
 ```
 
+The grid and figure size are derived from the number of epochs (up to four across), so
+three epochs give a 1×3 row rather than a half-empty 2×3 block. `arr_box` is still accepted
+in its old two-digit `<rows><cols>` form, e.g. `arr_box = 23`.
+
 ## Wireframe
 
-Overlay a wireframe of the projected pixel edges:
+Draw the tessellation on its own, with no colour fill:
 
 ```julia
 plot2d_wireframe(stars[1])
 ```
+
+By default the far-side tessels are drawn too, in a lighter colour behind the near side,
+so the mesh reads as a transparent globe:
+
+```julia
+plot2d_wireframe(stars[1];
+    hidden       = true,          # draw the far hemisphere as well (default)
+    front_color  = "black",       # near side
+    hidden_color = "lightgrey",   # far side
+    linewidth    = 0.5,
+)
+```
+
+`hidden = false` restores the opaque near-side-only view.
 
 ![Wireframe mesh](../assets/tess_healpix_mesh.png)
 
@@ -171,8 +204,8 @@ plot_mollweide(tmap, stars[1];
     colormap        = "gist_heat",
     incl            = 78.0,          # draw inclination line
     figtitle        = "Mollweide",
-    lon_color       = "white",       # longitude tick label color (default "white")
-    lat_color       = "black",       # latitude tick label color (default "black")
+    lon_color       = "white",       # meridians + their tick labels (default "white")
+    lat_color       = "black",       # parallels + their tick labels (default "black")
 )
 ```
 

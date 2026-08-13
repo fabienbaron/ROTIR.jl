@@ -1,8 +1,14 @@
 #!/usr/bin/env julia
 # ρ Cas posterior by nested sampling (UltraNest, via PyCall).
 #
-#   julia --project=demos -t auto demos/rho_cas_ultranest.jl
-#   FREE=rpole,omega,inc,PA,beta,ld1 STEPSAMPLER=1 NLIVE=400 julia --project=demos -t auto demos/rho_cas_ultranest.jl
+#   julia --project=demos -t 1 demos/rho_cas_ultranest.jl
+#   FREE=rpole,omega,inc,PA,beta,ld1 STEPSAMPLER=1 NLIVE=400 julia --project=demos -t 1 demos/rho_cas_ultranest.jl
+#
+# NOTE the `-t 1`. UltraNest is reached through PyCall, which is not thread-safe: `pydecref_`
+# calls Py_DecRef from a GC finalizer with no GIL check, so a PyObject finalized on a worker
+# thread segfaults the process mid-run. `fit_parametric_ultranest` now refuses to start with
+# more than one thread rather than crashing hours in. Note JULIA_NUM_THREADS in the
+# environment counts — `-t 1` on the command line is not enough if it is set.
 #
 # Needs the Python package:  ~/.julia/conda/3/x86_64/bin/pip install ultranest
 #

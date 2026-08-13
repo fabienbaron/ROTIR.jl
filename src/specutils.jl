@@ -1,13 +1,13 @@
 # include("di.jl");
 using FFTW
-using PyPlot
+using PythonPlot
 using FITSIO
 using Dierckx
 using Statistics
 using DelimitedFiles
 # using LsqFit
 
-rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
+rcParams = pyimport("matplotlib").rcParams
 #rcParams["font.family"] = "serif"
 #rcParams["font.serif"] = "Times New Roman"
 rcParams["xtick.top"] = true
@@ -52,7 +52,7 @@ function normalize_UVES(file, rv, output; regions=[], write=false, plot=false)
     ax[2].set_xlabel("Wavelength [Å]")
 
     if plot == true
-        PyPlot.show()
+        pyplot.show()
     end
 
     header = "# MJD:\t$(mjd)\tSNR:\t$(SNR)\tR:\t$(R)\n"

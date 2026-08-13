@@ -153,8 +153,10 @@ i_epoch = 6
 tepoch_jd = epoch_mean_mjd[i_epoch] + 2400000.5
 plot2d_binary(tmap1, tmap2, stars1[i_epoch], stars2[i_epoch], bparams, tepoch_jd,
     intensity=true, graticules=true, compass=true,
-    inclination1=inc_star, position_angle1=pa_star,
-    inclination2=inc_star, position_angle2=pa_star,
+    # No inclination1/position_angle1: create_binary_geometry orients BOTH components by
+    # the shared binary_frame built from the orbit (i, Omega, omega), ignoring each star's
+    # own inclination/position_angle. Passing the single-star angles here would decorate a
+    # differently-oriented star. The decorations read the orientation off the mesh.
     star_params1=star1_params, star_params2=star2_params,
     figtitle="Spica Binary (spheres) — Epoch $i_epoch")
 

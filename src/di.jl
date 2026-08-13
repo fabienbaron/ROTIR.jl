@@ -11,7 +11,7 @@ using OptimPackNextGen
 using BenchmarkTools
 
 ENV["MPLBACKEND"] = "qt5agg"
-rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
+rcParams = pyimport("matplotlib").rcParams
 # rcParams["font.family"] = "serif"
 # rcParams["font.serif"] = "Times New Roman"
 # rcParams["font.size"] = 15
@@ -699,7 +699,7 @@ function plot_profiles(line_profiles; didata=[], line_centers=[], line_labels=[]
     ## Can either plot the whole profile or just the relevant lines
     
     if line_centers != []
-        fig, ax = PyPlot.subplots(1, length(line_centers), figsize=(14, 8), sharey=true, gridspec_kw=Dict("wspace" => 0.05))
+        fig, ax = pyplot.subplots(1, length(line_centers), figsize=(14, 8), sharey=true, gridspec_kw=Dict("wspace" => 0.05))
         # subplots_adjust(wspace=0.0, hspace=0.0)
         # fig.text(0.5, 0.04, "Velocity [km/s]", ha="center", fontweight="bold", fontsize=15)
         # fig.text(0.04, 0.5, "Normalized Flux", va="center", rotation="vertical", fontweight="bold", fontsize=15)
@@ -758,7 +758,7 @@ function plot_profiles(line_profiles; didata=[], line_centers=[], line_labels=[]
         ax[end].legend(loc="lower center", bbox_to_anchor=(xmiddle, ybottom+0.01), fontsize=14, bbox_transform=fig.transFigure, framealpha=0.95)
 
     else
-        fig, ax = PyPlot.subplots(1, 1, figsize=(14, 8))
+        fig, ax = pyplot.subplots(1, 1, figsize=(14, 8))
         # subplots_adjust(wspace=0.0, hspace=0.0)
         ax.set_xlabel(raw"Velocity [km s$^{-1}$]", fontweight="bold", fontsize=15)
         ax.set_ylabel("Normalized Flux", fontweight="bold", fontsize=15)
@@ -784,7 +784,7 @@ function plot_profiles(line_profiles; didata=[], line_centers=[], line_labels=[]
         end
         ax.legend(fontsize=14, markerscale=3)
     end
-    PyPlot.draw()
+    pyplot.draw()
 end
 
 function di_reconstruct_spotfill(x_start::Vector{Float64}, didata::observedLineProfiles, polyflux::Matrix{Float64}, star_epoch_geom::Array{stellar_geometry}, stellar_parameters::Vector, model_grid::modelGrid, vsini::Float64, visible_pixels::Vector{Int64}, Tphot::Float64, Tspot::Float64; printcolor= [], verb = true, maxiter = 200, regularizers =[], wavelength_regions=[])

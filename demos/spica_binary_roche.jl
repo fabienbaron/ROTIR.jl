@@ -165,8 +165,10 @@ inc_star = 180.0 - i_orb  # stellar inclination = 64°
 pa_star  = Omega - 180.0   # position angle of spin axis = 129.938°
 plot2d_binary(tmap1, tmap2, stars1[i_epoch], stars2[i_epoch], bparams, tepoch_jd,
     rotation_axis=true, graticules=true,
-    inclination1=inc_star, position_angle1=pa_star,
-    inclination2=inc_star, position_angle2=pa_star,
+    # No inclination1/position_angle1: create_binary_geometry orients BOTH components by
+    # the shared binary_frame built from the orbit (i, Omega, omega), ignoring each star's
+    # own inclination/position_angle. Passing the single-star angles here would decorate a
+    # differently-oriented star. The decorations read the orientation off the mesh.
     star_params1=roche_params_1, star_params2=roche_params_2,
     figtitle="Spica Binary (Roche) — Epoch $i_epoch")
 

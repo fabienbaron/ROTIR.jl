@@ -23,6 +23,7 @@ makedocs(;
             "Conventions"             => "guides/conventions.md",
             "Tessellation"            => "guides/tessellation.md",
             "Surface Types"           => "guides/surfaces.md",
+            "Parametric Fitting"      => "guides/parametric_fitting.md",
             "Image Reconstruction"    => "guides/reconstruction.md",
             "Direct Imaging Methods"  => "guides/imaging_methods.md",
             "Binary Orbits"           => "guides/orbits.md",

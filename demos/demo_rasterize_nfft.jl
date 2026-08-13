@@ -92,36 +92,38 @@ u_extent = [Float64(v_freq_shifted[1]), Float64(v_freq_shifted[end]),
 fig, axes = subplots(2, 2, figsize=(12, 10))
 
 # Top-left: rasterization
-axes[1,1].imshow(img_raster, origin="lower",
+    # 0-BASED indexing: under PythonCall `subplots` returns a Py numpy array of axes,
+    # not the Julia Matrix PyCall used to convert it into.
+axes[0,0].imshow(img_raster, origin="lower",
                  extent=[-half_fov, half_fov, -half_fov, half_fov],
                  cmap="hot", interpolation="nearest")
-axes[1,1].set_title("Rasterization")
-axes[1,1].set_xlabel("West (mas)")
-axes[1,1].set_ylabel("North (mas)")
+axes[0,0].set_title("Rasterization")
+axes[0,0].set_xlabel("West (mas)")
+axes[0,0].set_ylabel("North (mas)")
 
 # Top-right: NFFT convenience image (polyft_nfft_image)
-axes[1,2].imshow(img_nfft, origin="lower",
+axes[0,1].imshow(img_nfft, origin="lower",
                  extent=[-half_fov, half_fov, -half_fov, half_fov],
                  cmap="hot", interpolation="nearest")
-axes[1,2].set_title("NFFT image (ngauss=6)")
-axes[1,2].set_xlabel("West (mas)")
-axes[1,2].set_ylabel("North (mas)")
+axes[0,1].set_title("NFFT image (ngauss=6)")
+axes[0,1].set_xlabel("West (mas)")
+axes[0,1].set_ylabel("North (mas)")
 
 # Bottom-left: visibility amplitudes |F| on the rfftfreq x fftfreq grid
-axes[2,1].imshow(log10.(abs.(F_display) .+ 1f-12), origin="lower",
+axes[1,0].imshow(log10.(abs.(F_display) .+ 1f-12), origin="lower",
                  extent=u_extent, aspect="auto",
                  cmap="inferno", interpolation="nearest")
-axes[2,1].set_title("log₁₀|V| on rfft grid")
-axes[2,1].set_xlabel("v  (cycles/mas)")
-axes[2,1].set_ylabel("u  (cycles/mas)")
+axes[1,0].set_title("log₁₀|V| on rfft grid")
+axes[1,0].set_xlabel("v  (cycles/mas)")
+axes[1,0].set_ylabel("u  (cycles/mas)")
 
 # Bottom-right: image recovered via explicit irfft
-axes[2,2].imshow(img_irfft, origin="lower",
+axes[1,1].imshow(img_irfft, origin="lower",
                  extent=[-half_fov, half_fov, -half_fov, half_fov],
                  cmap="hot", interpolation="nearest")
-axes[2,2].set_title("irfft(F) image")
-axes[2,2].set_xlabel("West (mas)")
-axes[2,2].set_ylabel("North (mas)")
+axes[1,1].set_title("irfft(F) image")
+axes[1,1].set_xlabel("West (mas)")
+axes[1,1].set_ylabel("North (mas)")
 
 suptitle("Rapid Rotator (ω=0.9, inc=60°) — Rasterize / NFFT / Fourier pipeline")
 tight_layout()

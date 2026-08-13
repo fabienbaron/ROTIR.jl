@@ -2,7 +2,7 @@ using ROTIR
 using Statistics
 using LinearAlgebra
 using Test
-using PyPlot
+using PythonPlot
 
 # ── Inline the two functions under test (di.jl has heavy deps) ────────
 function make_circ_spot(temperature_map, star_geometry, spot_radius, lat, long; bright_frac=0.8)

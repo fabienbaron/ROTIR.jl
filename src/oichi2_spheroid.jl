@@ -488,6 +488,119 @@ function max_entropy_fg(x, g; verbose=false, ϵ=1e-9)
   return reg_f
 end
 
+"""
+    radflat_bins(star; nbins=6, subset=nothing) -> NamedTuple
+
+Precompute the projected-radial binning that [`spheroid_radflat_fg`](@ref) needs. Pass the
+result as the third element of a `"radflat"` entry in `regularizers`.
+
+Patches are binned by the projected radius `ρ` of their centre (mean of the four projected
+corners), normalised so the outermost visible patch sits at `ρ = 1`. Returns the per-patch
+bin index, the per-bin weight `w_b = ρ_b² · Σ polyflux`, and the patch counts.
+
+`ρ_b²` weights the limb, which is the whole point: that is where a spot is degenerate with
+the limb-darkening coefficient. `flux_weight_b` (the projected area) stops a bin containing
+a handful of slivers from carrying the same force as one containing half the disk.
+"""
+function radflat_bins(star; nbins::Int = 6, subset = nothing)
+    idx = subset === nothing ? star.index_quads_visible : subset
+    pw  = @view star.proj_west[idx, :]
+    pn  = @view star.proj_north[idx, :]
+    n   = length(idx)
+    ρ   = [hypot(sum(@view pw[i, :])/4, sum(@view pn[i, :])/4) for i in 1:n]
+    ρmax = maximum(ρ)
+    ρmax > 0 || error("radflat_bins: all projected radii are zero")
+    ρn = ρ ./ ρmax
+    # bin edges equispaced in ρ; the outermost patch lands in the last bin, not one past it
+    b  = [min(nbins, floor(Int, r*nbins) + 1) for r in ρn]
+    pf = length(star.polyflux) == n ? abs.(star.polyflux) : abs.(star.polyflux[idx])
+    ρc = [(k - 0.5)/nbins for k in 1:nbins]                 # bin centre radius
+    w  = zeros(Float64, nbins)
+    cnt = zeros(Int, nbins)
+    @inbounds for i in 1:n
+        w[b[i]]  += pf[i]
+        cnt[b[i]] += 1
+    end
+    w .= (ρc .^ 2) .* w                                     # ρ_b² · flux_weight_b
+    # Under-populated bins are the failure mode at coarse tessellations. Equal-ρ bins on a
+    # projected disk hold ∝ ρ dρ patches, so the INNERMOST bin starves first: at HEALPix
+    # nside=1 (24 visible patches) one bin comes out empty and the penalty is ~30 % wrong;
+    # at nside=2 the innermost bin holds a single patch, so its "mean brightness" is one
+    # number. An empty bin contributes zero rather than erroring — quietly, which is exactly
+    # the kind of silent wrong answer worth a warning. nside ≥ 3 is stable to ~1 %.
+    if any(iszero, cnt)
+        @warn "radflat_bins: $(count(iszero, cnt)) of $nbins radial bins are EMPTY " *
+              "($(cnt)); RADFLAT will be biased. Use a finer tessellation or fewer bins."
+    elseif minimum(cnt) < 3
+        @warn "radflat_bins: thinnest radial bin holds only $(minimum(cnt)) patch(es) " *
+              "($(cnt)); RADFLAT will be noisy. Consider a finer tessellation or fewer bins."
+    end
+    return (idx = idx, bin = b, nbins = nbins, w = w, count = cnt, rho = ρn)
+end
+
+"""
+    spheroid_radflat_fg(x, g, bins; scale=1e5, verbose=false) -> f
+
+RADFLAT (J. Monnier, priv. comm. 2026-07-01): force the *azimuthally averaged* radial
+brightness profile of the visible disk to be flat.
+
+```
+f = scale · Σ_b w_b · (I_b/I_mean − 1)²
+```
+
+with `I_b` the mean patch brightness in projected radial bin `b` and `I_mean` the mean over
+the whole visible disk. `x` is the patch brightness **without** limb darkening — that is
+deliberate, since the point is to stop the reconstruction from smuggling limb structure into
+the surface map where it trades off against the LD coefficient.
+
+# Why it exists
+
+On a **non-rotating** star reconstructed from few epochs, the surface regularizer is weak
+enough that dark or bright spots drift to the limb and become degenerate with the
+limb-darkening parameter: χ² barely moves while the LD coefficient wanders. Monnier's RW Cep
+test gave `α = 1.07 ± 0.19` uncontrolled against `α = 0.49 ± 0.02` at strong RADFLAT, with
+χ² only slightly worse and the image essentially unchanged.
+
+!!! note "Not for rotators"
+    A rotating star observed over several epochs already breaks that degeneracy — spots move
+    and the limb is resampled. RADFLAT would then be fighting real structure. Use it for the
+    single-epoch / non-rotating case it was designed for.
+
+# Gradient
+
+With `n_b` patches in bin `b` and `N` visible patches, `∂I_b/∂x_j = [j∈b]/n_b` and
+`∂I_mean/∂x_j = 1/N`, so
+
+```
+∂f/∂x_j = 2·scale·[ w_{b(j)}(r_{b(j)} − 1)/(n_{b(j)}·I_mean)
+                    − (1/(N·I_mean))·Σ_b w_b (r_b − 1) r_b ],    r_b ≡ I_b/I_mean
+```
+
+the second term being a global coupling shared by every visible patch — it is what stops the
+regularizer from simply rescaling the whole map.
+"""
+function spheroid_radflat_fg(x, g, bins; scale = 1e5, verbose = false, ϵ = 1e-12)
+    nb = bins.nbins; b = bins.bin; w = bins.w; cnt = bins.count
+    N  = length(x)
+    N == length(b) ||
+        error("spheroid_radflat_fg: x has $N entries but the binning was built for $(length(b)). " *
+              "The regularizer's pixel subset must match the one passed to radflat_bins.")
+    Imean = sum(x)/N
+    abs(Imean) > ϵ || (g .= 0; return 0.0)
+    S = zeros(Float64, nb)
+    @inbounds for i in 1:N; S[b[i]] += x[i]; end
+    r = [cnt[k] > 0 ? (S[k]/cnt[k])/Imean : 1.0 for k in 1:nb]   # empty bin contributes nothing
+    f = scale * sum(w[k]*(r[k]-1)^2 for k in 1:nb)
+    glob = sum(w[k]*(r[k]-1)*r[k] for k in 1:nb) / (N*Imean)
+    @inbounds for i in 1:N
+        k = b[i]
+        loc = cnt[k] > 0 ? w[k]*(r[k]-1)/(cnt[k]*Imean) : 0.0
+        g[i] = 2*scale*(loc - glob)
+    end
+    verbose && println(" RADFLAT: ", f)
+    return f
+end
+
 function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verbose=false)
   reg_f = 0.0;
   for ireg =1:length(regularizers)
@@ -503,6 +616,13 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
           reg_f += regularizers[ireg][2]*spheroid_mean_fg(x_sub, temp_g, verbose = verbose);
       elseif regularizers[ireg][1] == "bias"
           reg_f += regularizers[ireg][2]*spheroid_harmon_bias_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose );
+      elseif regularizers[ireg][1] == "radflat"
+          reg_f += regularizers[ireg][2]*spheroid_radflat_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      else
+          # Previously this chain had no `else`: an unrecognised name contributed exactly
+          # zero, silently, so a typo looked like a regularizer that simply did nothing.
+          error("spheroid_regularization: unknown regularizer \"$(regularizers[ireg][1])\"; " *
+                "known: mem, tv, tv2, mean, bias, radflat")
       end
       g[regularizers[ireg][4]] += regularizers[ireg][2]*temp_g
   end

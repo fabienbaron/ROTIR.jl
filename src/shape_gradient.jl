@@ -67,19 +67,32 @@ f'(x) = d/dx [3cos(α)/x] where α = (π + acos(x))/3
       = [sin(α)/√(1-x²) - 3cos(α)/x] / x
 """
 function f_rapid_rot_and_deriv(x::T) where T
-    if abs(x) < T(1e-12)
-        return one(T), zero(T)
+    # The textbook form 3cos((π + acos x)/3)/x is CATASTROPHICALLY CANCELLING for small x:
+    # the cosine argument tends to π/2, so cos(...) is pure rounding noise, and it is then
+    # multiplied by 3/x. In Float32 this destroys the result well before the old |x| < 1e-12
+    # guard triggers — f(1e-8) came back as garbage, and since x = ω·sinθ that made
+    # `vonzeipel_map` return T ∈ [344, 1077] K instead of a uniform 3900 K for fev = 1e-8,
+    # i.e. any fitter or sampler approaching the non-rotating limit silently got nonsense.
+    #
+    # Exact rewrite, no cancellation: (π + acos x)/3 = π/2 − asin(x)/3, and
+    # cos(π/2 − u) = sin(u), so
+    #
+    #     f(x) = 3·sin(asin(x)/3) / x
+    #
+    # Every step is well conditioned down to the smallest normal float.
+    ax = abs(x)
+    # The DERIVATIVE still cancels near zero — its numerator is a difference of two
+    # quantities both → 1 — so use the series there. Errors balance at x ~ eps^(1/4):
+    #     f  = 1 + 4x²/27 + O(x⁴),      f' = 8x/27 + O(x³)
+    if ax < eps(T)^(one(T)/4)
+        return one(T) + T(4//27)*x*x, T(8//27)*x
     end
-    x = clamp(x, -one(T), one(T))
-    α = (T(π) + acos(x)) / 3
-    sα, cα = sincos(α)
-    f = 3 * cα / x
-    onemx2 = one(T) - x^2
-    if onemx2 < T(1e-30)
-        df = -f / x
-    else
-        df = (sα / sqrt(onemx2) - f) / x
-    end
+    x  = clamp(x, -one(T), one(T))
+    u  = asin(x) / 3
+    su, cu = sincos(u)                      # cu = sin((π + acos x)/3), the old `sα`
+    f  = 3 * su / x
+    onemx2 = one(T) - x*x
+    df = onemx2 < eps(T) ? -f / x : (cu / sqrt(onemx2) - f) / x
     return f, df
 end
 

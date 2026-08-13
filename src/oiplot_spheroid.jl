@@ -1,29 +1,34 @@
-using PyPlot,PyCall, LaTeXStrings, Statistics
+using PythonPlot, PythonCall, LaTeXStrings, Statistics
 
 # Suppress matplotlib warning about tight_layout + equal-aspect axes
 # (deferred to first plot call via set_oiplot_defaults)
 
 const _oiplot_initialized = Ref(false)
 
-function set_oiplot_defaults()
+"""
+    set_oiplot_defaults(; compact=<current>)
+
+Apply ROTIR's matplotlib style. This **delegates to `OITOOLS.set_oiplot_defaults`** so a
+figure produced by ROTIR and one produced by OITOOLS look the same in the same document —
+they routinely appear side by side in a paper, and a serif/sans or 12pt/14pt mismatch
+between them is immediately visible.
+
+ROTIR previously kept its own copy of these rcParams, which had drifted from OITOOLS'
+(14pt vs 12pt, minor ticks 6 vs 3, `markeredgewidth` 1 vs 0). Delegating removes the
+second source of truth, and picks up OITOOLS' `compact` mode for free — worth passing
+`compact=true` when stacking panels.
+
+Every plotting entry point in this file calls this first. That matters for more than
+style: the rcParams are global, so a function that does *not* set them inherits whatever
+the last caller left behind, and its font then depends on what you happened to plot
+earlier in the session.
+"""
+function set_oiplot_defaults(; kwargs...)
     if !_oiplot_initialized[]
         pyimport("warnings").filterwarnings("ignore", message=".*tight_layout.*")
         _oiplot_initialized[] = true
     end
-    rc = PyDict(pyimport("matplotlib")."rcParams")
-    rc["font.family"] = "serif"
-    rc["font.size"] = 14
-    rc["xtick.major.size"] = 6
-    rc["ytick.major.size"] = 6
-    rc["xtick.minor.size"] = 6
-    rc["ytick.minor.size"] = 6
-    rc["xtick.major.width"] = 1
-    rc["ytick.major.width"] = 1
-    rc["xtick.minor.width"] = 1
-    rc["ytick.minor.width"] = 1
-    rc["lines.markeredgewidth"] = 1
-    rc["legend.numpoints"] = 1
-    rc["legend.handletextpad"] = 0.3
+    OITOOLS.set_oiplot_defaults(; kwargs...)
 end
 
 const global oiplot_colors=["black", "gold","chartreuse","blue","red", "pink","lightgray","darkorange","darkgreen","aqua",
@@ -39,23 +44,110 @@ const global oiplot_markers=["o","s","v","P","*","x","^","D","p",1,"<","H","X","
 ############################################################
 
 """
-    draw_compass(ax, axis_max; size_frac=0.12, fontsize=12, color="black")
+Physical width of `ax` in inches, from the axes rectangle and the figure size. Uses
+`get_position` rather than `get_window_extent` so no renderer is needed — this is called
+while the figure is still being built.
+"""
+function _axes_width_inches(ax)
+    pos = ax.get_position()
+    return pyconvert(Float64, pos.width) *
+           pyconvert(Float64, ax.figure.get_size_inches()[0])
+end
+
+function _axes_height_inches(ax)
+    pos = ax.get_position()
+    return pyconvert(Float64, pos.height) *
+           pyconvert(Float64, ax.figure.get_size_inches()[1])
+end
+
+"""
+    draw_compass(ax, axis_max; size_frac=0.12, fontsize=nothing, color="black")
 
 Draw E/N compass arrows in the lower-right corner of a 2D sky-plane plot.
 East points left (astronomical convention when x-axis is inverted).
+
+`fontsize=nothing` scales the labels with the axes' physical width, so the compass stays
+legible in a small multi-panel subplot instead of colliding with its own arrows. Pass a
+number to pin it.
 """
-function draw_compass(ax, axis_max; size_frac=0.12, fontsize=12, color="black")
-    s = size_frac * axis_max
-    margin = 0.20 * axis_max
+function draw_compass(ax, axis_max; size_frac=0.12, fontsize=nothing, color="black")
+    # The compass is a figure annotation, like a scale bar: it should stay a roughly FIXED
+    # PHYSICAL size rather than shrink with the panel. Sizing the arrows in data units
+    # (`size_frac * axis_max`) while the labels are in points is what makes the compass
+    # illegible in plot2d_allepochs, where three panels share one figure — the arrow shrinks
+    # 3x but the text cannot, so N and E collide with their own arrows.
+    #
+    # So: derive the arrow length in POINTS from size_frac, clamp it to a legible physical
+    # range, then convert back to data units. A large single-panel plot lands mid-range and
+    # is unchanged; a small subplot gets a proportionally larger — and readable — compass.
+    h_pts     = max(_axes_height_inches(ax) * 72, eps())
+    arrow_pts = clamp(0.5 * size_frac * h_pts, 22.0, 40.0)
+    s         = (arrow_pts / h_pts) * (2 * axis_max)
+    margin    = 0.20 * axis_max
     cx = -(axis_max - margin)
     cy = -(axis_max - margin)
-    gap = 0.15 * s  # small offset so E and N labels don't crowd the corner
+    if fontsize === nothing
+        fontsize = clamp(0.34 * arrow_pts, 7.0, 13.0)
+    end
+    # Offset the labels by their own size in DATA units, so the gap tracks the text.
+    gap = 0.75 * fontsize * (2 * axis_max) / h_pts
     ax.annotate("N", xy=(cx - gap, cy + s), xytext=(cx - gap, cy),
         arrowprops=Dict("arrowstyle" => "-|>", "lw" => 1.5, "color" => color),
         fontsize=fontsize, color=color, ha="center", va="bottom", fontweight="bold", zorder=8)
     ax.annotate("E", xy=(cx + s, cy - gap), xytext=(cx, cy - gap),
         arrowprops=Dict("arrowstyle" => "-|>", "lw" => 1.5, "color" => color),
         fontsize=fontsize, color=color, ha="right", va="center", fontweight="bold", zorder=8)
+end
+
+"""
+    _padded_norm(lo, hi, range; cfloor=0.15, cceil=0.95) -> matplotlib Normalize
+
+Map `[lo, hi]` onto the colormap fraction `[cfloor, cceil]` rather than `[0, 1]`, by
+widening the normalisation limits at both ends.
+
+Both ends matter. ROTIR used to pad only the floor, "avoiding black pixels on dark
+background" — but the default background is WHITE, and the top of `gist_heat` is pure
+white, so the hottest part of a surface was rendered in exactly the background colour.
+On a binary that is fatal: the two components share one scale, so the hotter one sits at
+the top of the range and its disk disappears completely. The old padding guarded the end
+that was not the problem.
+"""
+function _padded_norm(lo, hi, range; cfloor = 0.15, cceil = 0.95)
+    span = cceil - cfloor
+    return matplotlib.colors.Normalize(vmin = lo - cfloor       / span * range,
+                                       vmax = hi + (1 - cceil)  / span * range)
+end
+
+"""
+    draw_limb!(ax, star; offset_west=0.0, offset_north=0.0, color="black",
+               linewidth=0.8, alpha=1.0, zorder=4)
+
+Draw the projected stellar limb — the silhouette of the tessellated surface on the sky.
+
+This is what keeps a star visible regardless of its colours. A surface that maps to the
+pale end of a colormap (a hot component on `gist_heat`) is indistinguishable from a white
+background, so the disk vanishes and any decoration drawn on it — rotation axis, spin
+arrow — appears to float in empty space with nothing to reference it against.
+
+The outline is the CONVEX HULL of the projected vertices, not `silhouette_polygon`. Both
+describe the same boundary, but the latter bins vertices by azimuth and keeps the largest
+radius per bin: wherever no vertex happens to fall near the true edge of its bin the radius
+under-estimates, and the outline notches inward. On a coarse mesh those notches are plainly
+visible. The hull is exact for a convex body and has no resolution parameter at all.
+
+(`silhouette_polygon` remains the right tool for occultation, where a radius-vs-azimuth
+profile is what the calculation needs.)
+
+Vertices are taken in `x = -proj_west`, the same convention as the plots, so only the
+offsets need applying.
+"""
+function draw_limb!(ax, star; offset_west=0.0, offset_north=0.0, color="black",
+                    linewidth=0.8, alpha=1.0, zorder=4)
+    vis = star.index_quads_visible
+    hx, hy = convex_hull_2d(vec(-star.proj_west[vis, :]), vec(star.proj_north[vis, :]))
+    ax.plot(Float64.(vcat(hx, hx[1])) .- offset_west,
+            Float64.(vcat(hy, hy[1])) .+ offset_north,
+            "-", color=color, linewidth=linewidth, alpha=alpha, zorder=zorder)
 end
 
 function _polar_radius(star, star_params)
@@ -73,6 +165,66 @@ function _polar_radius(star, star_params)
 end
 
 """
+    _mesh_rotation(star) -> R   (3x3, body frame -> sky frame)
+
+Recover the body->sky rotation directly from the mesh, with no angles involved.
+
+`stellar_geometry` stores each tessel centre twice: in `vertices_spherical` as body-frame
+(r, θ, φ), and in `vertices_xyz` after rotation to the sky. Those two point sets differ by
+exactly the rotation we want, so an orthogonal Procrustes fit recovers it.
+
+This matters because it captures the rotation PHASE ψ as well as inclination and position
+angle. Reconstructing angles from the spin axis alone would place the pole correctly but
+leave the meridians at an arbitrary phase.
+"""
+function _mesh_rotation(star)
+    sp = star.vertices_spherical[:, 5, :]
+    r, θ, φ = Float64.(sp[:, 1]), Float64.(sp[:, 2]), Float64.(sp[:, 3])
+    B = hcat(r .* sin.(θ) .* cos.(φ), r .* sin.(θ) .* sin.(φ), r .* cos.(θ))
+    S = Float64.(star.vertices_xyz[:, 5, :])
+    F = svd(B' * S)                     # minimise ||B*R - S|| over orthogonal R
+    R = F.U * F.Vt
+    if det(R) < 0                       # reject a reflection, keep it a proper rotation
+        R = F.U * Diagonal([1.0, 1.0, -1.0]) * F.Vt
+    end
+    return R
+end
+
+"""
+    _spin_axis(star, star_params, inclination, position_angle) -> (north, south)
+
+The stellar rotation axis in sky coordinates, as the two pole positions.
+
+With `inclination`/`position_angle` given (degrees) the axis is analytic. Otherwise it is
+recovered from the mesh by averaging the tessels of extreme COLATITUDE in the body frame.
+
+That last detail is load-bearing. This used to take the first and last few pixels *by
+index* (`vertices_xyz[1:4, …]`), which is only the pole under HEALPix RING ordering —
+ROTIR tessellations are NESTED, where the leading pixels lie in base pixel 0, a diamond
+straddling mid-latitudes. For an nside=3 sphere at inclination 60°/PA 30° that put the
+axis 76.5° off the true one, with the north arrow pointing *away* from the observer.
+Selecting on colatitude is ordering-independent and matches the analytic axis to 0.02°
+(the residual is Float32 mesh discretisation).
+"""
+function _spin_axis(star, star_params, inclination, position_angle)
+    R = _polar_radius(star, star_params)
+    if !isnan(inclination) && !isnan(position_angle)
+        inc_rad = inclination * π / 180
+        PA_rad  = position_angle * π / 180
+        spin = [-sin(PA_rad) * sin(inc_rad), cos(PA_rad) * sin(inc_rad), cos(inc_rad)]
+    else
+        θ = star.vertices_spherical[:, 5, 2]
+        k = min(4, star.npix)
+        inorth = partialsortperm(θ, 1:k)              # smallest colatitude = north pole
+        isouth = partialsortperm(θ, 1:k, rev = true)  # largest  colatitude = south pole
+        spin = Float64.(vec(mean(star.vertices_xyz[inorth, 5, :], dims = 1)) .-
+                        vec(mean(star.vertices_xyz[isouth, 5, :], dims = 1)))
+        spin ./= norm(spin)
+    end
+    return R .* spin, -R .* spin
+end
+
+"""
     draw_rotation_axis(ax, star; inclination=NaN, position_angle=NaN,
         arrow_frac=0.3, color="black", linewidth=1.5, offset_west=0.0, offset_north=0.0)
 
@@ -85,18 +237,7 @@ the axis is computed analytically. Otherwise it is estimated from the tessellati
 function draw_rotation_axis(ax, star; arrow_frac=0.3, color="black", linewidth=1.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
     alpha=1.0, inside_alpha=0.5, star_params=nothing)
-    if !isnan(inclination) && !isnan(position_angle)
-        inc_rad = inclination * π / 180
-        PA_rad  = position_angle * π / 180
-        spin = [-sin(PA_rad) * sin(inc_rad), cos(PA_rad) * sin(inc_rad), cos(inc_rad)]
-        R = _polar_radius(star, star_params)
-        north = R .* spin
-        south = -R .* spin
-    else
-        np = star.npix
-        north = vec(mean(star.vertices_xyz[1:min(4,np), 5, :], dims=1))
-        south = vec(mean(star.vertices_xyz[max(1,np-3):np, 5, :], dims=1))
-    end
+    north, south = _spin_axis(star, star_params, inclination, position_angle)
     delta = north .- south
     north_tip = north .+ arrow_frac .* delta
     south_tip = south .- arrow_frac .* delta
@@ -128,17 +269,7 @@ When `inclination`/`position_angle` are given, the axis is computed analytically
 function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.07, offset_frac=0.15,
     color="black", linewidth=1.5, npoints=200, offset_west=0.0, offset_north=0.0,
     inclination=NaN, position_angle=NaN, star_params=nothing)
-    if !isnan(inclination) && !isnan(position_angle)
-        inc_rad = inclination * π / 180
-        PA_rad  = position_angle * π / 180
-        spin = [-sin(PA_rad) * sin(inc_rad), cos(PA_rad) * sin(inc_rad), cos(inc_rad)]
-        R = _polar_radius(star, star_params)
-        north = R .* spin
-        south = -R .* spin
-    else
-        north = star.vertices_xyz[1, 1, 1:3]
-        south = star.vertices_xyz[end, 3, 1:3]
-    end
+    north, south = _spin_axis(star, star_params, inclination, position_angle)
     axis = north .- south
     axis_len = norm(axis)
     axis_hat = axis ./ axis_len
@@ -160,8 +291,46 @@ function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.07, offset_frac=0
     xb = copy(x2d); xb[front] .= NaN; yb = copy(y2d); yb[front] .= NaN
     ax.plot(xb, yb, "--", color=color, linewidth=linewidth, zorder=1)
     zord_tip = z[end] > 0 ? 7 : 1
-    ax.annotate("", xy=(x2d[end], y2d[end]), xytext=(x2d[end-3], y2d[end-3]),
-        arrowprops=Dict("arrowstyle" => "-|>", "color" => color, "lw" => linewidth),
+    # The head is symmetric about the line xytext -> xy, so that line must be the curve's
+    # TANGENT at the endpoint, not a chord back to an earlier sample. The chord to
+    # `end-3` spans 4.5 deg of arc and sits 1.37 deg off the tangent, which rotates the
+    # head slightly against the curve it terminates. The curve is parametric, so use the
+    # analytic derivative d/dt [cos t*e1 + sin t*e2] and project it the same way as pts.
+    dpt = -sin(θ[end]) .* e1 .+ cos(θ[end]) .* e2
+    tx, ty = -dpt[1], dpt[2]
+    tnorm = hypot(tx, ty)
+    tx /= tnorm; ty /= tnorm
+    # Size the head against the LOOP, not at a fixed 15 points. The loop's radius `r` is in
+    # data units and comes out around 15 pt at ordinary figure scales — so a fixed 15 pt
+    # head is as long as the circle's radius and chords straight across the arc. The head
+    # is a straight triangle, so spanning ~60 deg of a tight curve makes it look attached
+    # at the wrong angle even when its axis is exactly tangent (which it is).
+    ylo, yhi = pyconvert(NTuple{2,Float64}, ax.get_ylim())
+    h_pts       = max(_axes_height_inches(ax) * 72, eps())
+    data_per_pt = abs(yhi - ylo) / h_pts
+    # matplotlib's "-|>" draws a head whose LENGTH is 0.4 * mutation_scale points, so pick
+    # the length first (a fraction of the loop radius) and back out the scale.
+    head_len    = 0.45 * r                                    # data units
+    head_pts    = clamp(head_len / data_per_pt / 0.4, 6.0, 30.0)
+    # Two settings make the head sit ON the arc rather than beside it:
+    #
+    #   lw = 0      — the annotate must contribute the HEAD ONLY. With a non-zero width it
+    #                 also strokes its own shaft, and that shaft is the STRAIGHT segment
+    #                 xytext -> xy. A straight chord against a curving arc leaves a kink at
+    #                 the join, which is what made the arrow look unstitched. The plotted
+    #                 curve is already the shaft, so the annotate need not draw one.
+    #   shrink = 0  — the 2-point default pulls the head back off the curve's endpoint,
+    #                 leaving a gap.
+    #
+    # draw_rotation_axis uses the same pair for the same reason.
+    # "-|>" places the arrow's TIP at `xy`. Pointing `xy` at the curve's last point
+    # therefore lays the head BACKWARD along the arc, burying it in the line it is meant
+    # to terminate. The base belongs on the endpoint and the head should continue past it,
+    # so put `xytext` on the curve and `xy` one head-length further along the tangent.
+    ax.annotate("", xy=(x2d[end] + head_len * tx, y2d[end] + head_len * ty),
+        xytext=(x2d[end], y2d[end]),
+        arrowprops=Dict("arrowstyle" => "-|>", "shrinkA" => 0, "shrinkB" => 0,
+            "color" => color, "lw" => 0, "mutation_scale" => head_pts),
         zorder=zord_tip)
 end
 
@@ -182,7 +351,7 @@ When `star_params` is omitted, semi-axes are estimated from the tessellation (ba
 """
 function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8, alpha=0.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
-    npoints=200, star_params=nothing)
+    npoints=200, star_params=nothing, limb=true)
     collections = pyimport("matplotlib.collections")
 
     # Determine surface model
@@ -200,14 +369,35 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
         r_eq = any(eq_mask) ? mean(all_r[eq_mask]) : mean(all_r)
     end
 
-    # Build rotation matrix (same convention as rotate_star)
-    inc_rad = isnan(inclination) ? 0.0 : inclination * π / 180
-    PA_rad  = isnan(position_angle) ? 0.0 : position_angle * π / 180
-    # Compute rotation angle from epoch
-    rotation_angle = (star_params !== nothing && hasproperty(star_params, :rotation_period)) ?
-        360.0 * star.t / star_params.rotation_period : 0.0
-    ψ_rad   = rotation_angle * π / 180
-    R = rot_vertex(ψ_rad, inc_rad, PA_rad)
+    # Build rotation matrix (same convention as rotate_star).
+    #
+    # Orientation precedence: explicit keyword, then `star_params`, then unrotated. The
+    # middle step used to be missing — `star_params` was consulted for the SHAPE but not
+    # the ORIENTATION, so passing it alone silently produced a pole-up graticule on a star
+    # that was actually inclined. That made `plot2d(...; graticules=true, star_params=p)`
+    # disagree with the same call that also passed inclination/position_angle explicitly,
+    # even though both describe the same star.
+    # Orientation precedence: explicit angles, else the MESH.
+    #
+    # It used to default to 0/0, drawing a pole-up graticule on an inclined star. The
+    # tempting repair — read `inclination`/`position_angle` off `star_params` — is right
+    # for a single star but WRONG for a binary component: `create_binary_geometry` orients
+    # both components by the shared `binary_frame` built from the ORBIT (i, Ω, ω), and
+    # ignores each star's own inclination/position_angle entirely. For the Spica-like test
+    # binary those two answers differ by 102.6°.
+    #
+    # The mesh is the one source that is always right, because it IS the star being drawn,
+    # whatever built it — and `_mesh_rotation` recovers the rotation phase too, which no
+    # pair of angles can express without also knowing the epoch and period.
+    if isnan(inclination) || isnan(position_angle)
+        R = _mesh_rotation(star)
+    else
+        # Rotation angle from the epoch (needs the period, which only star_params carries)
+        rotation_angle = (star_params !== nothing && hasproperty(star_params, :rotation_period)) ?
+            360.0 * star.t / star_params.rotation_period : 0.0
+        R = rot_vertex(rotation_angle * π / 180,
+                       inclination * π / 180, position_angle * π / 180)
+    end
 
     graticule_lines = Vector{Matrix{Float64}}()
 
@@ -269,6 +459,14 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
         append!(graticule_lines, _visible_segments(sky_pts, offset_west, offset_north))
     end
 
+    # The projected limb. Without it the meridians and parallels float with no boundary,
+    # and on a filled plot the silhouette is invisible whenever the surface maps to the
+    # pale end of the colormap (a hot component on gist_heat against a white background
+    # disappears entirely). `silhouette_polygon` already works in x = -proj_west, the same
+    # convention used here, so its output needs only the offsets applied.
+    limb && draw_limb!(ax, star; offset_west=offset_west, offset_north=offset_north,
+                       color=color, linewidth=linewidth, alpha=alpha)
+
     if !isempty(graticule_lines)
         ax.add_collection(collections.PolyCollection(graticule_lines, closed=false,
             ec=color, fc="none", linewidths=[linewidth], alpha=alpha, zorder=5))
@@ -313,6 +511,31 @@ function set_tick_spacing(ax, axis_max)
 end
 
 """
+    rgba(cmap, x)                 -> NTuple{4,Float64}
+    rgba(cmap, xs::AbstractArray) -> Vector{Vector{Float64}}
+
+Evaluate a matplotlib colormap and bring the result back to Julia as something matplotlib
+will accept.
+
+Two PythonCall differences bite here, both of which PyCall used to hide:
+
+1. **No automatic conversion.** `cmap(x)` returns a `Py`, so `cmap.(xs)` gives a
+   `Vector{Py}`, which matplotlib turns into a numpy *object* array rather than a float
+   array. Colour lookup then fails, or silently produces a dtype nothing downstream can use.
+2. **A Julia `Matrix` is not an `n × 4` RGBA array.** Passing one gives
+   `ValueError: Invalid RGBA argument: 0.1` — PythonCall hands numpy a Fortran-ordered view
+   and `to_rgba_array` reads it as a sequence of scalars. Transposing does not help.
+
+A `Vector` of length-4 `Vector`s is unambiguous under both conventions, so that is what this
+returns. (`Vector{NTuple{4,Float64}}` also works for colours, but a vector of tuples can
+convert to a numpy *structured* array in other contexts — see the `_xyz_rows` note below —
+so the nested-vector form is the safer habit.)
+"""
+rgba(cmap, x::Real) = pyconvert(NTuple{4,Float64}, cmap(x))
+rgba(cmap, xs::AbstractArray) =
+    [collect(pyconvert(NTuple{4,Float64}, cmap(x))) for x in xs]
+
+"""
     add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
                            offset_west=0.0, offset_north=0.0)
 
@@ -326,9 +549,13 @@ what makes the per-frame rendering in `animation.jl` practical.
 ordering as `tmap[star.index_quads_visible]`).
 """
 function add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
-                                offset_west=0.0, offset_north=0.0)
+                                offset_west=0.0, offset_north=0.0,
+                                edgecolors=nothing, linewidths=nothing,
+                                indices=nothing)
   collections = pyimport("matplotlib.collections")
-  vis = star.index_quads_visible
+  # `indices` defaults to the visible (front-facing) tessels. Passing the complement draws
+  # the far hemisphere instead, which is what a see-through wireframe needs.
+  vis = indices === nothing ? star.index_quads_visible : indices
   verts = Vector{Matrix{Float64}}(undef, length(vis))
   @inbounds for (i, idx) in enumerate(vis)
     # plot coords: x = East = -West
@@ -337,10 +564,14 @@ function add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
   end
   # Non-mesh mode strokes each polygon in its own face colour (as the old per-patch loop
   # did): a zero-width edge leaves antialiasing seams that read as a spurious grid.
-  pc = collections.PolyCollection(verts, facecolors=colours,
-                                  edgecolors = plotmesh ? "lightgrey" : colours,
-                                  linewidths = plotmesh ? 0.2 : 0.35,
-                                  rasterized=false, zorder=zorder)
+  # Mid grey, not "lightgrey": the mesh has to read against BOTH ends of the colormap. A
+  # light edge was fine while limb darkening was double-counted (mu squared, fixed in
+  # 0b0b3a3) and surfaces came out dark, but against a correctly-lit pale surface it
+  # disappears and `plotmesh=true` silently does nothing. 0.45 grey holds on both.
+  ec = edgecolors === nothing ? (plotmesh ? "0.45" : colours) : edgecolors
+  lw = linewidths === nothing ? (plotmesh ? 0.25 : 0.35)      : linewidths
+  pc = collections.PolyCollection(verts, facecolors=colours, edgecolors=ec,
+                                  linewidths=lw, rasterized=false, zorder=zorder)
   ax.add_collection(pc)
   return pc
 end
@@ -356,11 +587,12 @@ function plot2Dquad(star,i) # plots the ith quad projected onto the imaging plan
   annotate("B", xy=[-proj_west[i,2];proj_north[i,2]], xycoords="data");
   annotate("C", xy=[-proj_west[i,3];proj_north[i,3]], xycoords="data");
   annotate("D", xy=[-proj_west[i,4];proj_north[i,4]], xycoords="data");
-  PyPlot.draw()
+  pyplot.draw()
   return 1
 end
 
 function plot3d(star_temperature_map,star) # this plots the temperature map
+  set_oiplot_defaults()
   # 3D view in ROTIR's internal frame: x₁=West on sky, x₂=North on sky, x₃=toward observer
   corners_xyz = star.vertices_xyz[:,1:4,:];
   Art3D = pyimport("mpl_toolkits.mplot3d.art3d")
@@ -373,13 +605,30 @@ function plot3d(star_temperature_map,star) # this plots the temperature map
   ylim([-axis_max,axis_max]);
   zlim(bottom=-axis_max,top=axis_max);
 
-  for i=1:star.npix
-      verts = (collect(zip(corners_xyz[i, :, 1], corners_xyz[i, :, 2], corners_xyz[i, :, 3])),);
-      color = get_cmap("gist_heat")((star_temperature_map[i] - minimum(star_temperature_map)) / (maximum(star_temperature_map) - minimum(star_temperature_map)));
-      ax.add_collection3d(Poly3DCollection(verts, edgecolor="none", facecolor=color));
-  end
+  # One Poly3DCollection for the whole surface rather than one per tessel, and the map
+  # normalisation hoisted out of the loop (it was recomputing minimum/maximum of the whole
+  # temperature map for every pixel — O(npix²)).
+  #
+  # `_xyz_rows` note: the vertices must be a nested Vector of length-3 Vectors, NOT
+  # `collect(zip(x,y,z))`. A `Vector{NTuple{3,Float32}}` converts to a numpy STRUCTURED array
+  # (`dtype([('f0','<f4'),('f1','<f4'),('f2','<f4')])`) under PythonCall, and matplotlib then
+  # fails with "Cannot cast array data ... to dtype('float64')". PyCall used to produce a
+  # plain list of tuples, which is why this only surfaced after the migration.
+  tmin, tmax = extrema(star_temperature_map)
+  trange = tmax > tmin ? tmax - tmin : one(tmax)
+  cmap = get_cmap("gist_heat")
+  # Poly3DCollection needs an EXPLICIT pylist nesting — unlike the 2-D PolyCollection, which
+  # accepts Julia arrays. It calls `np.asarray(verts, copy=None)` on anything array-like, and
+  # `copy=None` is a numpy-2 API, so a Julia nested Vector (or a numpy array) fails with
+  # "NoneType copy mode not allowed" while a genuine Python list takes a different code path.
+  faces = pylist([pylist([pylist([Float64(corners_xyz[i,k,1]), Float64(corners_xyz[i,k,2]),
+                                  Float64(corners_xyz[i,k,3])])
+                          for k in axes(corners_xyz, 2)]) for i in 1:star.npix])
+  colours = pylist([pylist(c) for c in
+                    rgba(cmap, [(star_temperature_map[i] - tmin)/trange for i in 1:star.npix])])
+  ax.add_collection3d(Poly3DCollection(faces, edgecolor="none", facecolor=colours))
   ax.set_aspect("equal")
-  PyPlot.draw()
+  pyplot.draw()
 end
 
 
@@ -404,6 +653,7 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
     colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="white", flipx=false,
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false,
     contours=Float64[], contour_color="gray", contour_labels=true, contour_fontsize=10,
+    limb=true, limb_color="black", limb_linewidth=0.8,
     inclination=NaN, position_angle=NaN, star_params=nothing,
     intensity_model::Symbol = :linear, band = nothing,
     vmin=nothing, vmax=nothing,
@@ -435,15 +685,12 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   else
     projmap = tmap[star.index_quads_visible];
   end
-  # Normalize with padded floor so minimum maps to cfloor (~dark red, not black)
   pmin = vmin === nothing ? minimum(projmap) : vmin
   pmax = vmax === nothing ? maximum(projmap) : vmax
   prange = pmax - pmin
   if prange < 1.0; prange = max(abs(pmax) * 0.01, 1.0); end
-  cfloor = 0.08
-  vmin_padded = pmin - cfloor / (1.0 - cfloor) * prange
-  norm_plot = matplotlib.colors.Normalize(vmin=vmin_padded, vmax=pmax)
-  colours = get_cmap(colormap).(norm_plot.(projmap))
+  norm_plot = _padded_norm(pmin, pmax, prange; cfloor = 0.08)
+  colours = rgba(get_cmap(colormap), norm_plot.(projmap))
 
   add_tessel_collection!(ax, star, colours; plotmesh=plotmesh, zorder=2)
   visible = star.index_quads_visible
@@ -459,7 +706,10 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
     end
   end
   # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
-  if graticules; draw_graticules(ax, star; inclination=inclination, position_angle=position_angle, star_params=star_params, graticule_kwargs...); end
+  # Limb first: it is what keeps the disk visible when the surface maps to the pale end
+  # of the colormap. draw_graticules would also draw it, so suppress the duplicate.
+  if limb && !graticules; draw_limb!(ax, star; color=limb_color, linewidth=limb_linewidth); end
+  if graticules; draw_graticules(ax, star; inclination=inclination, position_angle=position_angle, star_params=star_params, limb=limb, color=limb_color, graticule_kwargs...); end
   if rotation_axis; draw_rotation_axis(ax, star, inclination=inclination, position_angle=position_angle, star_params=star_params); end
   if rotation_arrow; draw_rotation_arrow(ax, star, inclination=inclination, position_angle=position_angle, star_params=star_params); end
   if compass; draw_compass(ax, axis_max); end
@@ -495,6 +745,7 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
     compass=true, rotation_axis=false, rotation_arrow=false, graticules=false, figtitle="",
     inclination1=NaN, position_angle1=NaN, inclination2=NaN, position_angle2=NaN,
     star_params1=nothing, star_params2=nothing,
+    limb=true, limb_color="black", limb_linewidth=0.8,
     intensity_model::Symbol = :linear, band = nothing,
     vmin=nothing, vmax=nothing, ax=nothing, colorbar_on=true, axis_max=nothing,
     graticule_kwargs=(;))
@@ -542,11 +793,9 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   tmax = vmax === nothing ? max(maximum(projmap1), maximum(projmap2)) : vmax
   trange = tmax - tmin
   if trange < 1.0; trange = max(tmax * 0.01, 1.0); end
-  cfloor = 0.15  # minimum colormap fraction (avoids black pixels on dark background)
-  vmin_padded = tmin - cfloor / (1.0 - cfloor) * trange  # tmin maps to cfloor in colormap
-  norm_plot = matplotlib.colors.Normalize(vmin=vmin_padded, vmax=tmax)
-  colours1 = get_cmap(colormap).(norm_plot.(projmap1))
-  colours2 = get_cmap(colormap).(norm_plot.(projmap2))
+  norm_plot = _padded_norm(tmin, tmax, trange; cfloor = 0.15)
+  colours1 = rgba(get_cmap(colormap), norm_plot.(projmap1))
+  colours2 = rgba(get_cmap(colormap), norm_plot.(projmap2))
   # Determine z-ordering: farther star (larger z = receding) drawn first (behind)
   _, _, z1, _, _, z2 = binary_orbit_abs(bparams, tepoch)
   zord1 = z1 > z2 ? 2 : 3
@@ -557,11 +806,24 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
                          offset_west=offset_west, offset_north=offset_north)
   ax.set_xlabel(L"x $\leftarrow$ E (mas)", fontsize=20)
   ax.set_ylabel(L"y $\rightarrow$ N (mas)", fontsize=20)
-  # Decorations: graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
+  # Decorations: limb (z=4) < graticules (z=5) < pole line (z=6) < spin arrow (z=7) < compass (z=8)
+  #
+  # The limb matters more here than for a single star. The two components sit on ONE shared
+  # colour scale, so the hotter one lands at the pale end of the colormap and — on a white
+  # background — becomes invisible, taking its rotation axis and spin arrow with it into
+  # apparently empty space. Drawn here rather than inside the graticule block so it appears
+  # whether or not graticules were asked for.
+  if limb && !graticules
+    draw_limb!(ax, star1; color=limb_color, linewidth=limb_linewidth)
+    draw_limb!(ax, star2; offset_west=offset_west, offset_north=offset_north,
+               color=limb_color, linewidth=limb_linewidth)
+  end
   if graticules
-    draw_graticules(ax, star1; inclination=inclination1, position_angle=position_angle1, star_params=star_params1, graticule_kwargs...)
+    draw_graticules(ax, star1; inclination=inclination1, position_angle=position_angle1,
+        star_params=star_params1, limb=limb, graticule_kwargs...)
     draw_graticules(ax, star2; offset_west=offset_west, offset_north=offset_north,
-        inclination=inclination2, position_angle=position_angle2, star_params=star_params2, graticule_kwargs...)
+        inclination=inclination2, position_angle=position_angle2, star_params=star_params2,
+        limb=limb, graticule_kwargs...)
   end
   if rotation_axis
     draw_rotation_axis(ax, star1, inclination=inclination1, position_angle=position_angle1, star_params=star_params1)
@@ -585,9 +847,25 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   return fig, ax
 end
 
-function plot2d_wireframe(star; compass=true, rotation_axis=false)
+"""
+    plot2d_wireframe(star; compass=true, rotation_axis=false, hidden=true,
+                     front_color="black", hidden_color="lightgrey", linewidth=0.5)
+
+Wireframe view of the tessellation projected onto the sky plane.
+
+With `hidden=true` the far-side tessels are drawn too, in `hidden_color`, so the mesh reads
+as a transparent globe and the near/far hemispheres are told apart by edge weight rather
+than by one hiding the other. This needs the near side unfilled — previously it carried an
+opaque white fill, which on a white background looked identical but occluded everything
+behind it, so there were no back edges to see.
+
+`hidden=false` restores the opaque near-side-only view.
+"""
+function plot2d_wireframe(star; compass=true, rotation_axis=false, hidden=true,
+                          front_color="black", hidden_color="lightgrey", linewidth=0.5)
+  # Global rcParams: without this the font depends on what was plotted before.
+  set_oiplot_defaults()
   # Wireframe view of the tessellation projected onto the sky plane
-  patches = pyimport("matplotlib.patches")
   fig = figure("Epoch tmap",figsize=(10,10),facecolor="White")
   ax = fig.add_axes([0.1,0.1,0.85,0.85]);
   xlabel(L"x $\leftarrow$ E (mas)", fontsize=14);
@@ -595,11 +873,19 @@ function plot2d_wireframe(star; compass=true, rotation_axis=false)
   axis_max = maximum(sqrt.(star.vertices_xyz[:,:,1].^2 .+ star.vertices_xyz[:,:,2].^2 .+ star.vertices_xyz[:,:,3].^2))*1.5;
   ax.set_xlim([axis_max,-axis_max]);
   ax.set_ylim([-axis_max,axis_max]);
-  visible = star.index_quads_visible
-  for i=1:star.nquads_visible
-  idx = visible[i]
-  p = patches.Polygon(hcat(-star.proj_west[idx,:],star.proj_north[idx,:]),closed=true,edgecolor="black", facecolor="white",rasterized=false)
-  ax.add_patch(p);
+  # One PolyCollection instead of nquads_visible separate Polygon patches: matplotlib
+  # re-validates and re-transforms every artist it holds, so the per-patch loop cost grew
+  # with the mesh (noticeable from nside 4 upward, and it is the whole plot at nside 6).
+  if hidden
+    # Far side first and lighter, near side unfilled on top of it.
+    back = setdiff(1:star.npix, star.index_quads_visible)
+    isempty(back) || add_tessel_collection!(ax, star, "none"; indices=back,
+        edgecolors=hidden_color, linewidths=linewidth, zorder=1)
+    add_tessel_collection!(ax, star, "none"; edgecolors=front_color,
+        linewidths=linewidth, zorder=2)
+  else
+    add_tessel_collection!(ax, star, "white"; edgecolors=front_color,
+        linewidths=linewidth, zorder=2)
   end
   ax.tick_params(axis="both", which="both", labelsize=15, width=1, length=5);
   set_tick_spacing(ax, axis_max)
@@ -611,14 +897,41 @@ function plot2d_wireframe(star; compass=true, rotation_axis=false)
   if compass; draw_compass(ax, axis_max, color="black"); end
   if rotation_axis; draw_rotation_axis(ax, star); end
   ax.plot();
-  PyPlot.draw();
+  pyplot.draw();
   return;
 end
 
-function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat", arr_box=23, compass=true)
+"""
+    plot2d_allepochs(tmap, star; plotmesh=false, tepochs=[], colormap="gist_heat",
+                     arr_box=nothing, ncols=nothing, compass=true)
+
+Grid of sky-plane maps, one panel per epoch, on a shared colour scale.
+
+The grid and figure size follow the number of epochs. `arr_box` used to be hardcoded to
+`23`, a fixed 2x3 layout: three epochs left an entire empty row, the figure kept its
+(15,10) size regardless, and the axis labels — placed at fixed *figure* fractions —
+floated far below the single populated row. It also broke above six epochs, since the
+panel index was built as `arr_box*10 + t`.
+
+`ncols` pins the column count; `arr_box` is still accepted in its old two-digit
+`<rows><cols>` form for existing scripts.
+"""
+function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",
+                          arr_box=nothing, ncols=nothing, compass=true)
+    set_oiplot_defaults()
     nepochs = length(star)
-    patches = pyimport("matplotlib.patches")
-    fig = figure("Temperature map -- All epochs",figsize=(15,10),facecolor="White")
+    # Layout: explicit ncols, else the legacy arr_box, else auto (max 4 across).
+    if ncols !== nothing
+        nc = ncols
+        nr = cld(nepochs, nc)
+    elseif arr_box !== nothing
+        nr, nc = divrem(arr_box, 10)
+    else
+        nc = min(nepochs, 4)
+        nr = cld(nepochs, nc)
+    end
+    fig = figure("Temperature map -- All epochs",
+                 figsize=(4.2*nc + 1.2, 4.6*nr + 0.8), facecolor="White")
     if plotmesh == true
       meshcolor = "grey"
     else
@@ -634,34 +947,36 @@ function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gi
     end
 
     for t=1:nepochs
-      ax = subplot(arr_box*10+t)
+      ax = fig.add_subplot(nr, nc, t)
       if tepochs !=[]
-        title("Epoch $t $(tepochs[t])",fontweight="bold")
+        title("Epoch $t — $(tepochs[t])")
       end
       axis_max = maximum(sqrt.(star[t].vertices_xyz[:,:,1].^2 .+ star[t].vertices_xyz[:,:,2].^2 .+ star[t].vertices_xyz[:,:,3].^2))*1.5;
       ax.set_xlim([axis_max,-axis_max])
       ax.set_ylim([-axis_max,axis_max])
       projmap = (tmap[star[t].index_quads_visible].-minT)./(maxT-minT);
-      visible = star[t].index_quads_visible
-      for i=1:star[t].nquads_visible
-        idx = visible[i]
-        p = patches.Polygon(hcat(-star[t].proj_west[idx, :],star[t].proj_north[idx, :]),
-        closed=true,edgecolor=meshcolor,facecolor=get_cmap(colormap)(projmap[i]),fill="true",rasterized=false)
-        ax.add_patch(p);
-      end
+      # One PolyCollection per epoch rather than nepochs x nquads_visible patches — this
+      # was the worst offender of the three, being a product of two loops.
+      cols = rgba(get_cmap(colormap), view(projmap, 1:star[t].nquads_visible))
+      add_tessel_collection!(ax, star[t], cols; edgecolors=meshcolor,
+                             linewidths = plotmesh ? 0.2 : 0.0, zorder=2)
       ax.plot();
-      ax.tick_params(axis="both", which="both", labelsize=15, width=2, length=10);
+      # Tick styling comes from set_oiplot_defaults (i.e. OITOOLS' rcParams). The
+      # hardcoded labelsize=15/width=2/length=10 that used to sit here is why these
+      # panels did not match plot2d's ticks.
       set_tick_spacing(ax, axis_max)
-      ax.tick_params(axis="both", which="minor", width=1, length=5);
       for spine in ["top", "bottom", "left", "right"]
         ax.spines[spine].set_linewidth(1);
       end
       ax.set_aspect("equal");
       if compass && t == 1; draw_compass(ax, axis_max, color="black"); end
     end
+    # supxlabel/supylabel place the shared labels relative to the ACTUAL axes, so they
+    # follow the grid instead of floating at a fixed figure fraction below an empty row.
+    fig.supxlabel(L"x $\leftarrow$ E (mas)")
+    fig.supylabel(L"y $\rightarrow$ N (mas)")
+    fig.tight_layout()
     fig.canvas.draw();
-    fig.text(0.5, 0.04, L"x $\leftarrow$ E (mas)", ha="center", va="center", fontweight="bold", fontsize=15);
-    fig.text(0.06, 0.5, L"y $\rightarrow$ N (mas)", ha="center", va="center", rotation="vertical", fontweight="bold", fontsize=15);
     return;
 end
 
@@ -710,18 +1025,35 @@ function plot_rv(bparams; K1::Float64, K2::Float64, γ::Float64=0.0,
   return fig, ax
 end
 
-function plot_mollweide(tmap, star; kwargs...)
+# Recover (ntheta, nphi) from a lat/long mesh. `tessellation_latlong` lays pixels out
+# theta-major, phi-minor (`ilong_range = (i-1)*nphi+1 : i*nphi`), so the colatitude of the
+# tessel centres is constant across the first ring and changes at pixel nphi+1. That first
+# change point IS nphi, and ntheta follows. This is why the dimensions need not be stored
+# on `tessellation`, which carries only `npix`.
+function _latlong_dims(star)
+  θ = star.vertices_spherical[:, 5, 2]
+  k = findfirst(i -> !isapprox(θ[i], θ[1]; atol = 1e-6), 2:star.npix)
+  nphi = k === nothing ? star.npix : k    # index into 2:npix ⇒ ring length
+  ntheta, r = divrem(star.npix, nphi)
+  r == 0 || error("plot_mollweide: npix=$(star.npix) is not divisible by the recovered " *
+                  "ring length nphi=$nphi — mesh is not a regular lat/long grid.")
+  return ntheta, nphi
+end
+
+function plot_mollweide(tmap, star; ntheta = nothing, nphi = nothing, kwargs...)
   if star.tessellation_type == 0
     mollplot_temperature_healpix(tmap; kwargs...)
   else
-    # Longitude and latitude need to be provided in kwargs
-    #... or could we do otherwise and recompute from theta/phi?
-    mollplot_temperature_longlat(tmap; kwargs...)
+    # `mollplot_temperature_longlat` needs the grid dimensions, which `stellar_geometry`
+    # does not store. Recover them from the mesh unless the caller pins them explicitly.
+    nt, np = (ntheta === nothing || nphi === nothing) ? _latlong_dims(star) : (ntheta, nphi)
+    mollplot_temperature_longlat(tmap, nt, np; kwargs...)
   end
   return
 end
 
 function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide", mask_unobserved=true, bad_color="lightgray", lon_color="white", lat_color="black")
+  set_oiplot_defaults()
   np = pyimport("numpy")
   xsize = 2000
   ysize = div(xsize,2)
@@ -767,7 +1099,7 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
       vmax = maximum(tmap[visible_pixels]);
     end
   end
-  cmap_obj = matplotlib.cm.get_cmap(colormap)
+  cmap_obj = matplotlib.colormaps[colormap]   # matplotlib.cm.get_cmap removed in 3.9
   cmap_obj.set_bad(color=bad_color)
   moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=cmap_obj)
   # graticule
@@ -778,7 +1110,7 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
   subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing);
   grid(true)
   if incl != 90.0
-    ax.axhline(-incl * pi/180, c=:black, ls="-.")
+    ax.axhline(-incl * pi/180, c="black", ls="-.")
   end
   ticks = collect(range(vmin, stop=vmax, length=7));
   cb = colorbar(moll, orientation="horizontal", shrink=.6, pad=0.05, ticks=ticks)
@@ -786,12 +1118,19 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
   cb.ax.xaxis.set_label_text("Temperature (K)")
   # workaround for issue with viewers, see colorbar docstring
   cb.solids.set_edgecolor("face")
+  # `lon_color`/`lat_color` colour BOTH the tick labels and the corresponding graticule
+  # lines: meridians are the x-axis grid, parallels the y-axis grid. Setting only
+  # tick_params (as this did) left the graticule at matplotlib's default grey, so the
+  # keywords appeared to do nothing to the grid they are named after.
   ax.tick_params(axis="x", labelsize=12, colors=lon_color)
   ax.tick_params(axis="y", labelsize=12, colors=lat_color)
+  ax.xaxis.grid(true, color=lon_color, alpha=0.6)
+  ax.yaxis.grid(true, color=lat_color, alpha=0.6)
   return
 end
 
 function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], vmin = -Inf, vmax = Inf, colormap="gist_heat", figtitle="Mollweide", incl=90.0)
+  set_oiplot_defaults()
   xsize = 2000
   ysize = div(xsize,2)
   theta = collect(range(pi, stop=0, length=ysize))
@@ -830,7 +1169,7 @@ function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], v
   subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing)
   grid(true)
   if incl != 90.0
-    ax.axhline(-incl * pi/180, c=:black, ls="-.")
+    ax.axhline(-incl * pi/180, c="black", ls="-.")
   end
 
   ticks = collect(range(vmin, stop=vmax, length=7));

@@ -50,6 +50,12 @@ end
     # rather than through run_script.
     include(joinpath(TESTDIR, "test_reflection.jl"))
 
+    # Every plotting entry point with every decoration, asserting on artist structure
+    # rather than pixels. Headless (Agg) and a few seconds, so it runs by default —
+    # this is the layer the PyCall -> PythonCall migration broke, and image-free
+    # structural checks are what catch a corrupted Julia->Python array conversion.
+    include(joinpath(TESTDIR, "test_plotting.jl"))
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions
