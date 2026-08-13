@@ -11,11 +11,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
-          # Must match `julia = "1.11"` in Project.toml. That bound is not cosmetic: the
-          # `[sources]` sections used to locate the unregistered OITOOLS need Pkg >= 1.11,
-          # and on 1.10 they are silently ignored — which is why this workflow used to add
-          # OITOOLS by hand.
-          version: '1.11'
+          # Must match `julia = "1.12"` in Project.toml. Two independent reasons for that
+          # floor, and the second is the binding one:
+          #   * `[sources]`, used to locate the unregistered OITOOLS, needs Pkg >= 1.11 and
+          #     is SILENTLY IGNORED below that — which is why this workflow used to add
+          #     OITOOLS by hand.
+          #   * OITOOLS itself declares `julia = "1.12"`. On 1.11 its build step fails with
+          #     "julia version requirement from Project.toml's compat section not satisfied".
+          version: '1.12'
       - uses: julia-actions/cache@v2
       - name: Install dependencies
         run: |
