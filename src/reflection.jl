@@ -110,7 +110,7 @@ returned divided by π so that a uniform law gives exactly 1.
 |---|---|---|
 | 0 | uniform / Lambert, `D ≡ 1` | 1 |
 | 1 | linear, `1 − x(1−μ)` | `1 − x/3` |
-| 2 | quadratic, `1 − x(1−μ) − y(1−μ²)` | `1 − x/3 − y/2` |
+| 2 | quadratic, `1 − x(1−μ) − y(1−μ)²` | `1 − x/3 − y/6` |
 | 3 | Hestroffer power, `μ^x` | `2/(x+2)` |
 
 These are the *bolometric* coefficients used for the irradiation transport; they are a
@@ -122,8 +122,8 @@ function ld_bol_D0(ldtype::Integer, ld1::Real, ld2::Real)
     elseif ldtype == 1
         return 1.0 - ld1 / 3
     elseif ldtype == 2
-        # 2∫₀¹ (1 − x(1−μ) − y(1−μ²)) μ dμ = 1 − x/3 − y/2
-        return 1.0 - ld1 / 3 - ld2 / 2
+        # 2∫₀¹ (1 − x(1−μ) − y(1−μ)²) μ dμ = 2(½ − x/6 − y/12) = 1 − x/3 − y/6
+        return 1.0 - ld1 / 3 - ld2 / 6
     elseif ldtype == 3
         return 2.0 / (ld1 + 2)
     else
@@ -141,8 +141,8 @@ Un-normalised bolometric limb-darkening profile; see [`ld_bol_D0`](@ref) for the
         return one(μ)
     elseif ldtype == 1
         return 1 - ld1 * (1 - μ)
-    elseif ldtype == 2
-        return 1 - ld1 * (1 - μ) - ld2 * (1 - μ * μ)
+    elseif ldtype == 2                       # quadratic: 1 − a(1−μ) − b(1−μ)²
+        return 1 - ld1 * (1 - μ) - ld2 * (1 - μ)^2
     else
         return μ > 0 ? μ^ld1 : zero(μ)
     end

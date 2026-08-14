@@ -7,8 +7,8 @@
 # Why structural assertions and not image comparison: reference PNGs are hostage to the
 # matplotlib version, the font stack and the freetype build, so they produce false
 # failures on upgrade and get disabled within a release or two. What actually breaks in
-# practice — and what broke in the PyCall -> PythonCall migration — is the Julia/Python
-# boundary: a colour array arriving as `Vector{Py}` instead of an (n,4) float array, a
+# practice is the Julia/Python boundary: a colour array arriving as `Vector{Py}` instead
+# of an (n,4) float array, a
 # `Matrix` silently read column-major, a `zip` becoming a numpy *structured* array, a
 # Julia `Symbol` reaching matplotlib as `:black` instead of `"black"`, a removed API
 # (`matplotlib.cm.get_cmap`). Every one of those either raises or produces a collection
@@ -26,8 +26,9 @@
 #   * src/lciplot.jl and src/specutils.jl — neither is `include`d by src/ROTIR.jl, so
 #     their functions do not exist at runtime. Wire them in and they belong here too.
 #   * plot_v2_residuals / plot_t3*_residuals — re-exported from OITOOLS, upstream's to test.
-#   * draw_graticules on surface_type 1 (ellipsoid) and 2 (Roche): only the surface_type 0
-#     exact branch and the mesh-derived fallback are exercised below.
+#   * draw_graticules on surface_type 1 (ellipsoid) and 2 (rapid rotator): only the
+#     surface_type 0 exact branch, surface_type 3 (Roche) and the mesh-derived path for a
+#     star with no star_params are exercised below.
 
 using Test
 using ROTIR
@@ -214,6 +215,17 @@ rp(r, tpole) = merge(sph(r = r, pa = 130.0),
                i = 116.0, Omega = 309.9, omega = 255.0, P = 4.0145, a = 1.54, e = 0.123,
                T0 = 2454189.4, q = 0.6188, dP = 0.0, dOmega = 0.0))
 const RP1, RP2 = rp(0.45, 25300.0), rp(0.23, 24000.0)
+
+# A single, strongly distorted Roche star — the docs' `surface_roche.png` geometry, at the
+# minimum useful nside. rpole/a = 0.355 against an Eggleton lobe radius of 0.38a for q = 1,
+# so it is close to filling and the tidal teardrop is pronounced: this is the case the
+# graticule fallback could not draw.
+const ROCHE_PAR = (surface_type = 3, rpole = 0.355, tpole = 4800.0, ldtype = 3,
+                   ld1 = 0.46, ld2 = 0.0, inclination = 60.0, position_angle = 0.0,
+                   rotation_period = 5.0, beta = 0.08, d = 77.0, q = 1.0,
+                   fillout_factor_primary = -1, i = 0.0, Ω = 0.0, ω = 0.0, P = 5.0,
+                   a = 1.0, e = 0.0, T0 = 0.0, dP = 0.0, dω = 0.0)
+const ROCHE_STAR = create_star(tessellation_healpix(3), ROCHE_PAR, 0.0)
 const TEP = 2454189.4
 const BS1, BS2 = create_binary_geometry(tessellation_healpix(3), RP1,
                                         tessellation_healpix(3), RP2, BP, TEP)
@@ -267,15 +279,26 @@ const BT1, BT2 = handle_reflection(BS1, parametric_temperature_map(sp1(), BS1),
         end
         # All THREE routes to the orientation must agree: explicit angles, angles read from
         # star_params, and — with neither available — the rotation recovered from the mesh
-        # itself. The last one used to default to 0/0, drawing a pole-up graticule on a
-        # star inclined at 60 deg, i.e. a different star from the one plotted.
+        # itself. Defaulting the last one to 0/0 would draw a pole-up graticule on a star
+        # inclined at 60 deg, i.e. a different star from the one plotted.
         let explicit = graticule_signature((star_params = PAR, inclination = 60.0,
                                             position_angle = 30.0)),
             from_par = graticule_signature((star_params = PAR,)),
             from_mesh = graticule_signature((;))
-            # star_params carries no orientation authority any more — with no explicit
-            # angles both of these take the Procrustes fit, so they must be IDENTICAL.
-            @test from_par == from_mesh
+            # star_params carries no orientation authority — with no explicit angles both
+            # of these take the Procrustes fit, so the ORIENTATION is shared
+            # exactly and the curves must lie on top of each other.
+            #
+            # Not bitwise equal, though, and the residual is instructive. `from_par` knows
+            # the surface is a sphere and clips at z > 0, which for a sphere is the exact
+            # terminator. `from_mesh` has no closed form, so it interpolates the mesh — and
+            # clips on the mesh's own normals, which on an nside=3 sphere are the quad
+            # diagonal cross products, radial only to discretisation. The two terminators
+            # differ by a fraction of a tessel. That is the intended trade: the mesh normal
+            # is what `draw_limb!` thresholds on, so the graticule ends where the drawn
+            # silhouette does rather than where an ideal sphere's would.
+            @test isapprox(from_par[2], from_mesh[2]; rtol = 5e-3)
+            @test from_par[1] == from_mesh[1]
             # ...and must reproduce the explicit angles to within the Float32 mesh fit.
             @test from_mesh[1] == explicit[1]                       # same arc count
             @test isapprox(from_mesh[2], explicit[2]; rtol = 5e-3)  # same geometry
@@ -325,6 +348,75 @@ const BT1, BT2 = handle_reflection(BS1, parametric_temperature_map(sp1(), BS1),
             @test ncoll(ax) >= 1                         # PolyCollection of visible arcs
             finish("deco_grat_$nm")
         end
+
+        # --- Roche graticules: the surface read off the mesh -------------------------
+        #
+        # `draw_graticules` has closed forms for surface types 0, 1 and 2. Everything else
+        # interpolates the mesh's own r(θ, φ). A biaxial ellipsoid fitted to mesh-averaged
+        # polar and equatorial radii will NOT do: it is axisymmetric about the spin axis and
+        # therefore structurally incapable of showing the one feature a Roche figure exists
+        # to show.
+        let fld = ROTIR._mesh_surface_field(ROCHE_STAR)
+            r_point = ROTIR._interp_surface(fld, π/2, 0.0)[1]      # toward the companion
+            r_back  = ROTIR._interp_surface(fld, π/2, π)[1]        # away from it
+            r_side  = ROTIR._interp_surface(fld, π/2, π/2)[1]      # along the orbit
+            r_pole  = ROTIR._interp_surface(fld, 1e-6, 0.0)[1]
+
+            # The Roche ordering. Any axisymmetric fit gives r_point == r_back == r_side,
+            # so this single chain is what separates the mesh path from an axisymmetric one.
+            @test r_point > r_back > r_side > r_pole
+            @test r_point / r_side > 1.2               # a pronounced teardrop, not a nudge
+            @test isapprox(r_pole, ROCHE_PAR.rpole; rtol = 2e-2)
+
+            # Interpolation is a normalised weighted mean, so it can never leave the range
+            # of the samples — no overshoot on the steep gradient near L1.
+            allr = ROCHE_STAR.vertices_spherical[:, 5, 1]
+            for (θq, φq) in ((0.3, 2.0), (1.1, 4.5), (2.4, 0.9), (π/2, 0.05))
+                @test minimum(allr) <= ROTIR._interp_surface(fld, θq, φq)[1] <= maximum(allr)
+            end
+
+            # Querying exactly at a sample must return that sample, not a smoothed value.
+            # (Float64 out, Float32 mesh in, so compare by value not by ===.)
+            k = 7
+            let (rk, nk) = ROTIR._interp_surface(fld, ROCHE_STAR.vertices_spherical[k, 5, 2],
+                                                      ROCHE_STAR.vertices_spherical[k, 5, 3])
+                @test rk == Float64(allr[k])
+                @test nk == Float64(ROCHE_STAR.normals[k, 3])
+            end
+
+            # Normalised weights reproduce a constant exactly: a sphere stays a sphere,
+            # so routing type 0 through the mesh path would not have degraded it.
+            let sfld = ROTIR._mesh_surface_field(STAR)
+                @test all(isapprox(ROTIR._interp_surface(sfld, θq, φq)[1], PAR.radius;
+                                   rtol = 1e-10)
+                          for (θq, φq) in ((0.4, 1.0), (1.9, 3.3), (2.8, 5.7)))
+            end
+        end
+
+        # Visibility comes from the interpolated NORMAL, not from z > 0. Those differ on a
+        # distorted body, and the normal is what `draw_limb!` clips on, so the curves stop
+        # exactly where the drawn silhouette does. Passing the star's own angles must not
+        # change that — it reconstructs the same rotation, which the code checks for.
+        let sig(kw) = begin
+                fig, ax = deco_axes()
+                draw_graticules(ax, ROCHE_STAR; kw...)
+                paths = ax.collections[0].get_paths()
+                n = pylen(paths)
+                s = sum(sum(abs, pyconvert(Array, paths[j].vertices)) for j in 0:(n - 1))
+                plt.close("all")
+                (n, s)
+            end
+            a = sig((star_params = ROCHE_PAR,))
+            b = sig((star_params = ROCHE_PAR, inclination = ROCHE_PAR.inclination,
+                     position_angle = ROCHE_PAR.position_angle))
+            @test a[1] == b[1]                          # same arcs, same clip
+            @test isapprox(a[2], b[2]; rtol = 1e-4)     # Procrustes vs rot_vertex only
+        end
+
+        fig, ax = deco_axes()
+        draw_graticules(ax, ROCHE_STAR; star_params = ROCHE_PAR)
+        @test ncoll(ax) >= 1
+        finish("deco_grat_roche")
 
         # Tick spacing helper across four decades of axis size (unexported)
         for amax in (0.05, 0.5, 1.5, 15.0, 150.0)
@@ -526,6 +618,34 @@ const BT1, BT2 = handle_reflection(BS1, parametric_temperature_map(sp1(), BS1),
             finish("binary_$nm")
         end
 
+        # Both components keep their limb outline WHATEVER else is switched on. This is a
+        # regression guard: `draw_graticules` draws its own limb at `zorder - 1`, which is
+        # right for the single-star default of 5 but not for the per-component fractional
+        # zorders here (zord + 0.5 - 1 lands UNDER that star's own surface). Skipping the
+        # explicit limb whenever graticules were requested therefore removed the outline
+        # from every binary drawn with `graticules = true`, silently — the artist was still
+        # in the axes, just painted behind the star. Counting lines catches the omission;
+        # only the zorder check catches the burial.
+        for (nm, kw) in (("plain", (;)),
+                         ("graticules", (graticules = true, star_params1 = sp1(),
+                                         star_params2 = sp2())))
+            plot2d_binary(BT1, BT2, BS1, BS2, BP, TEP; kw...)
+            ax = main_ax()
+            surf_z = sort([pyconvert(Float64, ax.collections[k].get_zorder())
+                           for k in 0:(ncoll(ax) - 1)
+                           if pytype(ax.collections[k]) == "PolyCollection" &&
+                              fcshape(ax.collections[k])[1] > 0])
+            limb_z = sort([pyconvert(Float64, ax.lines[k].get_zorder())
+                           for k in 0:(nlines(ax) - 1)])
+            @test length(limb_z) >= 2                    # one hull per component
+            # Each limb must sit above its OWN surface: pair them up in depth order.
+            @test limb_z[1] > surf_z[1] && limb_z[2] > surf_z[2]
+            # ...and the far limb must stay below the near surface, or it paints the far
+            # star's outline across the near one.
+            @test limb_z[1] < surf_z[2]
+            plt.close("all")
+        end
+
         # Drawing into a caller-supplied axes — the path binary_movie(:compare) uses
         fig, axs = plt.subplots(1, 2, figsize = (12, 6))
         for k in 0:1
@@ -563,7 +683,7 @@ const BT1, BT2 = handle_reflection(BS1, parametric_temperature_map(sp1(), BS1),
     # -----------------------------------------------------------------
     @testset "plot_mollweide" begin
         # healpix branch, every keyword. `incl` is the path where a Julia Symbol
-        # (`c=:black`) used to reach matplotlib — PyCall converted it, PythonCall does not.
+        # (`c=:black`) can reach matplotlib, which PythonCall will not convert.
         cases = Dict(
             "default"    => (;),
             "range"      => (vmin = 3500.0, vmax = 4500.0),

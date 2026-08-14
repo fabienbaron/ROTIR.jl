@@ -1,6 +1,6 @@
 @compile_workload begin
     # Exercise the core computational path with a small tessellation (Float32 default).
-    # Plotting is excluded — PyCall/matplotlib segfaults during precompilation.
+    # Plotting is excluded — PythonCall/matplotlib segfaults during precompilation.
     tessels = tessellation_healpix(1)
     star_params = (
         surface_type    = 0,
@@ -22,7 +22,7 @@
 end
 
 # Explicit precompile hints for plotting functions.
-# These can't run in @compile_workload (PyCall segfaults during precompilation)
+# These can't run in @compile_workload (PythonCall segfaults during precompilation)
 # but the hints still cache inference/compilation results.
 # Primary: Float32 (default)
 let T = Float32, NT = @NamedTuple{surface_type::Int, radius::Float32, tpole::Float32,

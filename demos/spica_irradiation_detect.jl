@@ -24,7 +24,7 @@
 #        is neither synchronous (F = 1.92/1.65) nor free of apsidal motion (U = 139 yr).
 
 ENV["MPLBACKEND"] = get(ENV, "MPLBACKEND", "Agg")
-using ROTIR, PyPlot, Printf, Statistics, LinearAlgebra
+using ROTIR, PythonPlot, Printf, Statistics, LinearAlgebra
 using Optim
 include(joinpath(@__DIR__, "spica_params.jl"))
 
@@ -421,7 +421,7 @@ ax.set_xlabel("bolometric albedo A"); ax.set_ylabel("von Zeipel β")
 ax.set_title("Δχ² on injected Spica data (contours at 1, 4, 9, 25, 100, 400)")
 ax.legend(); fig.colorbar(im, ax=ax, label="Δχ²")
 fig.savefig(joinpath(outdir, "beta_albedo_dchi2.png"), dpi=130, bbox_inches="tight")
-PyPlot.close(fig)
+pyplot.close(fig)
 
 # ---- summary --------------------------------------------------------------------------
 println("\n" * "="^78)

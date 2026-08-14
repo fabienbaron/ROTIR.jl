@@ -303,7 +303,7 @@ grat_configs = [
 fig_grat, axes_grat = subplots(2, 2, figsize=(12, 12))
 for (idx, (gkw, ttl)) in enumerate(grat_configs)
     # 0-BASED: subplots(2,2) returns a Py numpy array under PythonCall, not the Julia
-    # Matrix PyCall used to convert it into. 1-based indices silently shift a panel and
+    # Matrix PythonCall used to convert it into. 1-based indices silently shift a panel and
     # then run off the end.
     local ax = axes_grat[(idx-1) ÷ 2, (idx-1) % 2]
     ax.set_aspect("equal", adjustable="box")

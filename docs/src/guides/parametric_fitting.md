@@ -49,7 +49,7 @@ fit.params          # NamedTuple ready for create_star / create_star_multiepochs
 | `ldtype` | law | `ld1` | range |
 |---|---|---|---|
 | 1 | linear, `1 − u(1−μ)` | `u` | `0 ≤ u ≤ 1` |
-| 2 | quadratic, `1 − u(1−μ) − v(1−μ²)` | `u`, with `ld2 = v` | — |
+| 2 | quadratic, `1 − u(1−μ) − v(1−μ)²` | `u`, with `ld2 = v` | — |
 | 3 | Hestroffer power law, `μ^α` | `α` | `α ≥ 0`, unbounded above |
 
 Do not compare `ld1` across laws. On RW Cep the linear fit **pins at `u = 1.0000`**, its

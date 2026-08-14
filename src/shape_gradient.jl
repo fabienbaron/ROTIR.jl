@@ -69,8 +69,8 @@ f'(x) = d/dx [3cos(α)/x] where α = (π + acos(x))/3
 function f_rapid_rot_and_deriv(x::T) where T
     # The textbook form 3cos((π + acos x)/3)/x is CATASTROPHICALLY CANCELLING for small x:
     # the cosine argument tends to π/2, so cos(...) is pure rounding noise, and it is then
-    # multiplied by 3/x. In Float32 this destroys the result well before the old |x| < 1e-12
-    # guard triggers — f(1e-8) came back as garbage, and since x = ω·sinθ that made
+    # multiplied by 3/x. In Float32 this destroys the result well before an |x| < 1e-12
+    # guard would trigger — f(1e-8) comes back as garbage, and since x = ω·sinθ that makes
     # `vonzeipel_map` return T ∈ [344, 1077] K instead of a uniform 3900 K for fev = 1e-8,
     # i.e. any fitter or sampler approaching the non-rotating limit silently got nonsense.
     #
@@ -89,7 +89,7 @@ function f_rapid_rot_and_deriv(x::T) where T
     end
     x  = clamp(x, -one(T), one(T))
     u  = asin(x) / 3
-    su, cu = sincos(u)                      # cu = sin((π + acos x)/3), the old `sα`
+    su, cu = sincos(u)                      # cu = sin((π + acos x)/3)
     f  = 3 * su / x
     onemx2 = one(T) - x*x
     df = onemx2 < eps(T) ? -f / x : (cu / sqrt(onemx2) - f) / x

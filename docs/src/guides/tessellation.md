@@ -58,18 +58,30 @@ Mesh overlay showing pixel edges on a limb-darkened sphere:
 |:----------------------:|:---------------:|
 | ![HEALPix mesh](../assets/tess_healpix_mesh.png) | ![Lon/Lat mesh](../assets/tess_latlong_mesh.png) |
 
-### Neighbors and total variation
+### Neighbors, gradients and total variation
 
-HEALPix pixels have 8 neighbors (6 or 7 at special locations). The neighbor
-structure is used for total variation regularization:
+HEALPix pixels have 8 neighbors (6 or 7 at special locations). Two different operators are
+built from that neighbor structure.
+
+For the gradient-based regularizers `"sobel"` and `"sobel2"`:
+
+```julia
+sobel_info = sobel_gradient_healpix(n)
+```
+
+This returns `(Gx, Gy, npix, area)`, two sparse matrices giving the tangent-plane components
+of ∇x at each tessel. It is the sphere's analogue of the 2-D Sobel stencil — which is itself
+the inverse-distance²-weighted least-squares gradient on a 3×3 grid — generalized to
+neighborhoods that are irregular and have no global axes.
+
+For the curvature-based `"tv"` and `"tv2"`:
 
 ```julia
 tv_info = tv_neighbors_healpix(n)
 ```
 
-This returns a tuple containing the sparse difference matrix and Hessian used
-by the TV regularization terms. For reconstructions where some pixels are never
-visible, use:
+This returns a tuple containing the sparse graph-Laplacian difference matrix and its
+Hessian. For reconstructions where some pixels are never visible, use:
 
 ```julia
 tv_info = tv_neighbors_healpix_visible(n, stars)

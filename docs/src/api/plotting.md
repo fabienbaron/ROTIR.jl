@@ -74,7 +74,7 @@ than a half-empty 2×3 block.
 | `rotation_axis` | `false` | Draw the rotation axis (dashed line through the poles) |
 | `rotation_arrow` | `false` | Draw the spin-direction arrow at the north pole |
 | `inclination`, `position_angle` | `NaN` | Override the orientation used for the decorations |
-| `star_params` | `nothing` | Star parameters NamedTuple, for exact graticule *geometry* (sphere, triaxial ellipsoid, rapid rotator) |
+| `star_params` | `nothing` | Star parameters NamedTuple, for closed-form graticule *geometry* (sphere, triaxial ellipsoid, rapid rotator) |
 | `graticule_kwargs` | `(;)` | Style overrides passed to `draw_graticules` (see below) |
 
 !!! note "Where the decoration orientation comes from"
@@ -82,6 +82,21 @@ than a half-empty 2×3 block.
     the orientation is recovered from the **mesh itself**, which is correct whatever built
     the star and also captures the rotation phase. `star_params` supplies the surface
     *shape*, not the orientation.
+
+!!! note "Graticules on a Roche lobe"
+    Sphere, triaxial ellipsoid and rapid rotator have closed forms, and `star_params`
+    selects them. **Everything else — a Roche lobe (`surface_type = 3`), or any star drawn
+    without `star_params` — reads the shape off the mesh's own `r(θ, φ)`**, interpolated
+    between tessel centres.
+
+    That is not a fallback so much as the general case. A Roche lobe is elongated toward
+    its companion and has no axisymmetric description, so the curves have to come from the
+    surface that was actually built. Visibility comes from the mesh normal rather than
+    `z > 0`, which is what makes the curves stop exactly at the drawn limb instead of at
+    the terminator of an imaginary sphere.
+
+    Nothing extra is required to get this: pass `star_params` for a Roche star as you would
+    for any other, or omit it entirely.
 
 The limb outline matters more than it sounds: a surface that maps to the pale end of a
 colormap is indistinguishable from a white background, so without it the disk can vanish

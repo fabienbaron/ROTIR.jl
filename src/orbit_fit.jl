@@ -143,7 +143,11 @@ const MAS_PER_RAD_ORBFIT = 2.0626480624709636e8
 # Orbital elements
 # ---------------------------------------------------------------------------------------
 "Orbital elements, in the order the parameter vector uses."
-const ORBIT_ELEMENTS = (:a, :i, :Omega, :omega, :e, :P, :T0, :dP)
+# `domega` (apsidal motion, deg/day) is APPENDED rather than inserted next to the other
+# angles, so every existing index keeps its meaning — T0 stays at 7, and only `_unpack`
+# moves. It is off by default (0.0) and not in the default free list: it matters over a
+# long baseline and is unmeasurable over a short one.
+const ORBIT_ELEMENTS = (:a, :i, :Omega, :omega, :e, :P, :T0, :dP, :domega)
 
 const ORBIT_ELEMENT_BOUNDS = Dict(
     :a     => (0.01, 50.0),      # mas
@@ -154,6 +158,9 @@ const ORBIT_ELEMENT_BOUNDS = Dict(
     :P     => (0.01, 1.0e5),     # days
     :T0    => (-Inf, Inf),       # filled from P unless given
     :dP    => (-1.0e-4, 1.0e-4), # d/d
+    # deg/day. Spica's apsidal motion is ~2.6 deg/yr = 7.1e-3 deg/d (U ~ 105-110 yr),
+    # so this box is generous by roughly an order of magnitude either way.
+    :domega => (-0.05, 0.05),
 )
 
 # ---------------------------------------------------------------------------------------
@@ -230,14 +237,27 @@ end
 """
     OrbitFitSpec
 
-The layout of a fit: which quantities exist, their starting values, their bounds, and which
-of them are free. The parameter vector is
+The layout of a fit: which quantities exist, their starting values, their bounds, and
+whether each is free, fixed or tied. The parameter vector is
 
-    [a, i, Omega, omega, e, P, T0, dP,  <comp1 params>...,  <comp2 params>...,  f]
+    [a, i, Omega, omega, e, P, T0, dP, domega,
+     <comp1 params>...,  <comp2 params>...,  f]
 
 with component parameter names prefixed `c1_` / `c2_` so `free = [:c2_pa]` is unambiguous.
+The orbital block is `ORBIT_ELEMENTS`; index off `length(ORBIT_ELEMENTS)` rather than a
+literal, since it has grown once already (`domega` was appended for apsidal motion).
+
+Every parameter is exactly one of:
+
+* **free** — listed in `free`, sampled within `lo`/`hi`;
+* **fixed** — absent from both, holding its starting value;
+* **tied** — listed in `ties`, computed from the others by [`compile_ties`](@ref).
+
+Build one with [`orbit_fit_spec`](@ref), and turn a free-parameter vector into a full one
+with [`resolve_params`](@ref) — which is the only supported way to do so, because it is
+also what applies the ties.
 """
-struct OrbitFitSpec
+struct OrbitFitSpec{TT}
     names::Vector{Symbol}
     values::Vector{Float64}
     lo::Vector{Float64}
@@ -247,6 +267,11 @@ struct OrbitFitSpec
     comp2::OrbitComponent
     n1::Int          # number of comp1 parameters
     n2::Int
+    # Parameters computed from the others (src/orbit_ties.jl). The type parameter matters:
+    # declared as plain `::OrbitTies` this field is abstract, every `spec.ties.fn` call goes
+    # through dynamic dispatch, and resolving a one-line tie costs 5x the time and an extra
+    # allocation per likelihood evaluation.
+    ties::TT
 end
 
 """
@@ -263,9 +288,10 @@ ratio and every component parameter. `bounds` overrides individual boxes, e.g.
 """
 function orbit_fit_spec(comp1::OrbitComponent, comp2::OrbitComponent;
                         elements, flux_ratio::Real = 1.0,
-                        free = nothing, bounds = Dict{Symbol,Tuple{Float64,Float64}}())
+                        free = nothing, bounds = Dict{Symbol,Tuple{Float64,Float64}}(),
+                        ties = Dict{Symbol,String}())
     el = merge((a = 1.0, i = 90.0, Omega = 0.0, omega = 90.0, e = 0.0,
-                P = 1.0, T0 = 0.0, dP = 0.0), elements)
+                P = 1.0, T0 = 0.0, dP = 0.0, domega = 0.0), elements)
     haskey(elements, :P) || error("orbit_fit_spec: `elements` must include the period P")
 
     names  = collect(ORBIT_ELEMENTS)
@@ -302,6 +328,15 @@ function orbit_fit_spec(comp1::OrbitComponent, comp2::OrbitComponent;
         append!(deflt, Symbol.(:c2_, component_param_names(comp2)))
         free = deflt
     end
+    compiled_ties = compile_ties(names, ties)
+    # A tie overwrites its target on every evaluation, so a parameter that is both free and
+    # tied would have its sampled value silently discarded — the fit would report an
+    # uncertainty for a quantity the likelihood never saw. Refuse rather than mislead.
+    tied_and_free = intersect(Set(compiled_ties.names), Set(free))
+    isempty(tied_and_free) ||
+        error("orbit_fit_spec: $(join(string.(collect(tied_and_free)), ", ")) " *
+              "listed as both free and tied; a tie overwrites the sampled value")
+
     idx = Int[]
     avail = join(string.(names), ", ")
     for k in free
@@ -314,7 +349,7 @@ function orbit_fit_spec(comp1::OrbitComponent, comp2::OrbitComponent;
             error("orbit_fit_spec: start value $(values[j]) for $(names[j]) is outside " *
                   "its bounds [$(lo[j]), $(hi[j])]")
     end
-    OrbitFitSpec(names, values, lo, hi, sort!(idx), comp1, comp2, n1, n2)
+    OrbitFitSpec(names, values, lo, hi, sort!(idx), comp1, comp2, n1, n2, compiled_ties)
 end
 
 # ---------------------------------------------------------------------------------------
@@ -322,11 +357,14 @@ end
 # ---------------------------------------------------------------------------------------
 "Split `θ` into (orbital elements NamedTuple, comp1 params, comp2 params, flux ratio)."
 @inline function _unpack(spec::OrbitFitSpec, θ)
-    a, i, Om, om, e, P, T0, dP = θ[1], θ[2], θ[3], θ[4], θ[5], θ[6], θ[7], θ[8]
-    p1 = view(θ, 9:(8 + spec.n1))
-    p2 = view(θ, (9 + spec.n1):(8 + spec.n1 + spec.n2))
+    a, i, Om, om, e, P, T0, dP, dom =
+        θ[1], θ[2], θ[3], θ[4], θ[5], θ[6], θ[7], θ[8], θ[9]
+    nel = length(ORBIT_ELEMENTS)
+    p1 = view(θ, (nel + 1):(nel + spec.n1))
+    p2 = view(θ, (nel + 1 + spec.n1):(nel + spec.n1 + spec.n2))
     f  = θ[end]
-    return (a = a, i = i, Omega = Om, omega = om, e = e, P = P, T0 = T0, dP = dP), p1, p2, f
+    return (a = a, i = i, Omega = Om, omega = om, e = e, P = P, T0 = T0, dP = dP,
+            domega = dom), p1, p2, f
 end
 
 """
@@ -336,9 +374,39 @@ Complex visibilities for epoch `k`. Component 1 sits at the origin, component 2 
 displaced by the orbit; `f` is the flux of 2 relative to 1.
 """
 function orbit_model_cvis(spec::OrbitFitSpec, θ, fd::OrbitFitData, k::Int)
+    # Public entry point, so it resolves ties itself; `orbit_chi2` resolves them once for
+    # all epochs and calls `_orbit_cvis` directly. `apply_ties` returns θ untouched when
+    # there are none, so an untied model pays nothing here.
+    _orbit_cvis(spec, apply_ties(spec.ties, θ), fd, k)
+end
+
+"""
+    resolve_params(spec, p) -> θ
+
+Build the full parameter vector from the free subset `p`: start from the fixed values,
+scatter the free ones, then apply the ties. This is the ONLY place a full parameter vector
+is constructed, which is the point — when the free-to-full mapping is written out at each
+call site instead, it is possible (and did happen) to build one that skips the ties, so a
+fit reports tied parameters still holding their starting values while quoting a χ² computed
+from the correct ones.
+
+Follows the scheme OITOOLS uses in `resolvers.jl`: free values, fixed values and derived
+expressions resolved together in one pass rather than layered as separate copies.
+"""
+function resolve_params(spec::OrbitFitSpec, p)
+    θ = copy(spec.values)
+    @inbounds for (j, i) in enumerate(spec.free); θ[i] = p[j]; end
+    isempty(spec.ties) && return θ
+    vals = spec.ties.fn(θ)
+    @inbounds for (j, i) in enumerate(spec.ties.targets); θ[i] = vals[j]; end
+    return θ
+end
+
+"Epoch-`k` visibilities for a parameter vector whose ties are ALREADY resolved."
+function _orbit_cvis(spec::OrbitFitSpec, θ, fd::OrbitFitData, k::Int)
     el, p1, p2, f = _unpack(spec, θ)
     bp = (i = el.i, Ω = el.Omega, ω = el.omega, P = el.P, a = el.a, e = el.e,
-          T0 = el.T0, q = 1.0, dP = el.dP, dω = 0.0)
+          T0 = el.T0, q = 1.0, dP = el.dP, dω = el.domega)
     # One Kepler solve per DISTINCT time, then gather back to the uv points.
     ows, decs = orbit_to_rotir_offset(bp, fd.tsrt[k])
     ras = -ows                                   # East = -West
@@ -355,11 +423,16 @@ end
 
 Total χ² over all epochs, or `(χ²_V2, χ²_T3amp, χ²_T3phi)` with `split = true`.
 """
-function orbit_chi2(spec::OrbitFitSpec, θ, fd::OrbitFitData;
-                    weights = OI_DEFAULT_WEIGHTS, split::Bool = false)
+orbit_chi2(spec::OrbitFitSpec, θ, fd::OrbitFitData;
+           weights = OI_DEFAULT_WEIGHTS, split::Bool = false) =
+    _orbit_chi2(spec, apply_ties(spec.ties, θ), fd; weights = weights, split = split)
+
+"χ² for a parameter vector whose ties are ALREADY resolved (see `resolve_params`)."
+function _orbit_chi2(spec::OrbitFitSpec, θr, fd::OrbitFitData;
+                     weights = OI_DEFAULT_WEIGHTS, split::Bool = false)
     c = zeros(Float64, 3)
     for k in eachindex(fd.data)
-        cvis = orbit_model_cvis(spec, θ, fd, k)
+        cvis = _orbit_cvis(spec, θr, fd, k)
         d = fd.data[k]
         v2m, t3am, t3pm = cvis_to_obs(cvis, d)
         c[1] += sum(abs2, (v2m  .- d.v2)    ./ d.v2_err)
@@ -388,6 +461,9 @@ origin, component 2 is displaced by the orbit.
 * `flux_ratio = 1.0` — flux of component 2 relative to component 1.
 * `free` — parameter names to fit. Default: `a, i, Omega, T0, f` plus every component
   parameter. Component parameters are prefixed `c1_` / `c2_`.
+* `ties` — parameters computed from the others instead of fitted, as
+  `Dict(:c2_pa => "-Omega")`. See [`compile_ties`](@ref). A parameter cannot be both free
+  and tied.
 * `bounds` — `Dict(:name => (lo, hi))` overriding individual boxes.
 * `method` — `:neldermead` (NLopt, fast, returns a point estimate) or `:ultranest`
   (nested sampling, returns a posterior and log Z).
@@ -426,6 +502,7 @@ res.elements.a, res.chi2_red
 function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
                    elements, flux_ratio::Real = 1.0, free = nothing,
                    bounds = Dict{Symbol,Tuple{Float64,Float64}}(),
+                   ties = Dict{Symbol,String}(),
                    method::Symbol = :neldermead, model::Symbol = :analytic,
                    weights = OI_DEFAULT_WEIGHTS, maxeval::Int = 20_000,
                    min_num_live_points::Int = 400, use_stepsampler::Bool = true,
@@ -449,15 +526,12 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
 
     fd   = orbit_fit_data(data)
     spec = orbit_fit_spec(comp1, comp2; elements = elements, flux_ratio = flux_ratio,
-                          free = free, bounds = bounds)
+                          free = free, bounds = bounds, ties = ties)
     idx  = spec.free
     θ0   = copy(spec.values)
 
-    chi2_of = let spec = spec, fd = fd, weights = weights, θ0 = θ0, idx = idx
-        p -> begin
-            θ = copy(θ0); θ[idx] .= p
-            orbit_chi2(spec, θ, fd; weights = weights)
-        end
+    chi2_of = let spec = spec, fd = fd, weights = weights
+        p -> _orbit_chi2(spec, resolve_params(spec, p), fd; weights = weights)
     end
 
     if verbose
@@ -487,8 +561,8 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
         error("fit_orbit: method must be :neldermead or :ultranest (got $method)")
     end
 
-    θbest = copy(θ0); θbest[idx] .= best
-    cs    = orbit_chi2(spec, θbest, fd; weights = weights, split = true)
+    θbest = resolve_params(spec, best)
+    cs    = _orbit_chi2(spec, θbest, fd; weights = weights, split = true)
     el    = NamedTuple{ORBIT_ELEMENTS}(ntuple(j -> θbest[j], length(ORBIT_ELEMENTS)))
     verbose && @printf("           final    χ²/n = %.3f  (V² %.2f, T3amp %.2f, T3φ %.2f)\n",
                        sum(cs)/fd.ntot, cs[1]/max(fd.nv2,1), cs[2]/max(fd.nt3amp,1),

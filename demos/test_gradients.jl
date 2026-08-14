@@ -8,7 +8,7 @@ using LinearAlgebra
 
 # ─── Load data (single epoch for speed) ─────────────────────────────────────
 # Float64 throughout: FD needs the precision (the runtime paths are Float32-native)
-oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits"]
+oifitsfiles = [joinpath(@__DIR__, "data", "2011Sep02.lam_And_prepped.oifits")]
 data_all = readoifits_multiepochs(oifitsfiles; T=Float64)
 data = data_all[1, :]
 nepochs = length(data)
@@ -168,7 +168,7 @@ star_params_ld2 = (
     surface_type    = 2,
     rpole           = 1.37,
     tpole           = 4800.0,
-    ldtype          = 2,           # quadratic: 1 - ld1(1-μ) - ld2(1-μ²)
+    ldtype          = 2,           # quadratic: 1 - ld1(1-μ) - ld2(1-μ)²
     ld1             = 0.35,
     ld2             = 0.15,
     inclination     = 78.0,

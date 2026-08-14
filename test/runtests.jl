@@ -52,12 +52,15 @@ end
 
     # Every plotting entry point with every decoration, asserting on artist structure
     # rather than pixels. Headless (Agg) and a few seconds, so it runs by default —
-    # this is the layer the PyCall -> PythonCall migration broke, and image-free
     # structural checks are what catch a corrupted Julia->Python array conversion.
     include(joinpath(TESTDIR, "test_plotting.jl"))
 
     # Generic orbit fitter: component library, spec assembly, and a synthetic round trip.
     include(joinpath(TESTDIR, "test_orbit_fit.jl"))
+
+    # RADFLAT / RADIALVAR / orthoLD: hand-written gradients against FiniteDifferences, plus
+    # the ANOVA identity that makes RADFLAT and RADIALVAR complementary.
+    include(joinpath(TESTDIR, "test_radial_regularizers.jl"))
 
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin

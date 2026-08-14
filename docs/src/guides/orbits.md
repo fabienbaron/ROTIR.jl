@@ -216,9 +216,10 @@ Working examples, named after the sampler they use:
 | `demos/spica_orbit_fit_ultranest.jl` | Spica — two limb/uniform discs, eccentric orbit | UltraNest |
 | `betlyr/betlyr_orbit_fit_ultranest.jl` | β Lyrae — donor + accretion disc, circular orbit | UltraNest |
 | `betlyr/betlyr_orbit_fit_pigeons.jl` | β Lyrae, same model | Pigeons |
+| `betlyr/betlyr_orbit_figure.jl` | β Lyrae — redraws the orbit from a stored fit | (none) |
 
 For β Lyr the model lives in `betlyr/betlyr_model.jl` and both drivers include it, so the
-sampler can be swapped without the model drifting between them.
+sampler can be swapped without the model drifting between them. See [Worked example: β Lyrae](@ref) below for the converged result.
 
 ### Why sample rather than optimise
 
@@ -284,7 +285,7 @@ sampler = ultranest.ReactiveNestedSampler(pylist(names), loglike_v;
                                           transform = prior_v, vectorized = true)
 ```
 
-Three details, each of which PyCall used to hide:
+Three details to get right:
 
 * **Declare the argument types.** `::AbstractMatrix{<:Real}` is what makes PythonCall
   convert the numpy batch to a Julia matrix. Without it the argument stays a `Py` and
@@ -294,12 +295,10 @@ Three details, each of which PyCall used to hide:
 * **`pylist(names)`, not a Julia `Vector`.** UltraNest evaluates `names + [...]`
   internally, and a `VectorValue` does not support `+`.
 
-!!! note "Threading and UltraNest, under PythonCall"
-    This used to be a hard prohibition. Under PyCall, `pydecref_` called `Py_DecRef` with
-    no GIL check, so Julia's GC finalizing a `PyObject` on a worker thread segfaulted the
-    process — even when the likelihood never touched Python. **PythonCall does not have
-    that failure mode**: its finalizer enqueues the pointer, and the queue is only drained
-    by a thread holding the GIL (`PyGILState_Check`, `PythonCall/src/GC/GC.jl`). A full
+!!! note "Threading and UltraNest"
+    A multithreaded session is safe: PythonCall's finalizer enqueues the pointer, and the
+    queue is only drained by a thread holding the GIL (`PyGILState_Check`,
+    `PythonCall/src/GC/GC.jl`), so a `Py` object may be finalized on any thread. A full
     UltraNest run completes under `julia -t 8` with Py objects being finalized on worker
     threads throughout.
 
@@ -326,12 +325,11 @@ Sample in an unconstrained space so the reference can be a plain wide Gaussian �
 uniform after the change of variables (`z_to_theta`, `log_jacobian`, `theta_to_z` in
 `betlyr_model.jl`).
 
-!!! note "Deferring plotting is no longer required"
+!!! note "Plotting need not be deferred"
     `using ROTIR` loads PythonPlot unconditionally, so `Py` objects exist in a Pigeons
-    session too. Under PyCall that was dangerous and the demos worked around it by
-    plotting only *after* sampling (`@eval using PythonPlot` at the end) and forcing
-    `GC.gc(true)` before `pigeons(...)`. With PythonCall's deferred decrefs neither step
-    is needed; they are harmless if left in place, and the demos still carry them.
+    session too. That is fine — PythonCall defers decrefs until a thread holds the GIL, so
+    there is no need to plot only after sampling or to force `GC.gc(true)` before
+    `pigeons(...)`. Some demos still do both; it is harmless.
 
 Always check `Pigeons.n_round_trips(pt)` before believing an interval. Zero round trips
 means the chain never travelled between reference and target, so it has not demonstrated
@@ -423,6 +421,125 @@ steps. Run `EXPLORER=slice` and `EXPLORER=mala` and compare `n_round_trips` on y
     (`which star is in front`) is a genuine discontinuity in a flat-disc model, it lands
     exactly at conjunction, and for an eclipsing system like β Lyr that is where the most
     informative data are.
+
+### Worked example: β Lyrae
+
+Everything above comes together in `demos/betlyr/betlyr_orbit_fit_ultranest.jl`, run on the
+2006–2007 MIRC nights (`DATASET=old`, the default) so the result is directly comparable with
+the published elements. The model is a uniform disc for the B6–8 II donor plus an elliptical
+Gaussian for the accretion disc, on a circular orbit — 10 free parameters, 1970 data points
+across 7 epochs.
+
+![β Lyrae relative orbit](../assets/betlyr_orbit.png)
+
+The grey posterior draws are invisible because they lie under the fitted curve: with 26268
+samples the orbit is determined far more tightly than the difference from the starting
+elements. That is what a converged posterior looks like here — a visible fan would mean the
+opposite.
+
+The orbit alone does not show how *large* the components are relative to it, which here is
+the first thing to check — `a` is 0.90 mas while the donor is 0.59 mas across:
+
+![β Lyrae components to scale](../assets/betlyr_epochs.png)
+
+Note that the two components visibly overlap on the sky at several epochs. `model_cvis`
+sums them with a phase shift and has **no occultation term**, so at those epochs the model
+double-counts the overlap — the same caveat that applies to `binary_cvis`, and a real one
+for an eclipsing system.
+
+The overlap is more pervasive than the FWHM ellipses suggest. By half-FWHM it affects 3 of 7
+epochs (2006-10-16, 2007-07-07, 2007-07-09) and 45 % of the orbit, with a minimum projected
+separation of 0.02 mas — essentially central. But a Gaussian has no edge: using its 2σ extent
+(0.49 mas) instead, only 2007-07-04 is clean. Both geometries also occur in the data — the
+disc is in *front* in October and *behind* in July — so the un-modelled effect changes sign
+between epochs rather than acting as a common offset.
+
+Adding occultation is not a small patch, because a Gaussian is a brightness distribution with
+no surface, so occulting it is undefined until the disc is given physical structure. The two
+coherent options are to treat the donor as opaque and the disc as optically thin (one-sided,
+cheap), or to replace the Gaussian with an opaque elliptical disc and use
+[`occultation_weights`](../api/binary_geometry.md). Either way the closed-form visibility is
+lost and the model has to move to an image plane plus NFFT, which is what makes this a
+project rather than a correction.
+
+Note also that six of the seven epochs fall in a nine-day window in July 2007, so the phase
+coverage behind these elements is uneven.
+
+| | literature | fitted | posterior sd |
+|---|---|---|---|
+| `a_mas` | 0.865 | 0.8958 | 0.00065 |
+| `incl_deg` | 93.50 | 91.244 | 0.046 |
+| `Omega_deg` | 73.70 | 73.529 | 0.040 |
+| `T0_JD` | 2454283.043 | 2454283.0555 | 0.0017 |
+| `P_d` | 12.9414 | 12.9616 | 0.0017 |
+| `ud_donor_mas` | 0.570 | 0.5898 | 0.0032 |
+| `disc_fwhm_mas` | 0.900 | 0.5825 | 0.0022 |
+| `disc_ratio` | 0.6058 | 0.6423 | 0.0051 |
+| `disc_pa_deg` | (73.70) | 108.353 | 0.224 |
+| `f_disc` | 0.8065 | 0.8179 | 0.0031 |
+
+and the fit quality, by observable:
+
+| | literature | fitted |
+|---|---|---|
+| V² (858) | 9.46 | 1.47 |
+| T3amp (556) | 7.85 | 1.57 |
+| T3φ (556) | 107.85 | 7.33 |
+| **total (1970)** | **36.78** | **3.15** |
+
+The closure phases carry the result: χ²ₜ₃ₚ/n falls by a factor 15. That is the expected
+signature — T3φ is what constrains the *asymmetry* of the disc-plus-donor pair, so it is the
+observable that moves when the disc geometry is refitted rather than assumed.
+
+Three things are worth reading carefully before quoting any of this.
+
+**The orbital elements barely move, and that is the point.** `a`, `i`, `Ω`, `T0` all land
+within a few percent of the published values — `Ω` within 0.17°. The large χ² improvement
+comes almost entirely from the *disc* parameters, not the orbit. So this is a consistency
+check on Zhao et al.'s astrometry, not a revision of it.
+
+**`disc_pa_deg` has no literature entry** — the parenthesised 73.70 is `mod(Ω, 180°)`, the
+orbital node reused as a starting guess in `betlyr_params.jl`, not an independently published
+disc position angle. The fit moving it to 108.4° is therefore a *measurement* of a quantity
+that was previously assumed, not a disagreement.
+
+Read that number through the parameterisation before interpreting it. In `ellgauss_vis` the
+`ratio` multiplies the rotated `up` coordinate, which makes the source **narrower** along
+`pa` — so `disc_pa_deg` is the **minor** axis, the major axis is at `pa + 90°`, and
+`disc_fwhm_mas` is the major FWHM. And `φ` runs from +RA toward +Dec, so the astronomical PA
+(North through East) is `90° − φ`. The fitted major axis therefore sits at astro PA **71.65°**
+against a line of nodes of **73.53°** — aligned to **1.9°**, which is exactly what a coplanar
+disc should do, and a good consistency check on the fit rather than an anomaly.
+
+`disc_fwhm_mas` shrinking 0.90 → 0.58 is the substantive change, and it is worth remembering
+that an elliptical Gaussian is the only freedom this model has to absorb any asymmetric
+structure.
+
+**The posterior sd on `P_d` is a prior width, not a measurement.** The visibilities carry
+essentially no information on the period over a 269 d baseline — see the `PMAX` discussion in
+`betlyr_params.jl` — so that column reflects the ephemeris prior. The same caution applies
+to any parameter whose sd is close to its prior half-width.
+
+!!! warning "The posterior sds are not credible uncertainties on the elements"
+    Refitting the same ten parameters on subsets of the epochs moves them by **tens of
+    posterior sd**, in opposite directions depending on which subset: dropping the three
+    smallest-separation epochs shifts `T0` by −60σ and `disc_fwhm` by +45σ, while dropping the
+    three largest shifts `a` by +60σ and `Ω` by −33σ. With 4 of 7 epochs the statistical error
+    should only grow by ~√(7/4), so shifts of order 1σ are expected and these are not.
+
+    Those widths are therefore the curvature of the likelihood *under this model*, not the
+    uncertainty on the orbit. The likeliest cause is the missing occultation term described
+    below: the components overlap on the sky at 3 of 7 epochs by half-FWHM, and at 6 of 7 once
+    the Gaussian's real 2σ extent is used, so nearly every epoch is contaminated and different
+    subsets settle on different compromises. Treat the element values as a consistency check
+    against Zhao et al. and **do not propagate the sd column as an error bar.**
+
+To regenerate the figure and the tables from the stored posterior without re-running the
+sampler (seconds rather than hours):
+
+```julia
+julia --project=demos demos/betlyr/betlyr_orbit_figure.jl
+```
 
 ## Fitting interferometry together with radial velocities
 

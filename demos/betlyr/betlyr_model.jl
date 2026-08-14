@@ -1,7 +1,7 @@
 # betlyr_model.jl — data, forward model and χ² for the β Lyrae orbit fit.
 #
 # Shared by both drivers so the model is defined once:
-#   betlyr_orbit_fit_ultranest.jl — UltraNest (Python, via PyCall), single-threaded
+#   betlyr_orbit_fit_ultranest.jl — UltraNest (Python, via PythonCall), single-threaded
 #   betlyr_orbit_fit_pigeons.jl   — Pigeons.jl (native Julia), multithreaded
 #
 # The chain is:

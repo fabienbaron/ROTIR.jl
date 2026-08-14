@@ -1,10 +1,10 @@
 #!/usr/bin/env julia
-# ρ Cas posterior by nested sampling (UltraNest, via PyCall).
+# ρ Cas posterior by nested sampling (UltraNest, via PythonCall).
 #
 #   julia --project=demos -t 1 demos/rho_cas_ultranest.jl
 #   FREE=rpole,omega,inc,PA,beta,ld1 STEPSAMPLER=1 NLIVE=400 julia --project=demos -t 1 demos/rho_cas_ultranest.jl
 #
-# NOTE the `-t 1`. UltraNest is reached through PyCall, which is not thread-safe: `pydecref_`
+# NOTE the `-t 1`. UltraNest is reached through PythonCall: `pydecref_`
 # calls Py_DecRef from a GC finalizer with no GIL check, so a PyObject finalized on a worker
 # thread segfaults the process mid-run. `fit_parametric_ultranest` now refuses to start with
 # more than one thread rather than crashing hours in. Note JULIA_NUM_THREADS in the
@@ -37,7 +37,7 @@ describe_model()
         STEPSAMPLER ? " (nsteps=$NSTEPS)" : "")
 
 # fit_parametric_ultranest lives in ROTIR core — nested sampling needs no AD backend, and
-# PyCall is already a ROTIR dependency. The box below is the same uniform prior the
+# PythonCall is already a ROTIR dependency. The box below is the same uniform prior the
 # gradient-based samplers get through their logit transform, so the posteriors match.
 res, wall = timed(() -> fit_parametric_ultranest(DATA, TESSELS, TEPOCHS, BASE;
     θ0 = THETA0, free = FREE_NAMES, lb = BOX_LO_FULL, ub = BOX_HI_FULL,

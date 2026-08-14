@@ -133,11 +133,12 @@ function ld_and_derivs(nz::AbstractVector{T}, ldtype::Integer, ld1::T, ld2::T) w
             dld_dμ      = ld1
             dld_dld1[i] = -(one(T) - μ)
             dld_dld2[i] = zero(T)
-        elseif ldtype == 2                   # quadratic
-            ld[i]       = one(T) - ld1*(one(T) - μ) - ld2*(one(T) - μ*μ)
-            dld_dμ      = ld1 + T(2)*ld2*μ
-            dld_dld1[i] = -(one(T) - μ)
-            dld_dld2[i] = -(one(T) - μ*μ)
+        elseif ldtype == 2                   # quadratic: 1 − ld1(1−μ) − ld2(1−μ)²
+            m1          = one(T) - μ
+            ld[i]       = one(T) - ld1*m1 - ld2*m1*m1
+            dld_dμ      = ld1 + T(2)*ld2*m1
+            dld_dld1[i] = -m1
+            dld_dld2[i] = -m1*m1
         else                                 # ldtype 3, Hestroffer μ^ld1
             ldi         = μ > zero(T) ? μ^ld1 : zero(T)
             ld[i]       = ldi

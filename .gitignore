@@ -34,3 +34,9 @@ Manifest.toml
 # (DATASET=old). older_data/ — the 2006-2007 nights Zhao et al. fitted — is committed.
 /demos/betlyr/*.oifits
 /demos/betlyr/*.pdf
+
+# LaTeX build artifacts (notes/)
+*.aux
+*.log
+*.out
+*.synctex.gz

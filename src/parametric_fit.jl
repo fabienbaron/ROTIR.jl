@@ -26,36 +26,32 @@
 # coefficient constrained" — exactly the question RADFLAT exists to answer. log(Z) also lets
 # you compare sphere vs ellipsoid honestly, which Δχ² cannot do when χ²/n ≫ 1.
 #
-# Against: no gradients are used, cost grows steeply with dimension, and PyCall is not
+# Against: no gradients are used, cost grows steeply with dimension, and PythonCall is not
 # thread-safe. Safe to call from a multithreaded session (see the note in the body).
 function _fit_ultranest(chi2_of, names, lo, hi;
                         min_num_live_points::Int = 400, frac_remain = 1e-3,
                         use_stepsampler::Bool = false, nsteps::Int = 400, verb::Bool = false)
-    # NOTE: no thread guard here any more. Under PyCall this had to fail fast, because
-    # `pydecref_` called `Py_DecRef` straight from a Julia GC finalizer with no GIL check,
-    # so a PyObject finalized on a worker thread killed the process with SIGSEGV part-way
-    # through a run. PythonCall does not have that failure mode: its finalizer enqueues the
-    # pointer (`GC.enqueue`), and the queue is only drained by a thread that actually holds
-    # the GIL (`PyGILState_Check`, PythonCall/src/GC/GC.jl). Verified empirically -- a full
-    # UltraNest run completes under `julia -t 8` with Py objects being finalized on worker
-    # threads throughout.
+    # Safe in a multithreaded session: PythonCall's finalizer enqueues the pointer
+    # (`GC.enqueue`) and the queue is drained only by a thread holding the GIL
+    # (`PyGILState_Check`, PythonCall/src/GC/GC.jl), so Py objects may be finalized on any
+    # thread. Verified with a full UltraNest run under `julia -t 8`.
     #
-    # Still true: Python must only be CALLED from a thread holding the GIL. Driving the
-    # sampler from one thread (as here) is fine; calling Python from inside a
-    # `Threads.@threads` body without `PythonCall.GIL.@lock` still segfaults.
+    # Python must still only be CALLED from a thread holding the GIL. Driving the sampler
+    # from one thread (as here) is fine; calling Python inside a `Threads.@threads` body
+    # without `PythonCall.GIL.@lock` segfaults.
     ultranest = pyimport("ultranest")
     # Finalize any stray PyObject on the main thread before sampling starts.
     GC.gc(true); GC.gc(true)
     # UltraNest applies `transform` itself and hands `loglike` the PHYSICAL parameters, not
-    # the unit cube. Applying the transform a second time inside `loglike` maps e.g. a radius
-    # of 1.465 to 0.05 + 19.95*1.465 = 29.3 mas and the sampler converges confidently on
-    # nonsense — it did exactly that here, returning D = 0.14 mas with a ±0.0002 error bar at
-    # χ²/n = 2e7, against a true optimum of 2.93 mas at χ²/n = 4.8.
+    # the unit cube. Do NOT apply the transform a second time inside `loglike`: that maps a
+    # radius of 1.465 to 0.05 + 19.95*1.465 = 29.3 mas, and the sampler converges confidently
+    # on nonsense — D = 0.14 mas with a ±0.0002 error bar at χ²/n = 2e7, against a true
+    # optimum of 2.93 mas at χ²/n = 4.8.
     # VECTORISED likelihood and transform, following OITOOLS' fit_model_ultranest. UltraNest
     # hands over a whole BATCH of points as an n x d numpy array and expects arrays back, so
     # the Julia<->Python crossing is paid once per batch instead of once per live point.
     #
-    # Three PythonCall details, each of which PyCall used to hide:
+    # Three PythonCall details:
     #   * ARGUMENTS arrive as `Py`. Annotating the closure `::AbstractMatrix{<:Real}` makes
     #     PythonCall convert the numpy batch to a Julia matrix; without it, `collect` raises
     #     `MethodError: no method matching (Array{Float64})(::Py)`.

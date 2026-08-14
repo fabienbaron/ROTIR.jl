@@ -7,7 +7,7 @@
 # The model lives in betlyr_model.jl, shared with the Pigeons driver
 # (betlyr_orbit_fit_pigeons.jl). This file is only the sampler.
 #
-# Single-threaded. Under PyCall this was mandatory (a PyObject finalized on a worker thread
+# Single-threaded. Under PythonCall this was mandatory (a PyObject finalized on a worker thread
 # segfaulted); PythonCall defers decrefs behind a GIL check, so that hazard is gone and a
 # threaded session is safe. Python must still only be CALLED from a thread holding the GIL,
 # so do not wrap the likelihood in `Threads.@threads` — use the Pigeons driver for cores.
@@ -59,7 +59,7 @@ end
 # This is safe under PythonCall specifically. X has ALREADY been converted to a Julia matrix
 # (the ::AbstractMatrix annotation does that), and the result is converted back on this
 # thread after the loop, so no worker thread ever calls Python — which is the one thing that
-# still segfaults. Under PyCall the pattern was unsafe regardless, because a PyObject
+# still segfaults. Under PythonCall the pattern was unsafe regardless, because a PyObject
 # finalizer could fire on a worker thread; PythonCall defers decrefs behind a GIL check.
 #
 # THREADED=0 falls back to the serial broadcast.
@@ -148,6 +148,42 @@ try
     @info "corner plot: $cpath  (red = literature values)"
 catch err
     @warn "corner plot failed; fit results are still written" err
+end
+
+# ── Relative orbit ──────────────────────────────────────────────────────────
+# Same recipe as the inline plot in `betlyr_orbit_fit_pigeons.jl`, except that P is a FITTED
+# parameter here (index 11) rather than the fixed `P_ORB` that driver assumes.
+# `betlyr_orbit_figure.jl` redraws this from the stored results without re-sampling, and is
+# what generates the documentation figure — keep the two in sync.
+try
+    rd(θ, t) = orbit_to_rotir_offset((i = θ[2], Ω = θ[3], ω = OMEGA_PERI, P = θ[11],
+                                      a = θ[1], e = E_ORB, T0 = θ[4], q = Q_BIN,
+                                      dP = θ[5], dω = 0.0), t)
+    fig, ax = pyplot.subplots(figsize = (9, 4.2)); ax.set_aspect("equal")
+    tt = θ_fit[4] .+ range(0, θ_fit[11], length = 400)
+    for (θ, lb, sty, c) in ((THETA_LIT, "literature", "--", "C0"),
+                            (θ_fit,     "fitted",     "-",  "C1"))
+        xy = [rd(θ, t) for t in tt]
+        ax.plot([-p[1] for p in xy], [p[2] for p in xy], sty, lw = 1.8, color = c, label = lb)
+    end
+    for i in 1:NEP
+        p = rd(θ_fit, TMEAN[i])
+        ax.plot([-p[1]], [p[2]], "o", ms = 7, mfc = "none", mew = 1.4, color = "C1",
+                label = i == 1 ? "observed epochs" : "")
+    end
+    ax.plot([0], [0], "r*", ms = 18, label = "donor")
+    ax.invert_xaxis()
+    ax.set_xlabel("ΔRA East (mas)"); ax.set_ylabel("ΔDec North (mas)")
+    ax.legend(loc = "upper center", bbox_to_anchor = (0.5, -0.22), ncol = 4, fontsize = 9,
+              frameon = false)
+    ax.grid(alpha = 0.3)
+    ax.set_title("β Lyrae relative orbit — UltraNest")
+    opath = joinpath(outdir, "betlyr_orbit_ultranest.png")
+    fig.savefig(opath, dpi = 130, bbox_inches = "tight")
+    pyplot.close(fig)
+    @info "orbit plot: $opath"
+catch err
+    @warn "orbit plot failed; fit results are still written" err
 end
 
 @info "results in $outdir"

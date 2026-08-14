@@ -1,12 +1,12 @@
 using ROTIR
-using DelimitedFiles, PyPlot, PyCall
+using DelimitedFiles, PythonPlot, PythonCall
 import Statistics: mean
 
 # =============================================================================
 # 1. LOAD SPICA OIFITS DATA
 # =============================================================================
 # The merged OIFITS file contains epochs from 2007, 2012, and 2015 campaigns
-oifitsfile = "./data/2007_2012_2015.Spica.oifits"
+oifitsfile = joinpath(@__DIR__, "data", "2007_2012_2015.Spica.oifits")
 data_all = readoifits(oifitsfile)[1,1]
 
 # Automatically identify epochs from MJD gaps in the data
@@ -221,8 +221,8 @@ ax1.grid(true, alpha=0.3)
 # =============================================================================
 # 7. PLOT: RADIAL VELOCITIES
 # =============================================================================
-data_rv1 = readdlm("./data/all_rv_1_ORIG.txt")
-data_rv2 = readdlm("./data/all_rv_2_ORIG.txt")
+data_rv1 = readdlm(joinpath(@__DIR__, "data", "all_rv_1_ORIG.txt"))
+data_rv2 = readdlm(joinpath(@__DIR__, "data", "all_rv_2_ORIG.txt"))
 
 plot_rv(bparams, K1=123.9, K2=198.8, γ=0.0,
     rv_data1=data_rv1, rv_data2=data_rv2, figtitle="Spica Radial Velocities")

@@ -34,7 +34,7 @@ star_params = (
 tmap, stars = multires_reconstruct_oi(data, star_params, tepochs;
                                        n_start=2, n_end=4,
                                        maxiter=500, reg_weight=1e-5,
-                                       reg_type="tv2", verbose=true)
+                                       reg_type="sobel2", verbose=true)
 ```
 
 This runs reconstruction at HEALPix levels n=2, 3, 4:
@@ -56,7 +56,7 @@ splits into 4 children) and used as the starting point.
 | `n_end` | `4` | Final HEALPix level |
 | `maxiter` | `500` | Max iterations per level |
 | `reg_weight` | `1e-5` | TV regularization weight |
-| `reg_type` | `"tv2"` | Regularization type (`"tv"` or `"tv2"`) |
+| `reg_type` | `"sobel2"` | Regularization type (`"sobel"`, `"sobel2"`, `"tv"`, `"tv2"`) |
 | `verbose` | `true` | Print diagnostics |
 
 Additional keywords are passed through to `image_reconstruct_oi` (e.g., `lower`,
@@ -73,23 +73,28 @@ tessels = tessellation_healpix(n)
 stars = create_star_multiepochs(tessels, star_params, tepochs)
 tmap = parametric_temperature_map(star_params, stars[1])
 setup_oi!(data, stars)
-regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap)]]
+regularizers = [["sobel2", 10.0, sobel_gradient_healpix(n), 1:length(tmap)]]
 tmap = image_reconstruct_oi(tmap, data, stars; maxiter=500, regularizers=regularizers)
 
 # Upsample to level n=3
 tmap, stars = upsample_map_stars(tmap, stars, star_params, tepochs)
 setup_oi!(data, stars)
 n = 3
-regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap)]]
+regularizers = [["sobel2", 10.0, sobel_gradient_healpix(n), 1:length(tmap)]]
 tmap = image_reconstruct_oi(tmap, data, stars; maxiter=500, regularizers=regularizers)
 
 # Upsample to level n=4
 tmap, stars = upsample_map_stars(tmap, stars, star_params, tepochs)
 setup_oi!(data, stars)
 n = 4
-regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap)]]
+regularizers = [["sobel2", 10.0, sobel_gradient_healpix(n), 1:length(tmap)]]
 tmap = image_reconstruct_oi(tmap, data, stars; maxiter=500, regularizers=regularizers)
 ```
+
+The same weight is used at every level on purpose: `"sobel2"` carries the `4π/npix` solid
+angle, so it means the same thing at each resolution. A `"tv2"` weight does not — its value
+on a smooth map falls by ~×0.4 per doubling, so holding it fixed up the ladder quietly
+regularizes the finest level the least.
 
 ## Downsampling
 

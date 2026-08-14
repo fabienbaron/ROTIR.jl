@@ -9,12 +9,12 @@ supersynchronous, <1 subsynchronous. This is the quantity that enters the Roche
 potential's centrifugal term as `½F²(1+q)r²(1−ν²)`, and it is the same `F` as PHOEBE's
 `syncpar`, ELISa's `synchronicity`, and `P` in `RocheLobe.f90`.
 
-Note it is the ratio of *angular rates*, i.e. the RECIPROCAL of the ratio of periods.
-This was previously computed as `rotation_period/P` throughout, which is `P_rot/P_orb` —
-inverted, and contradicting the code's own comments. It is invisible for a synchronous
-binary (both give 1), which is every configuration in the demos and the tests, but for
-Spica's primary (v sin i = 161 km/s ⇒ F ≈ 1.92) the centrifugal term was wrong by
-F⁴ ≈ 13.6× and the rotational flattening came out 0.5% instead of 9.4%.
+Note it is the ratio of *angular rates*, i.e. the RECIPROCAL of the ratio of periods:
+`P/rotation_period`, NOT `rotation_period/P`. The inverted form is invisible for a
+synchronous binary (both give 1), which is every configuration in the demos and the tests,
+so it will not show up in a test run — but for Spica's primary (v sin i = 161 km/s ⇒
+F ≈ 1.92) it puts the centrifugal term out by F⁴ ≈ 13.6× and the rotational flattening at
+0.5% instead of 9.4%.
 
 Verified against `libphoebe.roche_Omega(q, F, d, [x,y,z])` at F = 0.521, 1.0 and 1.92 —
 see the "synchronicity convention" testset in `test/test_reflection.jl`.
@@ -180,13 +180,13 @@ end
 #             Psi1 = 1/r + q/√(b+r²−c·r) − d_coef·r + e·r²
 #   Wilson 1979 (the canonical source both descend from)
 #
-# This term was previously written −q·r·λ·D, matching Aufdenberg et al. 2015 eqs.
-# A18/A27/A30 (which are internally self-consistent with his A1, but wrong by D³ relative
-# to the above). That form overwhelms the tidal attraction past a q- and radius-dependent
+# NOTE this disagrees with Aufdenberg et al. 2015 eqs. A18/A27/A30, which write the term
+# as −q·r·λ·D (internally self-consistent with his A1, but wrong by D³ relative to the
+# above). That form overwhelms the tidal attraction past a q- and radius-dependent
 # threshold and points the tidal bulge AWAY from the companion: for Spica
 # (q = 0.619, rpole/a = 0.290) the threshold is D/a = 1.031, and every modern eccentricity
-# determination (0.065–0.123) puts apastron beyond it, so the bulge was inverted for
-# roughly half of every orbit.
+# determination (0.065–0.123) puts apastron beyond it, so the bulge inverts for roughly
+# half of every orbit.
 #
 # RocheLobe.f90 does not settle the question directly: it works in units of the
 # instantaneous separation, so D ≡ 1 and the symbol never appears. But rescaling it to

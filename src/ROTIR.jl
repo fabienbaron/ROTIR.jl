@@ -35,6 +35,7 @@ include("shape_gradient.jl");
 include("parametric_gradient.jl");
 include("bootstrap.jl");
 include("parametric_fit.jl");
+include("orbit_ties.jl");    # before orbit_fit.jl: OrbitFitSpec holds an OrbitTies
 include("orbit_fit.jl");
 include("ultranest.jl");
 include("rasterize.jl");
@@ -59,6 +60,8 @@ export tessellation
 export tessellation_healpix, tessellation_latlong
 export nside2npix, npix2n
 export tv_neighbors_healpix, tv_neighbors_healpix_visible, tv_neighbors_longlat
+export sobel_gradient_healpix
+
 export upsample_map_stars, downsample_map_stars
 
 # Stellar/binary parameters
@@ -115,7 +118,9 @@ export observables, cvis_to_obs, cvis_chi2, OI_DEFAULT_WEIGHTS, chi2s, mod360
 export spheroid_chi2_f, spheroid_chi2_fg
 export spheroid_chi2_allepochs_fg, spheroid_chi2_allepochs_f
 export spheroid_total_variation, spheroid_crit_multiepochs_fg
-export spheroid_radflat_fg, radflat_bins
+export spheroid_radflat_fg, spheroid_radialvar_fg, radflat_bins,
+       spheroid_orthold_fg, orthold_direction
+export spheroid_sobel_fg, spheroid_sobel2_fg, max_entropy_fg
 export spheroid_l2_fg, spheroid_harmon_bias_fg, spheroid_regularization
 export image_reconstruct_oi, image_reconstruct_oi_crit, image_reconstruct_oi_chi2, image_reconstruct_oi_chi2_fg
 export multires_reconstruct_oi
@@ -157,6 +162,7 @@ export OrbitComponent, PointSource, UniformDisk, LimbDarkenedDisk, GaussianDisk,
 export OrbitFitData, OrbitFitSpec, orbit_fit_data, orbit_fit_spec
 export orbit_model_cvis, orbit_chi2, fit_orbit
 export ORBIT_ELEMENTS
+export OrbitTies, compile_ties, apply_ties, resolve_params
 
 export parametric_free_indices
 export fit_parametric_ultranest

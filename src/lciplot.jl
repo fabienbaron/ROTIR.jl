@@ -38,8 +38,7 @@ end
 function lciplot_vs_model_phase_residuals(lcidata, modelflux, relative=true)
     # fig = figure("Light curve - Data vs model",figsize=(15,10),facecolor="White")
     fig, ax = pyplot.subplots(2, 1, figsize=(15,10), sharex=true, gridspec_kw=Dict("height_ratios"=>[1.0, 0.3], "hspace"=>0.0))
-    # 0-BASED indexing: under PythonCall `subplots` returns a Py numpy array of axes,
-    # not the Julia Matrix PyCall used to convert it into.
+    # 0-BASED indexing: `subplots` returns a Py numpy array of axes, not a Julia Matrix.
     ax[0].errorbar(lcidata.phase, lcidata.flux, yerr=lcidata.fluxerr, fmt="o", color="C0", label="Observed", zorder=1, mfc="none")
     ax[0].plot(lcidata.phase, modelflux, label="Inferred", zorder=2, c="C1")
     ax[1].axhline(0.0, c="k", ls="--", zorder=1)

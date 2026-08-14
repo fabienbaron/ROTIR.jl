@@ -192,6 +192,11 @@ Conversion functions:
 
 ![Roche lobe surface](../assets/surface_roche.png)
 
+The graticule traces the true Roche shape: the meridians run all the way out to the tidal
+point on the right, and the parallels are visibly not circles. There is no closed form to
+draw them from, so `draw_graticules` interpolates the mesh's own `r(θ, φ)` — see
+[Plotting](../api/plotting.md).
+
 ### Fillout factor progression
 
 Increasing fillout factor from 90% to 99% of the Roche lobe:

@@ -55,15 +55,30 @@ The disk and Gaussian visibilities come from OITOOLS (`visibility_ud`, `visibili
 
 ## Choosing what to fit
 
-Parameters are named: the eight orbital elements `a, i, Omega, omega, e, P, T0, dP`, each
-component's own parameters prefixed `c1_` / `c2_`, and the flux ratio `f`.
+Every parameter is named: the nine orbital elements
+`a, i, Omega, omega, e, P, T0, dP, domega`, each component's own parameters prefixed
+`c1_` / `c2_`, and the flux ratio `f`.
+
+Each one is exactly one of three things.
+
+| | how | when |
+|---|---|---|
+| **free** | listed in `free`, sampled within `bounds` | the data constrain it |
+| **fixed** | not listed anywhere; keeps its `elements` value | known from elsewhere (an ephemeris) |
+| **tied** | listed in `ties` as an expression | determined by the others through physics |
 
 ```julia
 res = fit_orbit(data, comp1, comp2;
-                elements = (...),
+                elements = (a = 0.9, i = 91.2, Omega = 73.5, P = 12.96, T0 = 2454283.0),
                 free   = [:a, :i, :Omega, :T0, :f, :c1_diameter, :c2_fwhm],
-                bounds = Dict(:a => (0.5, 1.5), :f => (0.1, 3.0)))
+                bounds = Dict(:a => (0.8, 1.0), :f => (0.1, 3.0)),
+                ties   = Dict(:c2_pa => "-Omega"),
+                method = :ultranest)
 ```
+
+The model is assembled once from that description — the ties compiled, the free/fixed layout
+resolved — and then sampled. Nothing about the parameterisation is decided inside the
+likelihood.
 
 The default frees `a, i, Omega, T0, f` and every component parameter. Deliberately **not**
 free by default:
@@ -73,6 +88,50 @@ free by default:
 * **`P`** — an eclipse or spectroscopic ephemeris usually pins the period far better than a
   few nights of visibilities can. See *Fitting the period* below.
 * **`dP`** — needs a baseline long enough for the phase drift to accumulate.
+* **`domega`** — apsidal motion. Unmeasurable over a short baseline, and a real effect over
+  a long one: Spica's periapsis advances ~2.6°/yr, so `omega` drifts ~21° across the
+  2007–2015 CHARA data. Free it when the baseline is years, not nights.
+
+## Tied parameters
+
+A tie makes one parameter a function of the others. It is the right tool when a quantity is
+not independent but *physically determined* — fitting it freely then spends a degree of
+freedom and, worse, permits a solution in which the components disagree with each other.
+
+The motivating case: a disc lying in the orbital plane has its projected major axis along
+the line of nodes, so its position angle is not free — it is `Ω`.
+
+```julia
+ties = Dict(:c2_pa => "-Omega")
+```
+
+Expressions are ordinary Julia written against the parameter names, so arithmetic and
+function calls both work, and a tie may reference another tie (evaluation is ordered by
+topological sort; a cycle is an error):
+
+```julia
+ties = Dict(:c2_pa    => "-Omega",
+            :c2_ratio => "abs(cosd(i))")     # a flat disc's projected axis ratio
+```
+
+They are compiled once, with `RuntimeGeneratedFunctions`, into a single call — resolving
+them costs one allocation per likelihood evaluation and no measurable time, which matters
+when a nested-sampling run makes hundreds of thousands of them.
+
+A parameter cannot be both free and tied: the tie overwrites its target on every evaluation,
+so the sampled value would be silently discarded and the fit would report an uncertainty for
+a quantity the likelihood never used. `orbit_fit_spec` raises rather than allow it.
+
+!!! warning "A tie encodes a convention, and a wrong one is invisible"
+    `EllipticalGaussian` takes `pa` as the angle whose axis is scaled by `ratio < 1` — the
+    **minor** axis — measured from +RA toward +Dec, while `Omega` is the node measured North
+    through East. Putting the major axis on the line of nodes is therefore `"-Omega"`, not
+    `"Omega"`. Check the component's own definition before copying a tie to another system:
+    a wrong tie cannot be detected from the χ², because the fit will simply accommodate it.
+
+Whether a tie is *supported* by the data is worth checking before adopting it — fit the
+parameter freely once and compare. On β Lyrae the free position angle lands 1.9° from the
+tied prediction and the tie costs χ²/n 3.154 → 3.189, so it constrains without fighting.
 
 ## Degeneracies
 
@@ -82,6 +141,17 @@ Three are handled by the default bounds, and all three are exact rather than app
 is restricted to `[0, 180)` while `T0` spans one full period — together exactly one
 fundamental domain, each physical solution appearing once. Halving *both* would exclude
 real solutions.
+
+!!! warning "That default is only correct at `e = 0`"
+    The degeneracy is exact for a circular orbit and broken by eccentricity — and by closure
+    phases, which distinguish an orbit from its mirror. For an eccentric system override it:
+
+    ```julia
+    bounds = Dict(:Omega => (0.0, 360.0))
+    ```
+
+    Leaving the default in place would fold a published `Ω = 309.9°` to `129.9°` and fit the
+    mirrored orbit. `demos/spica_orbit_fit_tied.jl` does the override.
 
 **Elliptical Gaussian position angle.** The profile is symmetric under a half turn, so
 `pa ∈ [0, 360)` would hold two copies of every solution. The default bound is 180°.
@@ -156,6 +226,16 @@ parameterisation rather than the analytic component library. For a tessellated b
 drive `create_binary_geometry` and `binary_chi2_f` directly; see
 `demos/spica_binary_roche.jl`.
 
+## Worked examples
+
+| Script | System | Shows |
+|---|---|---|
+| `demos/betlyr/betlyr_orbit_fit_tied.jl` | β Lyrae — donor + accretion disc | a tie (`c2_pa = -Omega`) on a circular orbit |
+| `demos/spica_orbit_fit_tied.jl` | Spica — two limb-darkened discs | eccentric orbit, `e`/`omega` free, apsidal motion |
+
+Both take `METHOD=neldermead` for a fast plumbing check and default to UltraNest for the
+real run. Neither models occultation or mutual irradiation; see the caveats in each header.
+
 ## API
 
 ```@docs
@@ -167,7 +247,12 @@ LimbDarkenedDisk
 GaussianDisk
 EllipticalGaussian
 orbit_fit_data
+OrbitFitSpec
 orbit_fit_spec
 orbit_model_cvis
 orbit_chi2
+resolve_params
+compile_ties
+apply_ties
+OrbitTies
 ```

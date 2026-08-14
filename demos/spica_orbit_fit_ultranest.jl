@@ -308,10 +308,10 @@ end
 println("Ω ∈ [0,180): (Ω,ω) → (Ω+180°,ω+180°) leaves every observable exactly unchanged.")
 
 # UltraNest works on the unit hypercube. Plain (non-vectorized) Julia closures, matching
-# the pattern in src/ultranest.jl: `collect(Float64, cube)` is needed because PyCall hands
+# the pattern in src/ultranest.jl: `collect(Float64, cube)` is needed because PythonCall hands
 # the cube over as a PyObject. At ~1 ms per likelihood the per-call overhead is nothing.
 # Vectorized UltraNest, following OITOOLS' fit_model_ultranest idiom. The essential
-# detail is the DECLARED argument types: PyCall then converts the numpy batch into a Julia
+# detail is the DECLARED argument types: PythonCall then converts the numpy batch into a Julia
 # matrix. Passing the callables through `pyfunction(..., PyObject)` instead suppresses that
 # conversion and the transform receives a Vector{Any} of rows, which fails to broadcast.
 const Δ = hi[idx] .- lo[idx]
@@ -323,12 +323,12 @@ function loglike_1(p::AbstractVector{<:Real})
     v = -0.5 * chi2_total(θ)
     return isfinite(v) ? v : -1e30
 end
-# NOT threaded, deliberately. PyCall is not thread-safe: `PyObject` finalizers call
+# NOT threaded, deliberately. PythonCall is not thread-safe: `PyObject` finalizers call
 # Py_DECREF without holding the GIL, and Julia's GC will happily run them on a worker
 # thread, which segfaults inside `pydecref_`. It does not matter that `loglike_1` never
 # touches Python — merely having Julia threads live while PyObjects exist is enough.
 #
-# So with an UltraNest (PyCall) sampler the likelihood is single-threaded regardless of
+# So with an UltraNest (PythonCall) sampler the likelihood is single-threaded regardless of
 # `-t auto`, and the batching buys only the ~30 μs Python↔Julia crossing per call. A pure
 # Julia sampler (Pigeons, see demos/rho_cas_pigeons.jl) has no such restriction and can use
 # `multithreaded = true` safely — which is the real argument for switching.
@@ -399,7 +399,7 @@ ax.plot([0], [0], "r*", ms = 18, label = "primary")
 ax.invert_xaxis(); ax.set_xlabel("ΔRA East (mas)"); ax.set_ylabel("ΔDec North (mas)")
 ax.legend(); ax.grid(alpha = 0.3); ax.set_title("Spica relative orbit — direct fit to visibilities")
 fig.savefig(joinpath(outdir, "orbit_fit.png"), dpi = 130, bbox_inches = "tight")
-PyPlot.close(fig)
+pyplot.close(fig)
 writedlm(joinpath(outdir, "orbit_posterior.txt"), post)
 writedlm(joinpath(outdir, "orbit_best.txt"), hcat(names, θ_fit))
 @info "results in $outdir"

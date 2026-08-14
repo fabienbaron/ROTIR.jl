@@ -11,10 +11,9 @@
 #   * there is no way to ask "where is the companion, relative to this surface element?",
 #     which is exactly what mutual irradiation needs.
 #
-# `demos/spica_binary_roche.jl` used to work around this by passing t = 0 for every
-# epoch, freezing both the tidal shape and its orientation. This file replaces that
-# workaround: it derives one body→sky rotation from the orbit itself and applies it to
-# both components.
+# The workaround without this file is to pass t = 0 for every epoch, which freezes both the
+# tidal shape and its orientation. Instead, this file derives one body→sky rotation from
+# the orbit itself and applies it to both components.
 #
 # ---------------------------------------------------------------------------
 # Frames

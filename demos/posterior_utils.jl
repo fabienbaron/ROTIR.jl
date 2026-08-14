@@ -3,11 +3,11 @@
 # Samples are written as plain CSV with `# key = value` metadata lines on top, so the
 # comparison script needs no serialisation dependency and the files stay greppable.
 #
-# Corner plots go through the Python `corner` package via PyCall (it arrives with
+# Corner plots go through the Python `corner` package via PythonCall (it arrives with
 # ultranest; otherwise `~/.julia/conda/3/x86_64/bin/pip install corner`). Plotting is
 # always optional — a missing corner never costs you a run that took hours.
 
-using DelimitedFiles, Printf, Statistics, PyCall
+using DelimitedFiles, Printf, Statistics, PythonCall
 using Logging, TerminalLoggers, ProgressLogging
 
 const RESULTS_DIR = get(ENV, "RESULTS_DIR", joinpath(@__DIR__, "results"))

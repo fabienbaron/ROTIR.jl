@@ -1044,7 +1044,7 @@ uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 version = "1.11.0"
 
 [[deps.ROTIR]]
-deps = ["ChainRulesCore", "FFTW", "FITSIO", "LaTeXStrings", "LinearAlgebra", "NFFT", "NLopt", "OITOOLS", "OptimPackNextGen", "PrecompileTools", "Printf", "PythonCall", "PythonPlot", "Random", "SparseArrays", "Statistics"]
+deps = ["ChainRulesCore", "FFTW", "FITSIO", "LaTeXStrings", "LinearAlgebra", "NFFT", "NLopt", "OITOOLS", "OptimPackNextGen", "PrecompileTools", "Printf", "PythonCall", "PythonPlot", "Random", "RuntimeGeneratedFunctions", "SparseArrays", "Statistics"]
 path = ".."
 uuid = "1effc416-1cd3-435e-ba3b-8cf647137d25"
 version = "0.6.0"

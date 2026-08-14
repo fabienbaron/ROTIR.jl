@@ -109,7 +109,7 @@ is too large to fit in memory.
 | `n_end` | `4` | Final HEALPix level |
 | `maxiter` | `500` | Max iterations per level |
 | `reg_weight` | `1e-5` | TV regularization weight |
-| `reg_type` | `"tv2"` | Regularization type |
+| `reg_type` | `"sobel2"` | Regularization type |
 | `verbose` | `true` | Print diagnostics |
 
 ## Regularization
@@ -120,6 +120,16 @@ is too large to fit in memory.
 | `spheroid_total_variation(x, g, tvinfo)` | L1 total variation |
 | `spheroid_l2_fg(x, g, tvinfo)` | Quadratic total variation (TV2) |
 | `spheroid_harmon_bias_fg(x, g, B)` | Harmonic bias regularization |
+| `spheroid_radflat_fg(x, g, bins)` | RADFLAT — flatten the azimuthally averaged radial profile |
+| `spheroid_radialvar_fg(x, g, bins)` | RADIALVAR — remove azimuthal scatter within each annulus |
+| `radflat_bins(star; nbins)` | Projected-radius binning both of the above need |
+
+Regularizers are passed as `["name", weight, aux, pixel_subset]`. Recognised names:
+`mem`, `tv`, `tv2`, `mean`, `bias`, `radflat`, `radialvar` — an unknown name raises rather
+than silently contributing zero.
+
+The two radial regularizers have their own page, including when they help and when they
+destroy real structure: [Radial Regularizers](radial_regularizers.md).
 
 ## Binary forward model
 

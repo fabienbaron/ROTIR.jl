@@ -3,7 +3,7 @@
 # Nested sampling of the parametric model through the Python `ultranest` package.
 #
 # Why this lives in core rather than in an extension: nested sampling never asks for a
-# gradient, so it needs no AD backend, and PyCall is already a ROTIR dependency. The
+# gradient, so it needs no AD backend, and PythonCall is already a ROTIR dependency. The
 # Python side is reached exactly as OITOOLS' `fit_model_ultranest` does it.
 #
 # When to reach for it instead of the optimiser + bootstrap:
@@ -85,7 +85,7 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     # hands over a whole BATCH of points as an n x d numpy array and expects arrays back, so
     # the Julia<->Python crossing is paid once per batch rather than once per live point.
     #
-    # Three PythonCall details, each of which PyCall used to hide:
+    # Three PythonCall details:
     #   * ARGUMENTS arrive as `Py`. Annotating the closure `::AbstractMatrix{<:Real}` makes
     #     PythonCall convert the numpy batch to a Julia matrix; without it, `collect` raises
     #     `MethodError: no method matching (Array{Float64})(::Py)`.
@@ -94,12 +94,11 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     #   * `names` must be a real Python list: UltraNest evaluates `names + [...]`, and a
     #     `VectorValue` does not support `+`.
     #
-    # UltraNest applies `transform` itself and passes the likelihood the PHYSICAL parameters,
-    # NOT the unit cube. This function previously re-applied the transform inside the
-    # likelihood, double-mapping every parameter (a radius of 1.465 with bounds [0.05, 20]
-    # became 29.3) so the sampler converged confidently on nonsense — tight error bars around
-    # a chi2 many orders of magnitude worse than the true optimum. Fixed 2026-08-12; discard
-    # any result from this function predating that.
+    # UltraNest applies `transform` itself and passes the likelihood the PHYSICAL
+    # parameters, NOT the unit cube. Do NOT re-apply the transform inside the likelihood:
+    # that double-maps every parameter (a radius of 1.465 with bounds [0.05, 20] becomes
+    # 29.3) and the sampler then converges confidently on nonsense — tight error bars around
+    # a chi2 many orders of magnitude worse than the true optimum.
     transform_v = let lo = lo, hi = hi
         (U::AbstractMatrix{<:Real}) ->
             Py(reduce(vcat, (u -> (lo .+ (hi .- lo) .* u)').(eachrow(U)))).to_numpy()
@@ -113,18 +112,14 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     end
     loglike_v = (X::AbstractMatrix{<:Real}) -> Py(loglike_1.(eachrow(X))).to_numpy()
 
-    # NOTE: no thread guard here any more. Under PyCall this had to fail fast, because
-    # `pydecref_` called `Py_DecRef` straight from a Julia GC finalizer with no GIL check,
-    # so a PyObject finalized on a worker thread killed the process with SIGSEGV part-way
-    # through a run. PythonCall does not have that failure mode: its finalizer enqueues the
-    # pointer (`GC.enqueue`), and the queue is only drained by a thread that actually holds
-    # the GIL (`PyGILState_Check`, PythonCall/src/GC/GC.jl). Verified empirically -- a full
-    # UltraNest run completes under `julia -t 8` with Py objects being finalized on worker
-    # threads throughout.
+    # Safe in a multithreaded session: PythonCall's finalizer enqueues the pointer
+    # (`GC.enqueue`) and the queue is drained only by a thread holding the GIL
+    # (`PyGILState_Check`, PythonCall/src/GC/GC.jl), so Py objects may be finalized on any
+    # thread. Verified with a full UltraNest run under `julia -t 8`.
     #
-    # Still true: Python must only be CALLED from a thread holding the GIL. Driving the
-    # sampler from one thread (as here) is fine; calling Python from inside a
-    # `Threads.@threads` body without `PythonCall.GIL.@lock` still segfaults.
+    # Python must still only be CALLED from a thread holding the GIL. Driving the sampler
+    # from one thread (as here) is fine; calling Python inside a `Threads.@threads` body
+    # without `PythonCall.GIL.@lock` segfaults.
     ultranest = pyimport("ultranest")
     GC.gc(true); GC.gc(true)      # finalize stray PyObjects on the main thread first
 

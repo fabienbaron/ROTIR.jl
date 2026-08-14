@@ -1,8 +1,8 @@
 using ROTIR
 # LOAD DATA
-oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_And_prepped.oifits",
-"./data/2011Sep10.lam_And_prepped.oifits","./data/2011Sep14.lam_And_prepped.oifits",
-"./data/2011Sep19.lam_And_prepped.oifits","./data/2011Sep24.lam_And_prepped.oifits"];
+oifitsfiles = [joinpath(@__DIR__, "data", "2011Sep02.lam_And_prepped.oifits"), joinpath(@__DIR__, "data", "2011Sep06.lam_And_prepped.oifits"),
+joinpath(@__DIR__, "data", "2011Sep10.lam_And_prepped.oifits"),joinpath(@__DIR__, "data", "2011Sep14.lam_And_prepped.oifits"),
+joinpath(@__DIR__, "data", "2011Sep19.lam_And_prepped.oifits"),joinpath(@__DIR__, "data", "2011Sep24.lam_And_prepped.oifits")];
 data_all = readoifits_multiepochs(oifitsfiles; T=Float32);
 data = data_all[1, :]; # select first wavelength bin, all epochs
 nepochs = length(data)

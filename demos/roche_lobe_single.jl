@@ -1,9 +1,9 @@
 using ROTIR
 #include("../src/oiplot_spheroid_geomakie.jl")
 # LOAD DATA
-oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_And_prepped.oifits",
-"./data/2011Sep10.lam_And_prepped.oifits","./data/2011Sep14.lam_And_prepped.oifits",
-"./data/2011Sep19.lam_And_prepped.oifits","./data/2011Sep24.lam_And_prepped.oifits"];
+oifitsfiles = [joinpath(@__DIR__, "data", "2011Sep02.lam_And_prepped.oifits"), joinpath(@__DIR__, "data", "2011Sep06.lam_And_prepped.oifits"),
+joinpath(@__DIR__, "data", "2011Sep10.lam_And_prepped.oifits"),joinpath(@__DIR__, "data", "2011Sep14.lam_And_prepped.oifits"),
+joinpath(@__DIR__, "data", "2011Sep19.lam_And_prepped.oifits"),joinpath(@__DIR__, "data", "2011Sep24.lam_And_prepped.oifits")];
 data_all = readoifits_multiepochs(oifitsfiles; T=Float32);
 data = data_all[1, :]; # select first wavelength bin, all epochs
 nepochs = length(data)
@@ -86,27 +86,33 @@ chi2_parametric_surface(roche_parameters)
 # Will need to use ParameterHandling to transform NamedTuple into parameter vector
 
 
-chi2_parametric_surface = (p,g)->spheroid_surface_f(p, tessels, data, tepochs);
-using NLopt
-fitter = :LN_NELDERMEAD
-opt = Opt(fitter, length(shape_params));
-min_objective!(opt, chi2_parametric_surface)
-xtol_rel!(opt,1e-3)
-lower_bounds!(opt, lbounds);
-upper_bounds!(opt, hbounds);
-min_f,min_x,ret = optimize(opt, shape_params); # Will be slow due to the cost of each iteration
-num_evals = NLopt.numevals(opt)
-println(
-    """
-    Best chi2 value       : $min_f
-    Solution              : $min_x
-    Solution status       : $ret
-    Number of evaluations : $num_evals
-    """
-)
-
-
-
-
-
-
+# --- WORK IN PROGRESS, does not run -------------------------------------------
+# The block below needs `shape_params`, `lbounds` and `hbounds`, which are never
+# defined: fitting the SHAPE needs the NamedTuple flattened into a parameter vector
+# (ParameterHandling.jl) and bounds built for it. Left commented so the script runs
+# end to end; uncomment once the flattening exists.
+# chi2_parametric_surface = (p,g)->spheroid_surface_f(p, tessels, data, tepochs);
+# using NLopt
+# fitter = :LN_NELDERMEAD
+# opt = Opt(fitter, length(shape_params));
+# min_objective!(opt, chi2_parametric_surface)
+# xtol_rel!(opt,1e-3)
+# lower_bounds!(opt, lbounds);
+# upper_bounds!(opt, hbounds);
+# min_f,min_x,ret = optimize(opt, shape_params); # Will be slow due to the cost of each iteration
+# num_evals = NLopt.numevals(opt)
+# println(
+#     """
+#     Best chi2 value       : $min_f
+#     Solution              : $min_x
+#     Solution status       : $ret
+#     Number of evaluations : $num_evals
+#     """
+# )
+#
+#
+#
+#
+#
+#
+#

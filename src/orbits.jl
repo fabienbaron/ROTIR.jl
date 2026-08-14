@@ -97,21 +97,18 @@ Eccentric anomaly from the mean anomaly, elementwise over `M` (scalar or vector)
 result takes the float type of `M` and `e`.
 
 !!! note "The `T` keyword is accepted and ignored"
-    It used to default to `Float64` and set the working precision. `kepler_E` now derives
-    that from `M` and `e`, which is strictly better than being told; the keyword survives
-    only so existing call sites keep working.
+    The working precision is derived from `M` and `e`, not dictated by a keyword. `T`
+    survives only so existing call sites keep working.
 
 
 Dispatches to [`kepler_E`](@ref) for a scalar and [`kepler_E_vec`](@ref) for an array — the
 latter so that reverse-mode AD gets one array pullback rather than one per element. Kept as
 a separate name because it is the historical entry point.
 
-!!! note "Accuracy change"
-    This used to be a fixed-point iteration (`E ← M + e·sin E`) for `e ≤ 0.5` and a Newton
-    iteration above that, both stopped at an absolute tolerance of `1e-6` rad on the *whole
-    vector*. It now converges to machine precision, so positions can move by up to ~1e-6 rad
-    of eccentric anomaly relative to older results — well below any measurement error, but
-    not bitwise identical.
+!!! note "Converges to machine precision"
+    Results are not bitwise comparable with codes that stop at a fixed `1e-6` rad tolerance
+    on the whole vector; expect differences up to ~1e-6 rad of eccentric anomaly, far below
+    any measurement error.
 """
 # `T` is accepted and ignored: kepler_E derives its working type from M and e, which is
 # strictly better than being told. Kept in the signature so existing callers do not break.
@@ -128,8 +125,7 @@ Argument of periapsis at `tepoch`, including apsidal motion:
 with `bparameters.dω` in **degrees per day** and `tepoch`, `T0` in JD. Returns `ω₀` when
 `dω = 0`, so circular / non-precessing systems are unaffected.
 
-`dω` was previously declared in `binaryparameters` and applied nowhere. It is not a small
-correction for a system observed over years: Spica's apsidal period is U ≈ 139 yr
+Apsidal motion is not a small correction for a system observed over years: Spica's apsidal period is U ≈ 139 yr
 (Robinette & Aufdenberg 2015; 105 yr in Wages & Aufdenberg, ~110 yr in Aufdenberg+2015),
 i.e. dω/dt ≈ 2.6°/yr, so ω advances ~21° across the 2007–2015 CHARA campaigns. Ignoring
 it displaces the predicted secondary position by up to 0.44 mas — ten to forty times the
@@ -301,10 +297,9 @@ whose exact inversion is the `M` below (verified against solving the quadratic d
 *lengthening* at Ṗ ≈ +19 s/yr ≈ 6e-7 d/d from mass transfer, while orbits shrinking to
 gravitational-wave or magnetic-braking losses have Ṗ < 0.
 
-Both signs are handled. The guard was previously `dP > 1e-12`, which silently dropped
-*negative* Ṗ back onto a constant period — worth 0.6° of orbital phase after 1000 d and
-65° after 10⁴ d at β Lyr's rate. The accompanying comment ("if orbit is decaying") also had
-the sign backwards: Ṗ > 0 is a lengthening period.
+Both signs are handled: the guard is on `|Ṗ|`, since a one-sided `Ṗ > tol` test drops
+*negative* Ṗ back onto a constant period — worth 0.6° of orbital phase after 1000 d and 65°
+after 10⁴ d at β Lyr's rate. Note the sign convention: Ṗ > 0 is a LENGTHENING period.
 """
 # `T` defaults to the float type the INPUTS already carry rather than to Float64. Hardcoding
 # Float64 here silently widened every downstream quantity, so a Float32 parameter set came

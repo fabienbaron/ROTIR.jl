@@ -250,11 +250,15 @@ end
 function compute_ldmap(μ, star_params; T = float(real(eltype(μ))))
   p = convert_params(T, star_params)
   # Limb-darkening map
-  if (p.ldtype == 1) # 1: quadratic
+  if (p.ldtype == 1) # 1: linear,  I(μ)/I(1) = 1 − u(1−μ)
     ldmap = T(1.0) .- p.ld1*(T(1.0) .-μ)
-  elseif (p.ldtype == 2) # 2: quadratic
-    ldmap = T(1.0) .- p.ld1*(T(1.0) .-μ) - p.ld2*(T(1.0).-μ.^2)
-  elseif (p.ldtype == 3)  # 3; Hestroffer
+  elseif (p.ldtype == 2) # 2: quadratic, I(μ)/I(1) = 1 − a(1−μ) − b(1−μ)²
+    # NB (1−μ)², not (1−μ²). This was `(1−μ²)` until the α Cen test: that is a DIFFERENT
+    # law — (1−μ²) = (1−μ)(1+μ) — so `ld2` was not the published `b` of Claret, Kervella
+    # et al., and the mesh model disagreed with OITOOLS' analytic `visibility_ldquad`,
+    # whose (½ − a/6 − b/12) normalisation is the integral of the standard law.
+    ldmap = T(1.0) .- p.ld1*(T(1.0) .-μ) - p.ld2*(T(1.0).-μ).^2
+  elseif (p.ldtype == 3)  # 3: Hestroffer power law, I(μ)/I(1) = μ^α
     ldmap = μ.^p.ld1
   end
 end

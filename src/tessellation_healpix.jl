@@ -960,6 +960,87 @@ H = ∇'*∇
 return neighbors,[],[],[],[], ∇, H
 end
 
+"""
+    sobel_gradient_healpix(n; T=Float32, power=2) -> (Gx=, Gy=, npix=, area=)
+
+Tangent-plane **first-derivative** operators on the NESTED HEALPix sphere at `nside = 2ⁿ`,
+as two sparse `npix × npix` matrices: `(Gx*x)[i]` and `(Gy*x)[i]` are the two components of
+∇x at tessel `i`, in that tessel's own orthonormal tangent basis.
+
+This is the sphere's analogue of the 2-D Sobel pair
+
+```
+Gx = [-1 0 1; -2 0 2; -1 0 1]      Gy = [-1 -2 -1; 0 0 0; 1 2 1]
+```
+
+On a regular grid the Sobel stencil **is** the inverse-distance²-weighted least-squares
+gradient: edge neighbours (`d = 1`) get weight 2, corner neighbours (`d = √2`) get weight 1.
+That characterisation, not the stencil itself, is what carries over — HEALPix pixels have 7
+or 8 irregularly placed neighbours and no global axes, so a fixed 3×3 kernel cannot be used.
+The 1‑2‑1 smoothing transverse to the derivative direction emerges from fitting *all* the
+neighbours at once, which is what makes the estimate robust to a single noisy tessel.
+
+With `uᵢ` the tessel centre and `tᵢⱼ` the tangent-plane projection of `uⱼ − uᵢ`, the gradient
+solves
+
+```
+min_g  Σⱼ wᵢⱼ (g·tᵢⱼ − (xⱼ − xᵢ))²,      wᵢⱼ = |tᵢⱼ|^(−power)
+```
+
+which is linear in `x`, giving the rows of `Gx`/`Gy` directly (the diagonal carries
+`−Σⱼ`, so constants are annihilated exactly).
+
+Being a first derivative this has a `k²` response, where the Laplacian-stencil operator
+behind `tv_neighbors_healpix` has `k⁴`. It therefore rolls off far more gently with
+scale: it can suppress tessel-scale noise without also crushing genuine structure.
+
+`area = 4π/npix` is the exact per-tessel solid angle (HEALPix is equal-area), so
+`area·Σᵢ|∇x|ᵢ²` is a consistent discretisation of `∫|∇x|²dΩ` and is therefore independent of
+`nside` for a smooth map.
+"""
+function sobel_gradient_healpix(n; T = Float32, power = 2)
+    nside = 2^n
+    npix  = nside2npix(nside)
+    u, _  = pix2vec_nest(nside, collect(1:npix); T = Float64)
+    neighbors = all_neighbors_nest(n)
+    I = Int[]; J = Int[]; Vx = Float64[]; Vy = Float64[]
+    a = Float64[]; b = Float64[]; w = Float64[]; jj = Int[]
+    for i in 1:npix
+        ni = @view u[i, :]
+        # Any orthonormal tangent basis will do: the regularizers below use only
+        # |∇x|² = gx² + gy², which is invariant under rotation of (ê1, ê2).
+        e1 = abs(ni[3]) < 0.9 ? cross(ni, [0.0, 0.0, 1.0]) : cross(ni, [1.0, 0.0, 0.0])
+        e1 ./= norm(e1)
+        e2 = cross(ni, e1)
+        empty!(a); empty!(b); empty!(w); empty!(jj)
+        for j in neighbors[i]
+            (1 <= j <= npix && j != i) || continue
+            d  = u[j, :] .- ni
+            t  = d .- dot(d, ni) .* ni          # project onto the tangent plane at i
+            nt = norm(t)
+            nt > 0 || continue
+            push!(a, dot(t, e1)); push!(b, dot(t, e2))
+            push!(w, nt^(-power)); push!(jj, j)
+        end
+        length(jj) >= 2 || continue             # cannot fit a 2-D gradient
+        maa = sum(w .* a .* a); mab = sum(w .* a .* b); mbb = sum(w .* b .* b)
+        det = maa*mbb - mab*mab
+        abs(det) > 1e-30 || continue            # degenerate neighbourhood: no gradient
+        sx = 0.0; sy = 0.0
+        for k in eachindex(jj)
+            # (M⁻¹ · wₖ(aₖ,bₖ)) — the coefficient multiplying (x[jₖ] − x[i])
+            cx = ( mbb*w[k]*a[k] - mab*w[k]*b[k]) / det
+            cy = (-mab*w[k]*a[k] + maa*w[k]*b[k]) / det
+            push!(I, i); push!(J, jj[k]); push!(Vx, cx); push!(Vy, cy)
+            sx += cx; sy += cy
+        end
+        push!(I, i); push!(J, i); push!(Vx, -sx); push!(Vy, -sy)
+    end
+    Gx = sparse(I, J, Vx, npix, npix)
+    Gy = sparse(I, J, Vy, npix, npix)
+    return (Gx = T.(Gx), Gy = T.(Gy), npix = npix, area = 4π/npix)
+end
+
 
 function tv_neighbors_healpix_visible(n, stars;T=Float32)
   # Same as the default tv_neighbors but

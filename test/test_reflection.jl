@@ -3,7 +3,7 @@
 # radiosity solver (src/reflection.jl).
 #
 # Everything here is analytic or a limiting case — nothing is a regression against a
-# previously-recorded number, so a failure means the physics is wrong, not that a
+# recorded number, so a failure means the physics is wrong, not that a
 # reference file drifted.
 #
 # Runs standalone (`julia --project=. test/test_reflection.jl`) or under Pkg.test().
@@ -167,7 +167,7 @@ end
 
 @testset "period change (dP)" begin
     # dP = Ṗ in days/day, via the quadratic ephemeris t_n = T0 + P n + ½ Ṗ P n².
-    # BOTH signs must be honoured: the guard used to be `dP > 1e-12`, so a shrinking
+    # BOTH signs must be honoured: a one-sided `dP > 1e-12` guard means a shrinking
     # period silently reverted to a constant one.
     for sgn in (+1.0, -1.0)
         bp = merge(BP, (dP = sgn * 6.02e-7,))     # β Lyr-like rate

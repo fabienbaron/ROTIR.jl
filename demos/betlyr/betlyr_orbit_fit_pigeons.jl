@@ -12,7 +12,7 @@
 # ---------------------------------------------------------------------------
 # Two reasons, one of them a hard constraint:
 #
-#  1. PARALLELISM. UltraNest is reached through PyCall, and PyCall is not thread-safe:
+#  1. PARALLELISM. UltraNest is reached through PythonCall, and PythonCall is not thread-safe:
 #     `pydecref_` calls Py_DecRef with no GIL check, so when Julia's GC runs a PyObject
 #     finalizer on a worker thread the process segfaults. That happens regardless of
 #     whether the likelihood itself touches Python. So with UltraNest the likelihood is
@@ -30,13 +30,13 @@
 # nested sampling.
 #
 # ---------------------------------------------------------------------------
-# The PyCall hazard does not disappear just by changing sampler
+# The PythonCall hazard does not disappear just by changing sampler
 # ---------------------------------------------------------------------------
-# `using ROTIR` loads PyCall and PyPlot unconditionally (src/oiplot_spheroid.jl), so
+# `using ROTIR` loads PythonCall and PyPlot unconditionally (src/oiplot_spheroid.jl), so
 # PyObjects exist in this session too. With `multithreaded = true` the log-potential runs
 # on worker threads, and a PyObject finalizer firing there would crash exactly as before.
 # Mitigation, in order of importance:
-#   * NOTHING is plotted before sampling — PyPlot is imported only at the end.
+#   * NOTHING is plotted before sampling — PythonPlot is imported only at the end.
 #   * A full GC is forced before `pigeons(...)` so transient PyObjects created while
 #     reading the OIFITS are finalized on the main thread, where it is safe.
 #   * MULTI=0 falls back to single-threaded if a crash still appears.
@@ -250,7 +250,7 @@ println("\nround trips: $nrt")
 nrt isa Number && nrt < 5 &&
     println("⚠ few round trips — the tails are not yet trustworthy; increase N_ROUNDS/N_CHAINS.")
 
-# Plot LAST: PyPlot is only imported here, so no PyObject exists while worker threads run.
+# Plot LAST: PythonPlot is only imported here, so no PyObject exists while worker threads run.
 if DOPLOT
     @eval using PythonPlot
     rd(θ, t) = orbit_to_rotir_offset((i = θ[2], Ω = θ[3], ω = OMEGA_PERI, P = P_ORB,
@@ -269,6 +269,6 @@ if DOPLOT
     ax.invert_xaxis(); ax.set_xlabel("ΔRA East (mas)"); ax.set_ylabel("ΔDec North (mas)")
     ax.legend(); ax.grid(alpha = 0.3); ax.set_title("β Lyrae relative orbit — Pigeons")
     fig.savefig(joinpath(OUTDIR, "orbit_fit_pigeons.png"), dpi = 130, bbox_inches = "tight")
-    PyPlot.close(fig)
+    pyplot.close(fig)
 end
 @info "results in $OUTDIR"

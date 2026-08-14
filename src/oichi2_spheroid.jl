@@ -339,8 +339,6 @@ end
 
 function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[],
                                     verbose=false, T=eltype(x))
-  # (the keyword used to default to Float32 and then be overwritten by `T = eltype(x)` on the
-  #  next line, so anything a caller passed was silently discarded)
   #g[:] .= T(0);
   nepochs = length(data)
   chi2_t = zeros(T, nepochs);
@@ -474,17 +472,47 @@ end
 return reg_f;
 end
 
+"""
+    max_entropy_fg(x, g; verbose=false, ϵ=1e-9) -> f
+
+Maximum entropy on the map normalised by its own mean:
+
+```
+f = Σᵢ xmᵢ log(xmᵢ + ϵ),      xm = x / mean(x)
+```
+
+Scale-invariant by construction — `x → c·x` leaves `xm` untouched — so the weight is
+dimensionless and transfers between targets. Note `"tv2"` is *not* scale-invariant, and χ²
+is (the visibilities are flux-normalised), so `"mem"` and `"tv2"` weights do not behave
+alike when the map level changes.
+
+Being **pointwise**, it suppresses spikes through the cost of large per-pixel deviations
+rather than by correlating neighbours, so it imposes no spatial correlation length.
+
+# Gradient
+
+With `m = mean(x)`, `n = length(x)` and `dᵢ = log(xmᵢ + ϵ) + xmᵢ/(xmᵢ + ϵ)`,
+`∂xmᵢ/∂xⱼ = δᵢⱼ/m − xᵢ/(n m²)` gives
+
+```
+∂f/∂xⱼ = dⱼ/m − (1/(n m²)) Σᵢ dᵢ xᵢ
+```
+
+the second term being a global coupling shared by every pixel — it is what makes the
+regularizer blind to a pure rescaling of the map. Replacing it with a per-pixel term leaves
+a gradient nearly orthogonal to the true one; `test/test_radial_regularizers.jl` pins this
+against `FiniteDifferences`.
+"""
 function max_entropy_fg(x, g; verbose=false, ϵ=1e-9)
-  # mmap = sum(x) / length(x)
-  # nmap = x ./ mmap
-  # reg_f = sum(nmap .* log.(nmap))
-  # g[:] = sum(-nmap ./ sum(x) .* (log.(nmap) .+ 1.0)) .+ (log.(nmap) .+ 1)./mmap
-  xm = x ./ (mean(x) + ϵ)
+  n = length(x)
+  m = sum(x)/n
+  abs(m) > ϵ || (g .= 0; return zero(m))
+  xm = x ./ m
+  d  = log.(xm .+ ϵ) .+ xm ./ (xm .+ ϵ)
   reg_f = sum(xm .* log.(xm .+ ϵ))
-  g[:] = ((mean(x) .- (x ./ length(x))) ./ (mean(x)^2 + ϵ)) .* (log.(xm .+ ϵ) .+ 1)
-  if verbose == true
-    println(" MEM: ", reg_f)
-  end
+  glob  = sum(d .* x) / (n*m^2)
+  g[:] = d ./ m .- glob
+  verbose && println(" MEM: ", reg_f)
   return reg_f
 end
 
@@ -557,9 +585,21 @@ the surface map where it trades off against the LD coefficient.
 
 On a **non-rotating** star reconstructed from few epochs, the surface regularizer is weak
 enough that dark or bright spots drift to the limb and become degenerate with the
-limb-darkening parameter: χ² barely moves while the LD coefficient wanders. Monnier's RW Cep
-test gave `α = 1.07 ± 0.19` uncontrolled against `α = 0.49 ± 0.02` at strong RADFLAT, with
-χ² only slightly worse and the image essentially unchanged.
+limb-darkening parameter: χ² barely moves while the LD coefficient wanders. Monnier's test
+gave `α = 1.07 ± 0.19` uncontrolled against `α = 0.49 ± 0.02` at strong RADFLAT, with χ²
+only slightly worse and the image essentially unchanged.
+
+!!! warning "Which star those numbers describe is not settled"
+    They were passed on in the context of RW Cep, but the only figure we have — the one
+    the progression comes from — is titled "XX Per 2025 Sep 09", and its table runs
+    LD 1.101 (control) → 0.482 (α=1000) with χ²/dof 2.264 → 2.371. Close to the quoted
+    pair but not equal to it, so this is either a different reduction of the same star or
+    a different star entirely. Worth confirming with him before either number is cited.
+
+    Note also that his LD is FITTED jointly at each RADFLAT weight, not scanned: his χ²
+    rises monotonically as LD falls, which is a prior moving the answer, not a degeneracy
+    being resolved. `demos/rwcep_radflat.jl` measures the curvature of χ²(ld1) instead,
+    which is the complementary test.
 
 !!! note "Not for rotators"
     A rotating star observed over several epochs already breaks that degeneracy — spots move
@@ -601,6 +641,301 @@ function spheroid_radflat_fg(x, g, bins; scale = 1e5, verbose = false, ϵ = 1e-1
     return f
 end
 
+"""
+    spheroid_radialvar_fg(x, g, bins; scale=1e5, normalize=true, verbose=false) -> f
+
+RADIALVAR: penalise the AZIMUTHAL scatter of the map within each projected radial annulus,
+i.e. push the visible disk toward circular symmetry.
+
+```
+f = scale · Σ_b var_b / I_mean²,        var_b = (1/(n_b−1)) Σ_{j∈b} (x_j − x̄_b)²
+```
+
+Uses the same `radflat_bins` binning as [`spheroid_radflat_fg`](@ref), and like it acts on
+the map **without** limb darkening.
+
+# The relationship to RADFLAT is exact, not merely thematic
+
+Split the variance of the visible disk over the radial bins and the two regularizers are the
+two terms — this is a one-way ANOVA decomposition:
+
+```
+Σ_j (x_j − x̄)²  =  Σ_b n_b (x̄_b − x̄)²   +   Σ_b Σ_{j∈b} (x_j − x̄_b)²
+                   └──── RADFLAT ────┘       └──── RADIALVAR ────┘
+                    between annuli               within annuli
+```
+
+RADFLAT flattens the radial profile and constrains nothing about structure at fixed radius;
+RADIALVAR removes structure at fixed radius and constrains nothing about the profile. Using
+one alone leaves the other half of the map's freedom untouched — on α Cen A, RADFLAT drives
+the profile rms to 2e-4 while the reconstruction still covers a famously featureless star in
+spurious spots. Together they approach "the map is a constant", which for a star with no
+resolved surface structure is the correct prior.
+
+# Relation to OITOOLS' `"radialvar"`
+
+Same quantity, different geometry and normalisation. OITOOLS (`radial_variance`,
+`src/oichi2.jl`) works on an nx×nx image grid with elliptical annuli built from a
+position-angle/inclination pair, and precomputes sparse `H`, `G` so that `f = ‖Hx‖²` with a
+constant Hessian. Here the annuli come from the projected tessellation, so no operator is
+needed. OITOOLS sums raw variances; this divides by `I_mean²` (`normalize = true`, the
+default) so the penalty is dimensionless and its weight does not have to be retuned when the
+map's units or total flux change — matching RADFLAT's convention. Pass `normalize = false`
+to reproduce OITOOLS' scaling exactly.
+
+# Gradient
+
+With `T = Σ_b c_b Q_b`, `c_b = 1/(n_b−1)`, `Q_b = Σ_{j∈b}(x_j − x̄_b)²`, and noting that
+`∂Q_b/∂x_j = 2(x_j − x̄_b)` for `j ∈ b` (the `x̄_b` terms cancel because `Σ_{j∈b}(x_j−x̄_b) = 0`),
+
+```
+∂f/∂x_j = (2·scale / I_mean²) · [ c_{b(j)}(x_j − x̄_{b(j)}) − T/(N·I_mean) ]
+```
+
+the second term being the same global coupling RADFLAT carries, from differentiating the
+`I_mean` normalisation; it vanishes when `normalize = false`.
+"""
+function spheroid_radialvar_fg(x, g, bins; scale = 1e5, normalize::Bool = true,
+                               verbose = false, ϵ = 1e-12)
+    nb = bins.nbins; b = bins.bin; cnt = bins.count
+    N  = length(x)
+    N == length(b) ||
+        error("spheroid_radialvar_fg: x has $N entries but the binning was built for " *
+              "$(length(b)). The regularizer's pixel subset must match the one passed to " *
+              "radflat_bins.")
+    Imean = sum(x)/N
+    if normalize && abs(Imean) <= ϵ
+        g .= 0; return 0.0
+    end
+    S = zeros(Float64, nb)
+    @inbounds for i in 1:N; S[b[i]] += x[i]; end
+    mean_b = [cnt[k] > 0 ? S[k]/cnt[k] : 0.0 for k in 1:nb]
+    c = [cnt[k] > 1 ? 1/(cnt[k] - 1) : 0.0 for k in 1:nb]    # a 1-patch bin has no variance
+    T = 0.0
+    @inbounds for i in 1:N
+        d = x[i] - mean_b[b[i]]
+        T += c[b[i]] * d * d
+    end
+    den  = normalize ? Imean^2 : 1.0
+    f    = scale * T / den
+    glob = normalize ? T / (N * Imean) : 0.0
+    @inbounds for i in 1:N
+        g[i] = 2 * scale / den * (c[b[i]] * (x[i] - mean_b[b[i]]) - glob)
+    end
+    verbose && println(" RADIALVAR: ", f)
+    return f
+end
+
+"""
+    orthold_direction(star, x0, star_params; subset=nothing) -> NamedTuple
+
+Precompute the map direction that is exactly degenerate with the limb-darkening
+coefficient. Pass the result as the third element of an `"orthold"` regularizer entry, with
+`.idx` as the fourth.
+
+# What the degenerate direction is
+
+The forward model weights each tessel by `w = vis_weights · ldmap`, so perturbing `ld1`
+changes the WEIGHTED map by
+
+```
+δ(x∘w) = x ∘ ∂w/∂ld1 · δ = x ∘ w ∘ ∂ln(ldmap)/∂ld1 · δ
+```
+
+A map perturbation `δx` produces `δx ∘ w`. The two are indistinguishable when
+`δx ∝ x ∘ ∂ln(ldmap)/∂ld1`, which for the Hestroffer law `ldmap = μ^α` collapses to
+
+```
+u  ∝  x · ln μ
+```
+
+That is worth reading twice, because it *derives* the empirical observation RADFLAT was
+built to fix. `ln μ` diverges as μ → 0, so mimicking a change in `ld1` demands ever-larger
+brightness excursions near the limb: dark or bright patches parked on the limb are not one
+symptom among several, they ARE the degeneracy expressed in pixel space.
+
+Where that mode has *leverage on the data* is a different question, and the answer is not
+the limb. Weighting by `w` gives `|c| ∝ vis² · μ^{2·ld1} · |ln μ|` for the Hestroffer law,
+which peaks at
+
+```
+μ = exp(−1/(2·ld1))          (0.73 for ld1 = 1.6)
+```
+
+because `μ^{2·ld1}` extinguishes the limb faster than `ln μ` diverges. So the artifact
+appears at the limb while the information sits at intermediate μ — which is exactly why a
+penalty binned on projected radius is a blunt instrument for this, and why the projection
+below is taken in model space rather than pixel space.
+
+# Why this is a better target than a radial profile
+
+RADFLAT forbids all radial structure (≈ `nbins − 1` degrees of freedom) and so hands the
+entire centre-to-limb profile to the LD law. This removes **exactly one** direction — the
+one the data genuinely cannot separate from `ld1` — and leaves every other radial mode free
+for real astrophysics. It also needs no bins, hence no bin count, no bin edges, and no
+under-populated-bin failure mode; and because `μ` comes from the actual surface normals it
+stays correct on a Roche lobe or rapid rotator, where "projected radial bins" is already
+the wrong coordinate.
+
+# Numerical form
+
+The projection is taken in MODEL space rather than pixel space. In pixel space the
+direction is `x₀ ∘ L` with `L = ∂ln(ldmap)/∂ld1`, which diverges at the limb where
+`ldmap → 0`; weighting by `w` cancels that divergence exactly, and is also the statistically
+meaningful metric — it asks how much of a map change looks like an LD change *in the data*,
+not in pixel counts. Note `w ∘ L = vis_weights ∘ ldmap ∘ (∂ldmap/∂ld1)/ldmap =
+vis_weights ∘ ∂ldmap/∂ld1`, so no division is ever performed:
+
+```
+v = x₀ ∘ vis_weights ∘ (∂ldmap/∂ld1),   v̂ = v/‖v‖,   c = vis_weights ∘ ldmap ∘ v̂
+```
+
+`x0` is the reference map (normally the parametric starting map): the penalty is on
+DEPARTURE from it along `ĉ`, so the reference itself costs nothing and the reconstruction
+stays free in all other directions.
+"""
+function orthold_direction(star, x0, star_params; subset = nothing)
+    idx = subset === nothing ? star.index_quads_visible : subset
+    ldtype = Int(star_params.ldtype)
+    ld1 = Float64(star_params.ld1)
+    ld2 = Float64(hasproperty(star_params, :ld2) ? star_params.ld2 : 0.0)
+    nz  = Float64.(star.normals[idx, 3])
+    ld, _, dld_dld1, _ = ld_and_derivs(nz, ldtype, ld1, ld2)
+    vis = Float64.(star.vis_weights[idx])
+    x0v = Float64.(x0[idx])
+    v   = x0v .* vis .* dld_dld1                 # model-space degenerate direction
+    nv  = sqrt(sum(abs2, v))
+    nv > 0 || error("orthold_direction: the degenerate direction is identically zero " *
+                    "(ld1 has no effect on this map — is ldtype/ld1 set?)")
+    v ./= nv
+    m0 = sum(x0v) / length(x0v)
+    abs(m0) > 0 || error("orthold_direction: reference map has zero mean")
+    return (idx = idx, c = vis .* ld .* v, x0 = x0v, m0 = m0)
+end
+
+"""
+    spheroid_orthold_fg(x, g, od; scale=1e5, verbose=false) -> f
+
+orthoLD: penalise the component of the map along the direction that is exactly degenerate
+with the limb-darkening coefficient. `od` comes from [`orthold_direction`](@ref).
+
+```
+f = scale · ⟨x − x₀, ĉ⟩² / m₀²,     ∂f/∂x = 2·scale·⟨x − x₀, ĉ⟩/m₀² · ĉ
+```
+
+Rank one, so it removes a single degree of freedom. `m₀` is the reference map's mean and is
+a CONSTANT, which keeps the penalty dimensionless without introducing the global coupling
+term that `1/I_mean` normalisation forces on RADFLAT and RADIALVAR.
+"""
+function spheroid_orthold_fg(x, g, od; scale = 1e5, verbose = false)
+    length(x) == length(od.c) ||
+        error("spheroid_orthold_fg: x has $(length(x)) entries but the direction was built " *
+              "for $(length(od.c)). The regularizer's pixel subset must match `od.idx`.")
+    P = 0.0
+    @inbounds for i in eachindex(x); P += (x[i] - od.x0[i]) * od.c[i]; end
+    P /= od.m0
+    f = scale * P * P
+    k = 2 * scale * P / od.m0
+    @inbounds for i in eachindex(x); g[i] = k * od.c[i]; end
+    verbose && println(" orthoLD: ", f)
+    return f
+end
+
+"""
+    spheroid_sobel2_fg(x, g, S; scale=1.0, verbose=false, ϵ=1e-12) -> f
+
+Quadratic gradient regularizer built on the spherical Sobel operator
+`sobel_gradient_healpix`:
+
+```
+f = scale · (4π/npix) · Σᵢ (|∇x|ᵢ² ) / mean(x)²
+```
+
+a consistent discretisation of `∫|∇x|²dΩ / x̄²`. Contrast with `"tv2"`, which is
+`‖Lx‖²` for the graph Laplacian `L` and therefore penalises **curvature**:
+
+| | penalises | Fourier response | scale-invariant | nside-stable (smooth map) |
+|---|---|---|---|---|
+| `"tv2"` | `∇²x` | `k⁴` | no | no (×0.36 per doubling) |
+| `"sobel2"` | `∇x` | `k²` | yes | yes |
+
+The `k⁴` response is why `"tv2"` has so little usable middle ground — it barely touches
+large scales and crushes small ones, so the map goes from pixel spikes to a near-constant
+with little in between. `k²` rolls off gently enough to suppress tessel-scale noise while
+leaving genuine structure.
+
+Both normalisations matter. `mean(x)²` makes the weight dimensionless, matching χ² — which
+is *exactly* invariant under `x → c·x` because the visibilities are flux-normalised, so
+without it the effective strength would ride on the map's arbitrary overall level. The
+`4π/npix` solid angle (HEALPix is equal-area) makes a weight tuned at one `nside` mean the
+same thing at another.
+
+# Gradient
+
+With `S = Σᵢ|∇x|ᵢ²`, `m = mean(x)`, `n = length(x)` and `A = 4π/npix`,
+
+```
+∂f/∂xⱼ = scale·A·[ 2(Gxᵀ(Gx x) + Gyᵀ(Gy x))ⱼ / m² − 2S/(n m³) ]
+```
+
+the second term being the global coupling that makes it blind to a pure rescaling.
+"""
+function spheroid_sobel2_fg(x, g, S; scale = 1.0, verbose = false, ϵ = 1e-12)
+    n = length(x)
+    m = sum(x)/n
+    abs(m) > ϵ || (g .= 0; return zero(m))
+    gx = S.Gx*x; gy = S.Gy*x
+    Q  = sum(abs2, gx) + sum(abs2, gy)
+    A  = S.area
+    f  = scale * A * Q / m^2
+    g[:] = (2*scale*A/m^2) .* (S.Gx'*gx .+ S.Gy'*gy) .- (2*scale*A*Q/(n*m^3))
+    verbose && println(" SOBEL2: ", f)
+    return f
+end
+
+"""
+    spheroid_sobel_fg(x, g, S; scale=1.0, verbose=false, ϵ=1e-8) -> f
+
+**Isotropic edge-preserving** total variation on the spherical Sobel gradient:
+
+```
+f = scale · (4π/npix) · Σᵢ √(|∇x|ᵢ² + ϵ) / mean(x)
+```
+
+a discretisation of `∫|∇x|dΩ / x̄`. This is the genuine L1 total variation — the `√` is taken
+per tessel over the two gradient components, so the cost of an edge grows linearly with its
+height rather than quadratically, and sharp features survive while noise is suppressed.
+
+Note ROTIR's `"tv"` is **not** this: on HEALPix it evaluates `‖Lx‖`, a single global norm of
+the Laplacian, which is a monotone transform of `"tv2"` and shares its `k⁴` response. Use
+`"sobel"` when edges must be preserved (a spot boundary, a limb feature) and `"sobel2"` when
+a smooth map is wanted.
+
+`ϵ` keeps the `√` differentiable at `∇x = 0`; it is in units of `|∇x|²`, so with a
+mean-normalised map `1e-8` is well below any real gradient.
+
+# Gradient
+
+With `rᵢ = √(|∇x|ᵢ² + ϵ)`, `m = mean(x)`, `n = length(x)` and `A = 4π/npix`,
+
+```
+∂f/∂xⱼ = scale·A·[ (Gxᵀ(gx/r) + Gyᵀ(gy/r))ⱼ / m − (Σᵢrᵢ)/(n m²) ]
+```
+"""
+function spheroid_sobel_fg(x, g, S; scale = 1.0, verbose = false, ϵ = 1e-8)
+    n = length(x)
+    m = sum(x)/n
+    abs(m) > ϵ || (g .= 0; return zero(m))
+    gx = S.Gx*x; gy = S.Gy*x
+    r  = sqrt.(gx.^2 .+ gy.^2 .+ ϵ)
+    R  = sum(r)
+    A  = S.area
+    f  = scale * A * R / m
+    g[:] = (scale*A/m) .* (S.Gx'*(gx./r) .+ S.Gy'*(gy./r)) .- (scale*A*R/(n*m^2))
+    verbose && println(" SOBEL: ", f)
+    return f
+end
+
 function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verbose=false)
   reg_f = 0.0;
   for ireg =1:length(regularizers)
@@ -618,11 +953,19 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
           reg_f += regularizers[ireg][2]*spheroid_harmon_bias_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose );
       elseif regularizers[ireg][1] == "radflat"
           reg_f += regularizers[ireg][2]*spheroid_radflat_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "radialvar"
+          reg_f += regularizers[ireg][2]*spheroid_radialvar_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "orthold"
+          reg_f += regularizers[ireg][2]*spheroid_orthold_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "sobel2"
+          reg_f += regularizers[ireg][2]*spheroid_sobel2_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "sobel"
+          reg_f += regularizers[ireg][2]*spheroid_sobel_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
       else
-          # Previously this chain had no `else`: an unrecognised name contributed exactly
-          # zero, silently, so a typo looked like a regularizer that simply did nothing.
+          # An unrecognised name must RAISE. Falling through would contribute exactly
+          # zero, so a typo would look like a regularizer that simply does nothing.
           error("spheroid_regularization: unknown regularizer \"$(regularizers[ireg][1])\"; " *
-                "known: mem, tv, tv2, mean, bias, radflat")
+                "known: mem, tv, tv2, mean, bias, radflat, radialvar, orthold, sobel, sobel2")
       end
       g[regularizers[ireg][4]] += regularizers[ireg][2]*temp_g
   end
@@ -662,7 +1005,26 @@ function image_reconstruct_oi_chi2_fg(x, data, stars;  verbose = verbose)
   return crit,g
 end
 
-function multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4, maxiter=500, reg_weight=1e-5, reg_type="tv2", verbose=true, kwargs...)
+"""
+    multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4, maxiter=500,
+                            reg_weight=10.0, reg_type="sobel2", verbose=true, kwargs...)
+
+Reconstruct on a ladder of HEALPix resolutions, each level initialised by upsampling the
+previous one.
+
+`reg_type` defaults to `"sobel2"` here for a reason specific to this routine: the smoothing
+weight is held fixed while `nside` quadruples the pixel count at every level, and only the
+gradient-based regularizers carry the `4π/npix` solid angle that makes a weight mean the
+same thing at each level. With `"tv2"` the same `reg_weight` is progressively weaker as the
+ladder climbs (its value on a smooth map falls by ~×0.4 per doubling), so the final level is
+regularized far less than intended.
+
+Weights are **not** comparable between the two families: `"sobel2"` is normalised by
+`mean(x)²` and by solid angle, so its natural range is O(1–10²) against χ², whereas a
+`"tv2"` weight rides on the map's absolute level and is typically O(10⁻⁵–10⁻⁴). See the
+regularizer table in the reconstruction guide.
+"""
+function multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4, maxiter=500, reg_weight=10.0, reg_type="sobel2", verbose=true, kwargs...)
   tmap = nothing
   stars = nothing
   for n in n_start:n_end
@@ -674,7 +1036,9 @@ function multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4,
       tmap = vec(repeat(tmap, 1, 4)')  # upsample from previous level
     end
     setup_oi!(data, stars)
-    regularizers = [[reg_type, reg_weight, tv_neighbors_healpix(n), 1:length(tmap)]]
+    reginfo = reg_type in ("sobel", "sobel2") ? sobel_gradient_healpix(n) :
+                                                tv_neighbors_healpix(n)
+    regularizers = [[reg_type, reg_weight, reginfo, 1:length(tmap)]]
     if verbose
       println("Multi-resolution: HEALPix level n=$n, npix=$(nside2npix(2^n))")
     end

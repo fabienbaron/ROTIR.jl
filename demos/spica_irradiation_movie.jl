@@ -22,7 +22,7 @@
 #   substellar_dT.png — peak ΔT on each component vs orbital phase.
 
 ENV["MPLBACKEND"] = get(ENV, "MPLBACKEND", "Agg")   # headless by default
-using ROTIR, PyPlot, Printf
+using ROTIR, PythonPlot, Printf
 include(joinpath(@__DIR__, "spica_params.jl"))
 
 nframes = parse(Int,     get(ENV, "NFRAMES", "200"))
@@ -83,8 +83,7 @@ for (k, ph) in enumerate(phases)
 end
 
 fig, ax = subplots(2, 1, figsize=(9, 7), sharex=true)
-    # 0-BASED indexing: under PythonCall `subplots` returns a Py numpy array of axes,
-    # not the Julia Matrix PyCall used to convert it into.
+    # 0-BASED indexing: `subplots` returns a Py numpy array of axes, not a Julia Matrix.
 ax[0].plot(phases, dT2, "-", lw=2, label="secondary")
 ax[0].plot(phases, dT1, "-", lw=2, label="primary")
 ax[0].set_ylabel("peak ΔT (K)")
@@ -97,7 +96,7 @@ ax[1].grid(alpha=0.3)
 tight_layout()
 mkpath(outdir)
 fig.savefig(joinpath(outdir, "substellar_dT.png"), dpi=130, bbox_inches="tight")
-PyPlot.close(fig)
+pyplot.close(fig)
 
 @printf("\npeak ΔT: secondary %.0f K (periastron) … %.0f K (apastron)\n",
         dT2[1], dT2[div(nph, 2) + 1])

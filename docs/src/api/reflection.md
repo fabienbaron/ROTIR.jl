@@ -59,11 +59,12 @@ law of each irradiator. These are **not** the passband `ld1`/`ld2` that shape `l
 |---|---|---|
 | 0 | uniform / Lambert, `D ≡ 1` (default) | 1 |
 | 1 | linear, `1 − x(1−μ)` | `1 − x/3` |
-| 2 | quadratic, `1 − x(1−μ) − y(1−μ²)` | `1 − x/3 − y/2` |
+| 2 | quadratic, `1 − x(1−μ) − y(1−μ)²` | `1 − x/3 − y/6` |
 | 3 | Hestroffer power, `μ^x` | `2/(x+2)` |
 
-Note ROTIR's quadratic law is `1 − x(1−μ) − y(1−μ²)`, not PHOEBE's `1 − x(1−μ) − y(1−μ)²`,
-hence `y/2` rather than `y/6`.
+ROTIR's quadratic law is the standard one, `1 − x(1−μ) − y(1−μ)²`, as used by PHOEBE,
+Claret & Bloemen, and Kervella et al. (2017) Eq. 5, so `ld2` is directly comparable to the
+published `b`. Note `(1−μ)²`, not `(1−μ²)`: the two differ by a factor `(1+μ)`.
 
 ## Usage
 

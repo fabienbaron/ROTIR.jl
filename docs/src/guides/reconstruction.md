@@ -52,9 +52,9 @@ tmap_start = parametric_temperature_map(star_params, stars[1])
 # Must be called before image_reconstruct_oi or any chi2 evaluation.
 setup_oi!(data, stars)
 
-# Set up quadratic total-variation regularization to enforce smooth maps
-# Format: ["type", weight, neighbor_info, pixel_range]
-regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap_start)]]
+# Gradient-based smoothing (see "Regularizations" below for why this is preferred to "tv2")
+# Format: ["type", weight, operator_info, pixel_range]
+regularizers = [["sobel2", 10.0, sobel_gradient_healpix(n), 1:length(tmap_start)]]
 
 # Run the reconstruction: iteratively adjusts pixel temperatures to fit
 # the interferometric observables (V², closure phases, triple amplitudes)
@@ -67,18 +67,78 @@ tmap = image_reconstruct_oi(tmap_start, data, stars;
 Multiple regularizations can be combined in the `regularizers` list. Each entry
 is a vector specifying the type, weight, and any additional arguments:
 
-| Name | Syntax | Description |
-|------|--------|-------------|
-| `"tv"` | `["tv", mu, tv_info, pixel_range]` | Total variation (L1) |
-| `"tv2"` | `["tv2", mu, tv_info, pixel_range]` | Total variation squared (quadratic) |
-| `"mem"` | `["mem", mu]` | Maximum entropy |
-| `"mean"` | `["mean", mu]` | Mean constraint |
-| `"bias"` | `["bias", mu, B]` | Harmonic bias for asymmetric brightening |
+| Name | Syntax | Penalises | Response |
+|------|--------|-----------|----------|
+| `"sobel"` | `["sobel", mu, sobel_info, pixel_range]` | `∫\|∇x\|dΩ` — isotropic L1, edge-preserving | `k²` |
+| `"sobel2"` | `["sobel2", mu, sobel_info, pixel_range]` | `∫\|∇x\|²dΩ` — smooth | `k²` |
+| `"tv2"` | `["tv2", mu, tv_info, pixel_range]` | `‖Lx‖²` — curvature | `k⁴` |
+| `"tv"` | `["tv", mu, tv_info, pixel_range]` | `‖Lx‖` — curvature | `k⁴` |
+| `"mem"` | `["mem", mu]` | per-pixel contrast (no spatial coupling) | — |
+| `"mean"` | `["mean", mu]` | departure from the mean | — |
+| `"bias"` | `["bias", mu, B]` | harmonic bias for asymmetric brightening | — |
 
-The `tv_info` argument is a sparse difference matrix encoding the pixel
-neighbor graph — it tells the regularizer which pixels are adjacent for
-computing total variation. Build it with `tv_neighbors_healpix(n)` or
-`tv_neighbors_longlat(ntheta, nphi)`.
+Radial regularizers for the single-epoch, non-rotating case (`"radflat"`, `"radialvar"`,
+`"orthold"`) are covered separately in [Radial regularizers](../api/radial_regularizers.md).
+
+### Which to use
+
+`"sobel"` / `"sobel2"` are built on `sobel_gradient_healpix`, a tangent-plane
+least-squares gradient — the sphere's analogue of the 2-D Sobel stencil, which is itself the
+inverse-distance²-weighted least-squares gradient on a 3×3 grid. They penalise the **first**
+derivative.
+
+`"tv"` / `"tv2"` are built on `tv_neighbors_healpix`, whose operator is the graph
+Laplacian (diagonal = neighbour count, `−1` off-diagonal), so both penalise the **second**
+derivative. Note that despite the name, `"tv"` on HEALPix is `‖Lx‖`, a single global norm —
+a monotone transform of `"tv2"`, not an edge-preserving L1 total variation. For that, use
+`"sobel"`.
+
+The `k⁴` response of `"tv"`/`"tv2"` discriminates very sharply by scale: it barely touches
+large structure and crushes fine structure, so there is little usable middle ground between
+a spiky map and a nearly constant one. `k²` rolls off gently enough to suppress
+tessel-scale noise while leaving genuine structure.
+
+Two further differences matter when transferring a weight between targets or resolutions:
+
+* `"sobel"`, `"sobel2"` and `"mem"` are **scale-invariant** (normalised by `mean(x)`), which
+  matches χ² — exactly invariant under `x → c·x`, since the visibilities are flux-normalised.
+  `"tv"` and `"tv2"` are not, so their effective strength rides on the map's arbitrary
+  overall level: the same weight is ~42× stronger on a 25000 K star than on a 3900 K one.
+* `"sobel"` and `"sobel2"` carry the `4π/npix` solid angle, so on a smooth map their value
+  converges as the mesh refines. `"tv2"` falls by ~×0.4 per `nside` doubling, so a weight
+  tuned at one resolution does not transfer to another.
+
+Build the operator argument with `sobel_gradient_healpix(n)` for the Sobel forms, or
+`tv_neighbors_healpix(n)` / `tv_neighbors_longlat(ntheta, nphi)` for the Laplacian ones.
+
+### Measured comparison
+
+Each prior at its own best weight, from the ladder in `demos/rwcep_radflat.jl`
+(`ALPHAS=0 TVWS=0,1e1,1e2,1e3,1e4`, RW Cep at nside 3, 2819 data against 428 patches, no
+radial regularizer so the smoothing prior is the only thing acting):
+
+| prior | best weight | χ²ᵥ₂/n | χ²ₜ₃ₚ/n |
+|---|---|---|---|
+| `"tv2"` | 1e−4 | 2.29 | 1.7 |
+| *(none)* | — | 2.00 | 1.5 |
+| `"sobel2"` | 1e1 | 1.93 | 1.5 |
+| `"sobel"` | 1e1 | **1.86** | **1.4** |
+
+`"tv2"` fits **worse than using no prior at all**, which is the practical consequence of the
+`k⁴` response: by the time it is strong enough to suppress tessel-scale noise it is already
+flattening structure the closure phases can see. `"sobel"` is best on both observables — the
+L1 form suppresses noise without penalising a genuine edge in proportion to its height.
+
+Read the weights as orders of magnitude, not as constants. They are `O(1–10²)` for the Sobel
+forms because those are normalised by `mean(x)²` and by solid angle — so `tpole` and `nside`
+drop out — but the balance against χ² still scales with the **number of data points**, so
+re-run the ladder for a new dataset rather than carrying a weight across.
+
+!!! warning "Weights are not comparable between the two families"
+    A `"tv2"` weight is `O(10⁻⁵–10⁻⁴)` and a `"sobel2"` weight `O(1–10²)` on the same data —
+    four to six orders of magnitude apart, because `"tv2"` rides on the map's absolute
+    temperature. Substituting one name for the other without re-tuning silently produces
+    either no regularization or a prior that dominates the likelihood.
 
 ## Evaluating the fit
 
@@ -226,9 +286,9 @@ setup_oi!(data, stars)
 # Generate initial temperature map (uniform for a sphere with no gravity darkening)
 tmap_start = parametric_temperature_map(star_params, stars[1])
 
-# Quadratic total-variation regularization — use a higher weight than multi-epoch
-# since a single snapshot has sparser UV coverage and needs more regularization
-regularizers = [["tv2", 1e-4, tv_neighbors_healpix(n), 1:length(tmap_start)]]
+# Gradient smoothing — use a higher weight than multi-epoch, since a single snapshot
+# has sparser UV coverage and needs more regularization
+regularizers = [["sobel2", 100.0, sobel_gradient_healpix(n), 1:length(tmap_start)]]
 
 # Run the reconstruction
 tmap = image_reconstruct_oi(tmap_start, data, stars;

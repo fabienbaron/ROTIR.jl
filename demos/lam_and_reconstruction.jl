@@ -1,9 +1,9 @@
 using ROTIR
 
 # LOAD DATA
-oifitsfiles = ["./data/2011Sep02.lam_And_prepped.oifits", "./data/2011Sep06.lam_And_prepped.oifits",
-"./data/2011Sep10.lam_And_prepped.oifits","./data/2011Sep14.lam_And_prepped.oifits",
-"./data/2011Sep19.lam_And_prepped.oifits","./data/2011Sep24.lam_And_prepped.oifits"];
+oifitsfiles = [joinpath(@__DIR__, "data", "2011Sep02.lam_And_prepped.oifits"), joinpath(@__DIR__, "data", "2011Sep06.lam_And_prepped.oifits"),
+joinpath(@__DIR__, "data", "2011Sep10.lam_And_prepped.oifits"),joinpath(@__DIR__, "data", "2011Sep14.lam_And_prepped.oifits"),
+joinpath(@__DIR__, "data", "2011Sep19.lam_And_prepped.oifits"),joinpath(@__DIR__, "data", "2011Sep24.lam_And_prepped.oifits")];
 data_all = readoifits_multiepochs(oifitsfiles, warn=false, verbose=false, T=Float32);
 data = data_all[1, :]; # select first wavelength bin, all epochs
 nepochs = length(data)
@@ -35,7 +35,7 @@ tmap_start = parametric_temperature_map(star_params,stars[1]);
 setup_oi!(data, stars)
 
 # SETUP REGULARIZATION
-regularizers = [["tv2", 1e-5, tv_neighbors_healpix(n), 1:length(tmap_start)]];
+regularizers = [["sobel2", 10.0, sobel_gradient_healpix(n), 1:length(tmap_start)]];
 
 # RECONSTRUCTION
 tmap =  image_reconstruct_oi(tmap_start, data, stars, maxiter = 1000, regularizers = regularizers, verbose = true);

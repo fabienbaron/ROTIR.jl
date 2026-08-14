@@ -13,9 +13,9 @@ figure produced by ROTIR and one produced by OITOOLS look the same in the same d
 they routinely appear side by side in a paper, and a serif/sans or 12pt/14pt mismatch
 between them is immediately visible.
 
-ROTIR previously kept its own copy of these rcParams, which had drifted from OITOOLS'
-(14pt vs 12pt, minor ticks 6 vs 3, `markeredgewidth` 1 vs 0). Delegating removes the
-second source of truth, and picks up OITOOLS' `compact` mode for free — worth passing
+Delegating to OITOOLS keeps a single source of truth for the rcParams — a private copy
+drifts (font size, minor tick count, `markeredgewidth`) and the two packages' figures stop
+matching. It also picks up OITOOLS' `compact` mode for free, worth passing
 `compact=true` when stacking panels.
 
 Every plotting entry point in this file calls this first. That matters for more than
@@ -105,12 +105,11 @@ end
 Map `[lo, hi]` onto the colormap fraction `[cfloor, cceil]` rather than `[0, 1]`, by
 widening the normalisation limits at both ends.
 
-Both ends matter. ROTIR used to pad only the floor, "avoiding black pixels on dark
-background" — but the default background is WHITE, and the top of `gist_heat` is pure
-white, so the hottest part of a surface was rendered in exactly the background colour.
-On a binary that is fatal: the two components share one scale, so the hotter one sits at
-the top of the range and its disk disappears completely. The old padding guarded the end
-that was not the problem.
+Both ends matter. The default background is WHITE and the top of `gist_heat` is pure
+white, so without a ceiling the hottest part of a surface renders in exactly the background
+colour. On a binary that is fatal: the two components share one scale, so the hotter one
+sits at the top of the range and its disk disappears completely. Padding only the floor
+("avoiding black pixels on a dark background") guards the end that is not the problem.
 """
 function _padded_norm(lo, hi, range; cfloor = 0.15, cceil = 0.95)
     span = cceil - cfloor
@@ -198,13 +197,12 @@ The stellar rotation axis in sky coordinates, as the two pole positions.
 With `inclination`/`position_angle` given (degrees) the axis is analytic. Otherwise it is
 recovered from the mesh by averaging the tessels of extreme COLATITUDE in the body frame.
 
-That last detail is load-bearing. This used to take the first and last few pixels *by
-index* (`vertices_xyz[1:4, …]`), which is only the pole under HEALPix RING ordering —
-ROTIR tessellations are NESTED, where the leading pixels lie in base pixel 0, a diamond
-straddling mid-latitudes. For an nside=3 sphere at inclination 60°/PA 30° that put the
-axis 76.5° off the true one, with the north arrow pointing *away* from the observer.
-Selecting on colatitude is ordering-independent and matches the analytic axis to 0.02°
-(the residual is Float32 mesh discretisation).
+Selecting on colatitude is load-bearing: do NOT take the first and last few pixels by
+index. ROTIR tessellations are HEALPix NESTED, where the leading pixels lie in base pixel 0,
+a diamond straddling mid-latitudes — only under RING ordering are they the pole. Indexing
+puts the axis 76.5° off for an nside=3 sphere at inclination 60°/PA 30°, with the north
+arrow pointing *away* from the observer. Colatitude selection is ordering-independent and
+matches the analytic axis to 0.02° (the residual is Float32 mesh discretisation).
 """
 function _spin_axis(star, star_params, inclination, position_angle)
     R = _polar_radius(star, star_params)
@@ -335,19 +333,128 @@ function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.07, offset_frac=0
 end
 
 """
+    _mesh_surface_field(star) -> (dx, dy, dz, r, nz)
+
+Sample the star's own surface as a scattered field on the body-frame unit sphere.
+
+`stellar_geometry` stores, per tessel centre, the body-frame direction (θ, φ) and the
+deformed radius `r(θ, φ)` in `vertices_spherical`, plus the SKY-frame normal in `normals`.
+Together those are everything a graticule needs — the shape and where it stops being
+visible — for *any* surface, including ones with no closed form.
+
+`(dx, dy, dz)` are the body-frame unit vectors, kept as three separate vectors rather than
+an `npix × 3` matrix so the neighbour search below reads contiguous memory.
+"""
+function _mesh_surface_field(star)
+    θ = Float64.(star.vertices_spherical[:, 5, 2])
+    φ = Float64.(star.vertices_spherical[:, 5, 3])
+    s = sin.(θ)
+    return (s .* cos.(φ), s .* sin.(φ), cos.(θ),
+            Float64.(star.vertices_spherical[:, 5, 1]), Float64.(star.normals[:, 3]))
+end
+
+"""
+    _interp_surface(field, θ, φ; k=8) -> (r, nz)
+
+Interpolate the mesh surface field at an arbitrary body-frame direction.
+
+Modified Shepard (Franke–Little) interpolation over the `k` nearest tessel centres, with
+the cutoff radius `R` set by the (k+1)-th. The weight `((R-d)/(R·d))²` vanishes *smoothly*
+at `d = R`, so a neighbour entering or leaving the set contributes nothing at the moment it
+does. Plain inverse-distance weighting over a fixed `k` is discontinuous in its derivative
+wherever the neighbour set changes, and on a graticule that shows up as faint kinks along
+each curve.
+
+Distances are squared chords `2(1 - u·v)` on the unit sphere — monotonic in angle, free of
+trigonometry, and immune to the φ wrap that plagues differencing in (θ, φ).
+
+Weights are normalised, so a constant field is reproduced exactly: a sphere interpolates to
+a sphere, whatever the mesh.
+"""
+function _interp_surface(field, θq::Real, φq::Real; k::Int=8)
+    dx, dy, dz, rs, nzs = field
+    n = length(rs)
+    kk = min(k, n - 1)
+    # Promote FIRST. The mesh is Float32, so a query taken straight off it would be
+    # evaluated in Float32 trig while the field was built in Float64 — a ~3e-8 disagreement,
+    # enough to miss the exact-hit shortcut below on the very samples that define the field.
+    θ = Float64(θq); φ = Float64(φq)
+    st = sin(θ)
+    v1 = st * cos(φ); v2 = st * sin(φ); v3 = cos(θ)
+    idx = zeros(Int, kk + 1)
+    dd  = fill(Inf, kk + 1)
+    @inbounds for i in 1:n
+        d = 2 * (1 - (dx[i] * v1 + dy[i] * v2 + dz[i] * v3))
+        d < dd[kk+1] || continue
+        j = kk + 1
+        while j > 1 && dd[j-1] > d
+            dd[j] = dd[j-1]; idx[j] = idx[j-1]; j -= 1
+        end
+        dd[j] = d; idx[j] = i
+    end
+    dd[1] <= 1e-12 && return (rs[idx[1]], nzs[idx[1]])   # query sits on a sample
+    R = sqrt(max(dd[kk+1], eps()))
+    wsum = 0.0; rsum = 0.0; nsum = 0.0
+    @inbounds for j in 1:kk
+        di = sqrt(dd[j])
+        w = ((R - di) / (R * di))^2
+        wsum += w; rsum += w * rs[idx[j]]; nsum += w * nzs[idx[j]]
+    end
+    wsum > 0 || return (rs[idx[1]], nzs[idx[1]])          # degenerate: all neighbours tied
+    return (rsum / wsum, nsum / wsum)
+end
+
+"""
+    _mesh_body_curve(field, θs, φs; k=8) -> (body_pts, vis)
+
+A graticule curve read off the mesh: `npoints × 3` body-frame points, plus the sky-frame
+visibility of each.
+
+`vis` comes from the interpolated normal, not from `z > 0`. Those agree only for a sphere:
+on any distorted body the silhouette is the set of points whose normal is perpendicular to
+the line of sight, which is a plane through the origin tilted away from `z = 0` (2.6° for
+the near-lobe-filling Roche star in the docs). Using the mesh normal makes the curves
+terminate at exactly the boundary `draw_limb!` draws, since that hull is built from
+`index_quads_visible`, which is thresholded on the same quantity.
+"""
+function _mesh_body_curve(field, θs, φs; k::Int=8)
+    npts = length(θs)
+    body_pts = Matrix{Float64}(undef, npts, 3)
+    vis = Vector{Bool}(undef, npts)
+    @inbounds for m in 1:npts
+        θ = Float64(θs[m]); φ = Float64(φs[m])
+        r, nz = _interp_surface(field, θ, φ; k=k)
+        st, ct = sin(θ), cos(θ)
+        body_pts[m, 1] = r * st * cos(φ)
+        body_pts[m, 2] = r * st * sin(φ)
+        body_pts[m, 3] = r * ct
+        vis[m] = nz > 0
+    end
+    return body_pts, vis
+end
+
+"""
     draw_graticules(ax, star; star_params=nothing, nlat=5, nlon=8, inclination=NaN, position_angle=NaN, ...)
 
 Draw latitude/longitude graticule lines on the star surface using parametric curves.
 Generates smooth curves in the body frame, rotates them with the same Euler rotation
-as the star (rot_vertex), and z-clips to the front hemisphere.
+as the star (rot_vertex), and clips to the visible side.
 Renders via matplotlib PolyCollection for efficiency.
 
-When `star_params` is provided, exact surface geometry is used:
+When `star_params` is provided and the surface has a closed form, that form is used:
 - Type 0 (sphere): radius
 - Type 1 (triaxial ellipsoid): radius_x, radius_y, radius_z
 - Type 2 (rapid rotator): rpole, frac_escapevel via f_rapid_rot
 
-When `star_params` is omitted, semi-axes are estimated from the tessellation (backward compatible).
+Everything else — Roche lobes (type 3), and any star drawn without `star_params` — is
+interpolated from the MESH's own `r(θ, φ)`; see `_interp_surface`.
+
+That path exists because a Roche lobe has no axisymmetric description. The previous
+fallback fitted a biaxial ellipsoid to the mesh-averaged polar and equatorial radii, which
+is symmetric about the spin axis and therefore structurally unable to show the tidal
+teardrop pointing at the companion — the one feature such a figure is drawn to show. The
+mesh needs no `D`, no `q`, and no potential solve, and stays correct for surface types that
+do not exist yet.
 """
 function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8, alpha=0.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
@@ -358,30 +465,17 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
     use_exact = star_params !== nothing && hasproperty(star_params, :surface_type)
     stype = use_exact ? star_params.surface_type : -1
 
-    # Extract effective semi-axes from body-frame tessellation (used as fallback
-    # when star_params is absent or surface_type is not 0/1/2)
-    if !use_exact || stype ∉ (0, 1, 2)
-        all_colat = star.vertices_spherical[:, 1:4, 2]
-        all_r     = star.vertices_spherical[:, 1:4, 1]
-        pole_mask = (all_colat .< 0.3) .| (all_colat .> π - 0.3)
-        r_pole = any(pole_mask) ? mean(all_r[pole_mask]) : mean(all_r)
-        eq_mask = abs.(all_colat .- π/2) .< 0.3
-        r_eq = any(eq_mask) ? mean(all_r[eq_mask]) : mean(all_r)
-    end
+    # Read the surface off the mesh whenever there is no closed form to use.
+    mesh_field = (!use_exact || stype ∉ (0, 1, 2)) ? _mesh_surface_field(star) : nothing
 
     # Build rotation matrix (same convention as rotate_star).
     #
-    # Orientation precedence: explicit keyword, then `star_params`, then unrotated. The
-    # middle step used to be missing — `star_params` was consulted for the SHAPE but not
-    # the ORIENTATION, so passing it alone silently produced a pole-up graticule on a star
-    # that was actually inclined. That made `plot2d(...; graticules=true, star_params=p)`
-    # disagree with the same call that also passed inclination/position_angle explicitly,
-    # even though both describe the same star.
-    # Orientation precedence: explicit angles, else the MESH.
+    # Orientation precedence: explicit angles, else the MESH. `star_params` supplies the
+    # SHAPE only and carries no orientation authority.
     #
-    # It used to default to 0/0, drawing a pole-up graticule on an inclined star. The
-    # tempting repair — read `inclination`/`position_angle` off `star_params` — is right
-    # for a single star but WRONG for a binary component: `create_binary_geometry` orients
+    # Do not be tempted to read `inclination`/`position_angle` off `star_params`: that is
+    # right for a single star but WRONG for a binary component, because
+    # `create_binary_geometry` orients
     # both components by the shared `binary_frame` built from the ORBIT (i, Ω, ω), and
     # ignores each star's own inclination/position_angle entirely. For the Spica-like test
     # binary those two answers differ by 102.6°.
@@ -399,12 +493,20 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
                        inclination * π / 180, position_angle * π / 180)
     end
 
+    # The mesh normals are SKY-frame vectors, so they only describe visibility for the
+    # orientation the mesh actually has. Usually that IS `R` — either it came from the mesh,
+    # or the caller passed the star's own angles, which reconstruct the same rotation. When
+    # it does not (deliberately overridden angles), fall back to the z > 0 hemisphere clip
+    # rather than clipping against a different star's silhouette.
+    mesh_orient = mesh_field === nothing || norm(R .- _mesh_rotation(star)) < 1e-3
+
     graticule_lines = Vector{Matrix{Float64}}()
 
     # Latitude circles (constant colatitude)
     θ_targets = collect(range(π/(nlat+1), stop=π*nlat/(nlat+1), length=nlat))
     ϕ_range = collect(range(-π, stop=π, length=npoints))
     for θ0 in θ_targets
+        vis = nothing
         if stype == 0
             r = star_params.radius
             body_pts = hcat(r .* sin(θ0) .* cos.(ϕ_range),
@@ -421,18 +523,18 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
                             r0 .* sin(θ0) .* sin.(ϕ_range),
                             fill(r0 * cos(θ0), npoints))
         else
-            body_pts = hcat(r_eq .* sin(θ0) .* cos.(ϕ_range),
-                            r_eq .* sin(θ0) .* sin.(ϕ_range),
-                            fill(r_pole * cos(θ0), npoints))
+            body_pts, vis = _mesh_body_curve(mesh_field, fill(θ0, npoints), ϕ_range)
+            mesh_orient || (vis = nothing)
         end
         sky_pts = body_pts * R
-        append!(graticule_lines, _visible_segments(sky_pts, offset_west, offset_north))
+        append!(graticule_lines, _visible_segments(sky_pts, offset_west, offset_north; vis=vis))
     end
 
     # Longitude lines (constant azimuth)
     ϕ_targets = collect(range(0, stop=2π*(1 - 1/nlon), length=nlon))
     θ_range = collect(range(0, stop=π, length=npoints))
     for ϕ0 in ϕ_targets
+        vis = nothing
         if stype == 0
             r = star_params.radius
             body_pts = hcat(r .* sin.(θ_range) .* cos(ϕ0),
@@ -451,12 +553,11 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
                             r_vals .* sin.(θ_range) .* sin(ϕ0),
                             r_vals .* cos.(θ_range))
         else
-            body_pts = hcat(r_eq .* sin.(θ_range) .* cos(ϕ0),
-                            r_eq .* sin.(θ_range) .* sin(ϕ0),
-                            r_pole .* cos.(θ_range))
+            body_pts, vis = _mesh_body_curve(mesh_field, θ_range, fill(ϕ0, npoints))
+            mesh_orient || (vis = nothing)
         end
         sky_pts = body_pts * R
-        append!(graticule_lines, _visible_segments(sky_pts, offset_west, offset_north))
+        append!(graticule_lines, _visible_segments(sky_pts, offset_west, offset_north; vis=vis))
     end
 
     # The projected limb. Without it the meridians and parallels float with no boundary,
@@ -473,13 +574,19 @@ function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8,
     end
 end
 
-"""Extract contiguous front-hemisphere (z>0) segments as Nx2 matrices for PolyCollection."""
-function _visible_segments(sky_pts, offset_west, offset_north)
+"""
+Extract contiguous visible segments as Nx2 matrices for PolyCollection.
+
+Visibility defaults to the front hemisphere `z > 0`, which is exact for a sphere and a
+good approximation elsewhere. Pass `vis` to override it — the mesh path supplies the sign
+of the interpolated surface normal, which is the true silhouette test on a distorted body.
+"""
+function _visible_segments(sky_pts, offset_west, offset_north; vis=nothing)
     segments = Vector{Matrix{Float64}}()
     seg_start = 0
     npts = size(sky_pts, 1)
     for k in 1:npts
-        if sky_pts[k, 3] > 0
+        if vis === nothing ? sky_pts[k, 3] > 0 : vis[k]
             if seg_start == 0; seg_start = k; end
         else
             if seg_start > 0 && k - seg_start >= 2
@@ -517,7 +624,7 @@ end
 Evaluate a matplotlib colormap and bring the result back to Julia as something matplotlib
 will accept.
 
-Two PythonCall differences bite here, both of which PyCall used to hide:
+Two PythonCall behaviours bite here:
 
 1. **No automatic conversion.** `cmap(x)` returns a `Py`, so `cmap.(xs)` gives a
    `Vector{Py}`, which matplotlib turns into a numpy *object* array rather than a float
@@ -562,12 +669,11 @@ function add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
     verts[i] = hcat(-(Float64.(star.proj_west[idx, :]) .+ offset_west),
                      Float64.(star.proj_north[idx, :]) .+ offset_north)
   end
-  # Non-mesh mode strokes each polygon in its own face colour (as the old per-patch loop
-  # did): a zero-width edge leaves antialiasing seams that read as a spurious grid.
-  # Mid grey, not "lightgrey": the mesh has to read against BOTH ends of the colormap. A
-  # light edge was fine while limb darkening was double-counted (mu squared, fixed in
-  # 0b0b3a3) and surfaces came out dark, but against a correctly-lit pale surface it
-  # disappears and `plotmesh=true` silently does nothing. 0.45 grey holds on both.
+  # Non-mesh mode strokes each polygon in its own face colour: a zero-width edge leaves
+  # antialiasing seams that read as a spurious grid.
+  # Mid grey for the mesh, not "lightgrey": it has to read against BOTH ends of the
+  # colormap. A light edge vanishes against a correctly-lit pale surface and
+  # `plotmesh=true` then silently does nothing. 0.45 grey holds on both.
   ec = edgecolors === nothing ? (plotmesh ? "0.45" : colours) : edgecolors
   lw = linewidths === nothing ? (plotmesh ? 0.25 : 0.35)      : linewidths
   pc = collections.PolyCollection(verts, facecolors=colours, edgecolors=ec,
@@ -612,8 +718,7 @@ function plot3d(star_temperature_map,star) # this plots the temperature map
   # `_xyz_rows` note: the vertices must be a nested Vector of length-3 Vectors, NOT
   # `collect(zip(x,y,z))`. A `Vector{NTuple{3,Float32}}` converts to a numpy STRUCTURED array
   # (`dtype([('f0','<f4'),('f1','<f4'),('f2','<f4')])`) under PythonCall, and matplotlib then
-  # fails with "Cannot cast array data ... to dtype('float64')". PyCall used to produce a
-  # plain list of tuples, which is why this only surfaced after the migration.
+  # fails with "Cannot cast array data ... to dtype('float64')".
   tmin, tmax = extrema(star_temperature_map)
   trange = tmax > tmin ? tmax - tmin : one(tmax)
   cmap = get_cmap("gist_heat")
@@ -817,17 +922,24 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
   # every limb at one fixed zorder paints the FAR star's outline over the NEAR star, which
   # reads as the near star being transparent. Fractional zorders interleave them:
   #   far surface 2 < far limb 2.4 < near surface 3 < near limb 3.4
-  if limb && !graticules
+  #
+  # The limb is drawn HERE in both cases, and `draw_graticules` is told not to draw its
+  # own (`limb = false`). Its internal one sits at `zorder - 1`, which is right for the
+  # single-star default of 5 but lands at `zord - 0.5` here — i.e. UNDER that component's
+  # own surface, where it is invisible. That is what silently removed the outline from
+  # every binary plotted with `graticules = true`. Drawing it here also gets it
+  # `limb_color`/`limb_linewidth` rather than the graticule's colour and alpha.
+  if limb
     draw_limb!(ax, star1; color=limb_color, linewidth=limb_linewidth, zorder=zord1+0.4)
     draw_limb!(ax, star2; offset_west=offset_west, offset_north=offset_north,
                color=limb_color, linewidth=limb_linewidth, zorder=zord2+0.4)
   end
   if graticules
     draw_graticules(ax, star1; inclination=inclination1, position_angle=position_angle1,
-        star_params=star_params1, limb=limb, zorder=zord1+0.5, graticule_kwargs...)
+        star_params=star_params1, limb=false, zorder=zord1+0.5, graticule_kwargs...)
     draw_graticules(ax, star2; offset_west=offset_west, offset_north=offset_north,
         inclination=inclination2, position_angle=position_angle2, star_params=star_params2,
-        limb=limb, zorder=zord2+0.5, graticule_kwargs...)
+        limb=false, zorder=zord2+0.5, graticule_kwargs...)
   end
   if rotation_axis
     draw_rotation_axis(ax, star1, inclination=inclination1, position_angle=position_angle1, star_params=star_params1)
@@ -859,9 +971,9 @@ Wireframe view of the tessellation projected onto the sky plane.
 
 With `hidden=true` the far-side tessels are drawn too, in `hidden_color`, so the mesh reads
 as a transparent globe and the near/far hemispheres are told apart by edge weight rather
-than by one hiding the other. This needs the near side unfilled — previously it carried an
-opaque white fill, which on a white background looked identical but occluded everything
-behind it, so there were no back edges to see.
+than by one hiding the other. This needs the near side UNFILLED: an opaque white fill looks
+identical on a white background but occludes everything behind it, leaving no back edges to
+see.
 
 `hidden=false` restores the opaque near-side-only view.
 """
@@ -911,14 +1023,11 @@ end
 
 Grid of sky-plane maps, one panel per epoch, on a shared colour scale.
 
-The grid and figure size follow the number of epochs. `arr_box` used to be hardcoded to
-`23`, a fixed 2x3 layout: three epochs left an entire empty row, the figure kept its
-(15,10) size regardless, and the axis labels — placed at fixed *figure* fractions —
-floated far below the single populated row. It also broke above six epochs, since the
-panel index was built as `arr_box*10 + t`.
+The grid and figure size follow the number of epochs, so three epochs give a 1x3 row
+rather than a half-empty 2x3 block with the axis labels floating below it.
 
-`ncols` pins the column count; `arr_box` is still accepted in its old two-digit
-`<rows><cols>` form for existing scripts.
+`ncols` pins the column count; `arr_box` is also accepted, in the legacy two-digit
+`<rows><cols>` form, for existing scripts.
 """
 function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",
                           arr_box=nothing, ncols=nothing, compass=true)
@@ -965,9 +1074,8 @@ function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gi
       add_tessel_collection!(ax, star[t], cols; edgecolors=meshcolor,
                              linewidths = plotmesh ? 0.2 : 0.0, zorder=2)
       ax.plot();
-      # Tick styling comes from set_oiplot_defaults (i.e. OITOOLS' rcParams). The
-      # hardcoded labelsize=15/width=2/length=10 that used to sit here is why these
-      # panels did not match plot2d's ticks.
+      # Tick styling comes from set_oiplot_defaults (i.e. OITOOLS' rcParams). Hardcoding
+      # labelsize/width/length here would desynchronise these panels from plot2d's ticks.
       set_tick_spacing(ax, axis_max)
       for spine in ["top", "bottom", "left", "right"]
         ax.spines[spine].set_linewidth(1);

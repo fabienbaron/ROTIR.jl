@@ -58,7 +58,7 @@ unchanged, because both share the tail helper `finish_star`.
 ### `center_offsets`
 
 `create_binary_geometry` records the secondary's sky-frame offset (West, North,
-toward-observer; mas) in the previously-unused `center_offsets` field of
+toward-observer; mas) in the `center_offsets` field of
 `stellar_geometry`, with `star1.center_offsets = [0,0,0]`. That single field is the whole
 interface used by `handle_reflection` and the animation code to place the two meshes
 relative to each other. The vertex arrays themselves stay centred on their own component,
@@ -169,15 +169,15 @@ than the irradiation signature being looked for.
 
 `omega_at(bparams, tepoch)` advances the argument of periapsis, `ω(t) = ω₀ + dω·(t − T0)`
 with `dω` in degrees/day. It is applied by `binary_orbit_rel`, `binary_orbit_abs`,
-`binary_RV`, `binary_proj_plane` and `binary_frame`. `dω` was previously declared in
-`binaryparameters` and used nowhere; for Spica (U ≈ 139 yr, dω/dt ≈ 2.6°/yr) ω advances
-~21° across the 2007–2015 CHARA campaigns, displacing the predicted secondary position by
-up to **0.44 mas** against MIRC's ~0.01–0.05 mas precision.
+`binary_RV`, `binary_proj_plane` and `binary_frame`. Do not neglect it over long
+baselines: for Spica (U ≈ 139 yr, dω/dt ≈ 2.6°/yr) ω advances ~21° across the 2007–2015
+CHARA campaigns, displacing the predicted secondary position by up to **0.44 mas** against
+MIRC's ~0.01–0.05 mas precision.
 
 `compute_eccentric_anomaly` applies `dP` (= Ṗ in days/day) through the quadratic ephemeris
-`t_n = T0 + P·n + ½·Ṗ·P·n²`. Both signs are honoured; the guard was previously
-`dP > 1e-12`, which silently dropped shrinking periods back onto a constant period — worth
-65° of orbital phase after 10⁴ d at β Lyrae's rate.
+`t_n = T0 + P·n + ½·Ṗ·P·n²`. Both signs are honoured — the guard is on `|Ṗ|`, since a
+one-sided `Ṗ > 1e-12` test silently drops shrinking periods back onto a constant period,
+worth 65° of orbital phase after 10⁴ d at β Lyrae's rate.
 
 ## Synchronicity
 
@@ -185,10 +185,10 @@ up to **0.44 mas** against MIRC's ~0.01–0.05 mas precision.
 rates** — the same `F` as PHOEBE's `syncpar`, ELISa's `synchronicity` and `P` in
 `RocheLobe.f90`, and the quantity entering the centrifugal term as `½F²(1+q)r²(1−ν²)`.
 
-This was previously computed as `rotation_period/P`, the reciprocal, contradicting the
-code's own comments. Invisible for a synchronous binary, but Spica's primary is strongly
-supersynchronous (v sin i = 161 km/s ⇒ F ≈ 1.92), where the inversion scales the
-centrifugal term by F⁴ ≈ 13.6 and gives 0.5% rotational flattening instead of 9.4%.
+Note it is `P/rotation_period`, not the reciprocal. The inversion is invisible for a
+synchronous binary, but Spica's primary is strongly supersynchronous (v sin i = 161 km/s ⇒
+F ≈ 1.92), where it scales the centrifugal term by F⁴ ≈ 13.6 and gives 0.5% rotational
+flattening instead of 9.4%.
 Verified against `libphoebe.roche_Omega(q, F, d, [x,y,z])` at F = 0.521, 1.0 and 1.92.
 
 Note the demos still set `rotation_period = P_orb` (synchronous). Modelling Spica properly
@@ -217,7 +217,7 @@ i.e. `D`-dependent, which is neither what is implemented nor what any reference 
 (`(1+q)/D³` is in any case the *circular* rate at separation `D`; the true instantaneous
 orbital rate is larger by `1 + e·cos ν`.)
 
-This term was previously `−q·r·λ·D`, matching Aufdenberg et al. 2015 eqs. A18/A27/A30 —
+NOTE this disagrees with Aufdenberg et al. 2015 eqs. A18/A27/A30, which give `−q·r·λ·D` —
 internally self-consistent with his A1, but wrong by `D³` relative to the above. Two
 independent modern codes write the correct form explicitly:
 
@@ -233,11 +233,11 @@ ELISa     elisa/binary_system/model.py, pre_calculate_for_potential_value_primar
 Both give `−q·r·λ/D²` for the linear term and a rotational term with **no** `D`
 dependence, matching what is implemented here.
 
-The old `·D` form over-weighted the term by `D³`, and past a threshold it overwhelms the
-tidal attraction and points the bulge *away* from the companion.
+The `·D` form over-weights the term by `D³`, and past a threshold it overwhelms the tidal
+attraction and points the bulge *away* from the companion.
 For Spica (`q = 0.619`, `rpole/a = 0.290`) that threshold is `D/a = 1.031`, and every
 modern eccentricity determination (0.065, 0.118, 0.123) puts apastron beyond it — so the
-bulge was inverted for roughly half of every orbit:
+bulge inverts for roughly half of every orbit:
 
 ```
   D/a     front(λ=+1)  back(λ=−1)   difference

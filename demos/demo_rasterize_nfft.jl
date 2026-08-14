@@ -92,8 +92,7 @@ u_extent = [Float64(v_freq_shifted[1]), Float64(v_freq_shifted[end]),
 fig, axes = subplots(2, 2, figsize=(12, 10))
 
 # Top-left: rasterization
-    # 0-BASED indexing: under PythonCall `subplots` returns a Py numpy array of axes,
-    # not the Julia Matrix PyCall used to convert it into.
+    # 0-BASED indexing: `subplots` returns a Py numpy array of axes, not a Julia Matrix.
 axes[0,0].imshow(img_raster, origin="lower",
                  extent=[-half_fov, half_fov, -half_fov, half_fov],
                  cmap="hot", interpolation="nearest")

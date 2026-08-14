@@ -41,11 +41,11 @@ matplotlib. You normally do not have to do anything: PythonCall manages a privat
 environment through CondaPkg, and installs matplotlib (plus `ultranest` and
 `astroquery`, declared by OITOOLS) on first use.
 
-Two notes if you are coming from the PyCall era:
+Two notes:
 
-* `ENV["PYTHON"]` and `Pkg.build("PyCall")` no longer apply. To point PythonCall at an
-  interpreter you already have, set `JULIA_PYTHONCALL_EXE` to its absolute path and
-  `JULIA_CONDAPKG_BACKEND=Null`; that environment must then supply matplotlib itself.
+* To point PythonCall at an interpreter you already have, set `JULIA_PYTHONCALL_EXE` to its
+  absolute path and `JULIA_CONDAPKG_BACKEND=Null`; that environment must then supply
+  matplotlib itself.
 * OITOOLS ≥ 0.11.1 requires **numpy ≥ 2**. PythonCall's `__array__` passes
   `copy=None`, the numpy-2 spelling of "copy only if needed", which numpy 1.x rejects
   with `ValueError: NoneType copy mode not allowed`. The failure is data-dependent —

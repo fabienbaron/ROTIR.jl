@@ -1,6 +1,6 @@
 using ROTIR
 # LOAD DATA
-oifitsfiles = ["./data/MEDIAN5.MIRCX_L2.2025Oct30.HD_432.MIRCX_IDL.bet_Cas.AVG10m.oifits"]
+oifitsfiles = [joinpath(@__DIR__, "data", "MEDIAN5.MIRCX_L2.2025Oct30.HD_432.MIRCX_IDL.bet_Cas.AVG10m.oifits")]
 data_all = readoifits_multiepochs(oifitsfiles; T=Float32);
 data = data_all[1, :]; # select first wavelength bin, all epochs
 nepochs = length(data)
