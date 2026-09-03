@@ -126,7 +126,18 @@ function _cvis_forward!(F, kx, ky, k2, pjx, pjy, xw)
                   "`using LoopVectorization` to this session. It is a weak dependency " *
                   "because loading it costs 1.8 s of GUI startup by invalidating OITOOLS' " *
                   "precompiled plot pipeline, and `:nufft` — the default — is faster anyway.")
-        return _cvis_turbo!(F, kx, ky, k2, pjx, pjy, xw)
+        # `invokelatest`, and it is NOT optional. `_cvis_turbo!` gets its methods when
+        # LoopVectorization is loaded, and the GUI loads it ON DEMAND — in the middle of a
+        # session, from a callback the Qt event loop dispatches. Methods added after the
+        # calling frame's world age are invisible to it, so a direct call lands on the stub
+        # and throws a MethodError that the χ² path catches and reports as "χ² failed": the
+        # backend appears to switch while every number comes back empty. The GUI's event loop
+        # makes this permanent rather than transient, since every later callback still runs
+        # in the world age fixed when `QML.exec()` was entered.
+        #
+        # The cost is one dynamic dispatch per VISIBILITY COMPUTATION — not per element — so
+        # against milliseconds of kernel it does not register.
+        return Base.invokelatest(_cvis_turbo!, F, kx, ky, k2, pjx, pjy, xw)
     end
     return _cvis_scalar!(F, kx, ky, k2, pjx, pjy, xw)
 end

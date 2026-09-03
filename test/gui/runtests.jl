@@ -765,8 +765,16 @@ end
     for b in ("turbo", "nufft")
         # The RETURN and the selection, not only the number. This compared χ² alone, and
         # since all three agree, a backend that silently failed to be selected passed the
-        # test — which is exactly what happened when `:turbo` moved into an extension and the
-        # launcher manifest had not recorded it yet.
+        # test — which is exactly what happened twice: once when `:turbo` moved into an
+        # extension and the launcher manifest had not recorded it, and once because loading
+        # LoopVectorization mid-session leaves its methods invisible to the frame that
+        # loaded it (world age), so the χ² came back `nothing` and only the selection said
+        # anything was wrong.
+        #
+        # The ORDER here is the regression test for the second: `:turbo` is selected and its
+        # χ² taken inside ONE top-level block, so the world age never advances between the
+        # load and the call — which is the GUI's situation, where every callback runs in the
+        # world age fixed when `QML.exec()` was entered.
         msg = G.shell_set_polyft_backend(b)
         @test occursin(b, msg)
         @test G.shell_polyft_backend() == b
