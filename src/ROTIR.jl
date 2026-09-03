@@ -173,6 +173,10 @@ pigeons_available() = !isempty(methods(_fit_pigeons))
 # types, rather than "not defined" — which reads as a missing feature instead of a missing
 # `using GLMakie, QMLMakie, QML`.
 function gui end
+# `rotirgui()` loads the toolkit stack and then calls `gui`. It lives in the core package
+# BECAUSE the extension does not exist yet at the moment it is needed — its whole job is to
+# bring that extension into being, in the order the graphics stack requires.
+include("gui_launcher.jl")
 function star_mesh end
 function scene3d end
 function relative_orbit_track end
@@ -335,6 +339,7 @@ export plot_mollweide_makie, mollweide_xy, mollweide_grid
 export add_tessel_collection_makie!, draw_limb_makie!, draw_compass_makie!,
        draw_graticules_makie!, draw_rotation_axis_makie!, draw_rotation_arrow_makie!,
        plot3d_binary_makie, star_mesh, scene3d, relative_orbit_track, gui,
+       rotirgui,
        nautilus_available, hmc_available,
        tessel_polygons, map_colors, sky_axis_max, style_sky_axis!
 
