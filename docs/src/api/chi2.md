@@ -147,3 +147,19 @@ destroy real structure: [Radial Regularizers](radial_regularizers.md).
 |----------|-------------|
 | `parametric_temperature_map(params, star)` | Generate von Zeipel temperature map for any surface type |
 | `spheroid_parametric_f(params, tessels, data, tepochs)` | End-to-end: parameters to chi2 |
+
+## Saving a surface map
+
+A ROTIR map is a bare `Vector` of per-tessel values: on its own it does not record which
+tessellation it belongs to, whether it is a temperature or an intensity, or what geometry it
+was fitted against — so it cannot be turned back into a chi-squared a week later. These write
+it to FITS together with everything needed to reproduce that, and read it back with the
+parameter types it was saved with (`surface_type` and `ldtype` stay `Int`, which matters
+because the code branches on them with `==`).
+
+See [Saving a reconstruction](../guides/reconstruction.md) for the round trip.
+
+```@docs
+save_surface_map
+load_surface_map
+```
