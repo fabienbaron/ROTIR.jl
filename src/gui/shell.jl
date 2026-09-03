@@ -679,6 +679,10 @@ function shell_set_polyft_backend(kind)
             # is not what is wanted anyway: loading the package is what activates
             # ROTIRLoopVectorizationExt and gives `_cvis_turbo!` its methods.
             @eval Main using LoopVectorization
+            # The documented way to force extension activation. Not needed in practice —
+            # loading the trigger activates ROTIRLoopVectorizationExt synchronously — but
+            # harmless, and the check below is what actually reports a failure.
+            Base.retry_load_extensions()
         catch e
             return "turbo needs LoopVectorization, which failed to load: " *
                    sprint(showerror, e)

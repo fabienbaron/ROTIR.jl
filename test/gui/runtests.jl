@@ -763,9 +763,19 @@ end
     G.shell_open(LAM[1], "0"); G.shell_add_model(0)
     c_scalar = G.epoch_chi2(sh)[1].total
     for b in ("turbo", "nufft")
-        G.shell_set_polyft_backend(b)
+        # The RETURN and the selection, not only the number. This compared χ² alone, and
+        # since all three agree, a backend that silently failed to be selected passed the
+        # test — which is exactly what happened when `:turbo` moved into an extension and the
+        # launcher manifest had not recorded it yet.
+        msg = G.shell_set_polyft_backend(b)
+        @test occursin(b, msg)
+        @test G.shell_polyft_backend() == b
         @test abs(G.epoch_chi2(sh)[1].total - c_scalar) / c_scalar < 1e-4
     end
+    # `:turbo` needs LoopVectorization, which the GUI does NOT load at startup — selecting it
+    # loads it on demand. By here that has happened, so the extension must be live: if the
+    # lazy load had failed, `shell_set_polyft_backend` would have said so above.
+    @test ROTIR.turbo_available()
     G.shell_set_polyft_backend("nufft")
 end
 
