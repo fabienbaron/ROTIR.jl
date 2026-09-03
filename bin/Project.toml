@@ -1,0 +1,22 @@
+[deps]
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+FINUFFT = "d8beea63-0952-562e-9c6a-8e8ef7364055"
+GLFW_jll = "0656b61e-2033-5cc2-a64a-77c0f6c09b89"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
+OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
+Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
+QML = "2db162a6-7e43-52c3-8d84-290c1c42d82a"
+QMLMakie = "08f9cac3-3b11-4f1c-9d88-d0e81c500f64"
+ROTIR = "1effc416-1cd3-435e-ba3b-8cf647137d25"
+Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
+
+[sources]
+Nautilus = {url = "https://github.com/fabienbaron/Nautilus.jl.git"}
+OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
+ROTIR = {path = ".."}

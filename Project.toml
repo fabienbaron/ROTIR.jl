@@ -6,65 +6,89 @@ desc = "Regularized imaging of stellar surfaces from optical interferometry, Dop
 version = "0.6.0"
 authors = ["Fabien Baron <fbaron@gsu.edu>"]
 
-# NOTE: the parametric model in src/parametric_gradient.jl is AD-agnostic — it defines
-# ChainRulesCore rrules only, so no AD package is a dependency here. Load Zygote (or any
-# ChainRules-compatible AD) in your own environment to differentiate `build_parametric_logπ`.
-# The NUTS demo's sampling stack (AdvancedHMC, Pathfinder, LogDensityProblems) lives in
-# demos/Project.toml.
-
 [deps]
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+FINUFFT = "d8beea63-0952-562e-9c6a-8e8ef7364055"
 FITSIO = "525bcba6-941b-5504-bd06-fd0dc1a4d2eb"
-LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 NFFT = "efe261a4-0d2b-5849-be55-fc731d526b0d"
 NLopt = "76087f3c-5699-56af-9a33-bf431cd00edd"
 OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
 OptimPackNextGen = "080ffe24-4a27-4ab0-ad71-7b624e73ef8d"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
-PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
-PythonPlot = "274fc56d-3b97-40fa-a1cd-1b4a50311bf9"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-# Compiles the tied-parameter expressions in src/orbit_model.jl into a single function
-# at model-build time, so a fit does not walk a dictionary per likelihood call.
 RuntimeGeneratedFunctions = "7e49a35a-f44a-4d26-94aa-eba1b4ca6b47"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [weakdeps]
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
+Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+PythonPlot = "274fc56d-3b97-40fa-a1cd-1b4a50311bf9"
+QML = "2db162a6-7e43-52c3-8d84-290c1c42d82a"
+QMLMakie = "08f9cac3-3b11-4f1c-9d88-d0e81c500f64"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
-[extensions]
-ROTIRZygoteExt = "Zygote"
-
-# OITOOLS is unregistered: this tells Pkg where to get it, so a fresh clone can
-# `Pkg.instantiate()` with no local checkout. To work against a
-# local checkout instead, `Pkg.develop(path="../OITOOLS.jl")` — that wins in the Manifest.
-# Deliberately no `rev`: that tracks the default branch. (`Pkg.add(url=...)` will rewrite
-# this file and pin `rev = "main"`; prefer `Pkg.update("OITOOLS")` to move it forward.)
 [sources]
+Nautilus = {url = "https://github.com/fabienbaron/Nautilus.jl.git"}
 OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
 
+[extensions]
+ROTIRGUIExt = ["GLMakie", "Makie", "QML", "QMLMakie"]
+ROTIRHMCExt = ["AdvancedHMC", "LogDensityProblems", "Zygote"]
+ROTIRMakieExt = "Makie"
+ROTIRNautilusExt = "Nautilus"
+ROTIRPigeonsExt = ["Pigeons", "Distributions", "LogDensityProblems", "ADTypes", "Zygote"]
+ROTIRPythonPlotExt = ["PythonPlot", "LaTeXStrings", "PythonCall"]
+ROTIRUltraNestExt = "PythonCall"
+ROTIRZygoteExt = "Zygote"
+
 [compat]
+ADTypes = "1"
+AdvancedHMC = "0.6, 0.7, 0.8"
 ChainRulesCore = "1.26.1"
+Dates = "1.11.0"
+Distributions = "0.25"
+FINUFFT = "3.5.2"
 FiniteDifferences = "0.12.34"
+GLMakie = "0.13"
+LogDensityProblems = "2"
+LoopVectorization = "0.12.174"
+Makie = "0.24"
 NLopt = "1"
-OITOOLS = "0.11.1"
+Nautilus = "0.1"
+OITOOLS = "0.13"
+Pigeons = "0.4"
+PrecompileTools = "1.2"
 PythonCall = "0.9"
 PythonPlot = "1"
-PrecompileTools = "1.2"
+QML = "0.13"
+QMLMakie = "0.3"
 RuntimeGeneratedFunctions = "0.5"
 Zygote = "0.7.11"
-julia = "1.12"   # OITOOLS requires 1.12; `[sources]` (see above) additionally needs Pkg ≥ 1.11.
-                 # This said 1.11 until 0.6.0, which was never satisfiable: OITOOLS would not
-                 # load, so ROTIR could not either. CI on 1.11 failed in OITOOLS' build step.
+julia = "1.12"
 
 [extras]
 FiniteDifferences = "26cc04aa-876d-5657-8c51-4c34ba976000"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+PythonPlot = "274fc56d-3b97-40fa-a1cd-1b4a50311bf9"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [targets]
-test = ["Test", "FiniteDifferences", "Zygote"]
+test = ["Test", "FiniteDifferences", "Zygote", "PythonPlot", "LaTeXStrings", "Nautilus", "PythonCall"]

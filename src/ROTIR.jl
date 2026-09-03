@@ -16,8 +16,15 @@ using NLopt
 using Printf
 using PrecompileTools
 using ChainRulesCore
+using LoopVectorization
+import FINUFFT
+import FITSIO
+import FITSIO: read_header
+import Dates
 
 include("oistars.jl");
+include("surface_schema.jl");
+include("surface_map_io.jl");
 include("soft_visibility.jl");
 
 # Convert all AbstractFloat fields of a NamedTuple to type T in one shot.
@@ -37,11 +44,144 @@ include("bootstrap.jl");
 include("parametric_fit.jl");
 include("orbit_ties.jl");    # before orbit_fit.jl: OrbitFitSpec holds an OrbitTies
 include("orbit_fit.jl");
-include("ultranest.jl");
+# src/ultranest.jl and src/fit_ultranest.jl are NOT included here: they need PythonCall and
+# live in ext/ROTIRUltraNestExt.jl.
 include("rasterize.jl");
 include("polyft_nfft.jl");
-include("oiplot_spheroid.jl");
-include("animation.jl");
+include("oiplot_spheroid_core.jl");  # mesh geometry shared by both plotting back-ends
+include("animation.jl");             # pure: frame maps, value ranges, ffmpeg driver
+
+# ── Plotting: declared here, given methods by an extension ───────────────────
+#
+# The drawing code itself lives in src/oiplot_spheroid.jl (matplotlib) and
+# src/animation_movie.jl, loaded by ROTIRPythonPlotExt when the caller has PythonPlot. A
+# Makie implementation attaches to these same names from ROTIRMakieExt.
+#
+# Two reasons this is not in the core load path, both borrowed from OITOOLS:
+#
+#  1. `using ROTIR` imported matplotlib whether or not anything was ever plotted — a cost
+#     paid by every reduction script and CI run.
+#  2. It is a hard blocker for a QML GUI. matplotlib probes for an interactive backend, finds
+#     PySide6 in the conda environment and maps Qt 6.11 into the process; QML.jl needs its own
+#     Qt to be the only one, and the collision surfaces as
+#     `libQt6DBus.so: undefined symbol: _ZN14QObjectPrivateC2E16QtPrivate_6_10_2`.
+#
+# PythonCall is a WEAK dependency too, and for a reason measured rather than assumed: loading
+# it invalidates the plot-construction code OITOOLS precompiles for its live canvas, taking
+# `build_canvas` from 338 ms to 2477 ms. That 1.2 s landed on every ROTIR GUI start, sampler
+# or no sampler. UltraNest is therefore in ext/ROTIRUltraNestExt.jl, which PythonCall
+# triggers; `:nautilus` is the pure-Julia sampler for anyone who wants one without Python.
+function plot2d end
+function plot2d_binary end
+function plot2d_wireframe end
+function plot2d_allepochs end
+function plot3d end
+function plot_mollweide end
+function plot_rv end
+function draw_compass end
+function draw_rotation_axis end
+function draw_rotation_arrow end
+function draw_graticules end
+function draw_limb! end
+function add_tessel_collection! end
+function binary_movie end
+# Not exported, but reached as `ROTIR.name` by demos and tests, so they must be declared in
+# this module rather than left local to the extension.
+function set_oiplot_defaults end
+function plot2Dquad end
+function set_tick_spacing end
+
+# ── The Makie drawing layer (ROTIRMakieExt) ─────────────────────────────────
+#
+# Declared here for the same reason as the matplotlib stubs, and additionally because a GUI
+# extension will call them: one extension cannot reach into another, so both attach to
+# functions this module owns. `using Makie` — which every Makie backend brings — gives them
+# methods. The `_makie` suffix exists because both back-ends can be loaded at once; it goes
+# away when matplotlib does.
+function plot2d_makie end
+function plot3d_makie end
+function plot2d_wireframe_makie end
+function plot2d_binary_makie end
+function plot2d_allepochs_makie end
+function plot_rv_makie end
+function plot_mollweide_makie end
+function mollweide_xy end
+function mollweide_grid end
+function add_tessel_collection_makie! end
+function draw_limb_makie! end
+function draw_compass_makie! end
+function draw_graticules_makie! end
+function draw_rotation_axis_makie! end
+function draw_rotation_arrow_makie! end
+function plot3d_binary_makie end
+# Not exported: internal to the plotting layers, but declared here so the Makie
+# extension extends it and the GUI extension can reach it through ROTIR.
+function _padded_cmap end
+# The Nautilus sampler, implemented in ext/ROTIRNautilusExt.jl. Declared here so that
+# `method = :nautilus` can be named — and refused with a message that says WHICH package is
+# missing — in a session that never loads it.
+function _fit_nautilus end
+# NUTS, implemented in ext/ROTIRHMCExt.jl. Declared here so `method = :hmc` can be named — and
+# refused with a message naming the packages — in a session that never loads them.
+function _fit_hmc end
+# UltraNest, implemented in ext/ROTIRUltraNestExt.jl. Declared here for the same reason as the
+# other two: so `method = :ultranest` is a name this package knows, and the failure without
+# PythonCall is a sentence rather than a MethodError on an underscored internal.
+function _fit_ultranest end
+function fit_parametric_ultranest end
+# Non-reversible parallel tempering, implemented in ext/ROTIRPigeonsExt.jl. The sampler for a
+# MULTIMODAL posterior, which is what a real ROTIR χ² is; declared here for the same reason as
+# the other three.
+function _fit_pigeons end
+
+"""
+    hmc_available() -> Bool
+
+Whether `method = :hmc` will work here, i.e. whether `using AdvancedHMC, LogDensityProblems,
+Zygote` has loaded ROTIRHMCExt.
+"""
+hmc_available() = !isempty(methods(_fit_hmc))
+
+"""
+    nautilus_available() -> Bool
+
+Whether `method = :nautilus` will work in this session, i.e. whether `using Nautilus` has
+loaded ROTIRNautilusExt. Checked rather than assumed because the failure otherwise appears as
+a `MethodError` on an underscore-prefixed internal, which says nothing about what to install.
+"""
+nautilus_available() = !isempty(methods(_fit_nautilus))
+
+"""
+    ultranest_available() -> Bool
+
+Whether `method = :ultranest` will work here, i.e. whether `using PythonCall` has loaded
+ROTIRUltraNestExt. The Python `ultranest` package itself is checked separately, when the
+sampler runs — this only says whether the bridge to Python exists at all.
+"""
+ultranest_available() = !isempty(methods(_fit_ultranest))
+
+"""
+    pigeons_available() -> Bool
+
+Whether `method = :pigeons` will work here, i.e. whether
+`using Pigeons, Distributions, LogDensityProblems, ADTypes, Zygote` has loaded
+ROTIRPigeonsExt. The four besides Pigeons are Pigeons' own dependencies, so nothing extra is
+installed by asking for them.
+"""
+pigeons_available() = !isempty(methods(_fit_pigeons))
+# The GUI's entry point. Declared here so `gui()` is a name `using ROTIR` already knows about
+# and the error for calling it without the stack is Julia's "no method", naming the argument
+# types, rather than "not defined" — which reads as a missing feature instead of a missing
+# `using GLMakie, QMLMakie, QML`.
+function gui end
+function star_mesh end
+function scene3d end
+function relative_orbit_track end
+function tessel_polygons end
+function map_colors end
+function sky_axis_max end
+function style_sky_axis! end
+function rgba end
 
 # Re-export OITOOLS functions so users only need `using ROTIR`
 export OIdata, readoifits, readoifits_multiepochs, readfits, writefits
@@ -66,6 +206,16 @@ export upsample_map_stars, downsample_map_stars
 
 # Stellar/binary parameters
 export starparameters, binaryparameters
+
+# What each surface_type requires — the single declaration the validator and any
+# form-generating front-end both read (src/surface_schema.jl).
+export ParamSpec, SurfaceSpec, SURFACE_TYPES, SURFACE_TYPE_ORDER,
+       surface_spec, surface_params, default_star_params, validate_star_params,
+       ld_coefficients_used
+
+# A surface map as a file, with the tessellation and the parameters that reproduce its χ²
+# (src/surface_map_io.jl).
+export save_surface_map, load_surface_map
 
 # Geometry: stars and binaries
 export stellar_geometry
@@ -114,14 +264,19 @@ export binary_orbit_rel, binary_orbit_abs, binary_RV, binary_proj_plane
 
 # OI chi2 and reconstruction
 export setup_oi!, setup_polygon_ft, setup_polyflux_single, setup_polyft_single, setup_polyft_single_alt
-export observables, cvis_to_obs, cvis_chi2, OI_DEFAULT_WEIGHTS, chi2s, mod360
+export observables, cvis_to_obs, cvis_chi2, OI_DEFAULT_WEIGHTS, chi2s, chi2_breakdown, mod360
 export spheroid_chi2_f, spheroid_chi2_fg
-export spheroid_chi2_allepochs_fg, spheroid_chi2_allepochs_f
-export spheroid_total_variation, spheroid_crit_multiepochs_fg
+# NOTE four names were exported here without ever being defined —
+# spheroid_chi2_allepochs_fg, spheroid_crit_multiepochs_fg, spheroid_total_variation and
+# spheroid_l2_fg. Exporting an undefined name is legal, so `using ROTIR` was silent, but any
+# code enumerating `names(ROTIR)` to build a menu hit UndefVarError. The gradient-carrying
+# all-epochs criterion is `spheroid_crit_allepochs_fg`; the TV regularizers are
+# `spheroid_total_variation_fg` / `_variation2_fg`, reached through `spheroid_regularization`.
+export spheroid_chi2_allepochs_f
 export spheroid_radflat_fg, spheroid_radialvar_fg, radflat_bins,
        spheroid_orthold_fg, orthold_direction
 export spheroid_sobel_fg, spheroid_sobel2_fg, max_entropy_fg
-export spheroid_l2_fg, spheroid_harmon_bias_fg, spheroid_regularization
+export spheroid_harmon_bias_fg, spheroid_regularization
 export image_reconstruct_oi, image_reconstruct_oi_crit, image_reconstruct_oi_chi2, image_reconstruct_oi_chi2_fg
 export multires_reconstruct_oi
 export cvis_to_v2, poly_to_cvis, poly_to_flux, cvis_to_t3
@@ -134,13 +289,13 @@ export sigmoid, dsigmoid, soft_visibility
 
 # Fused two-pass polyft (matrix-free forward/adjoint)
 export compute_polyflux_and_cvis!, compute_adjoint_cvis!, compute_adjoint_vertices!
-export precompute_k2_inv_im, fused_spheroid_chi2_fg
+export precompute_k2_inv_im, fused_spheroid_chi2_fg, fused_cvis, POLYFT_BACKEND
 
 # Rasterization (polygon -> image via Sutherland-Hodgman clipping)
 export rasterize_polygon_image!, rasterize_polygon_image, rasterize_adjoint!
 
 # NFFT (polygon -> Fourier grid via Gauss-Legendre quadrature + NFFT)
-export build_gauss_samples, polyft_nfft_forward, polyft_nfft_image
+export build_gauss_samples, polyft_nfft_forward, polyft_nfft_image, polyft_cvis_nufft, quadrature_for
 
 # Shape gradients (joint shape + map optimization)
 export rotation_matrix, dR_dinc, dR_dPA
@@ -165,7 +320,7 @@ export ORBIT_ELEMENTS
 export OrbitTies, compile_ties, apply_ties, resolve_params
 
 export parametric_free_indices
-export fit_parametric_ultranest
+export fit_parametric_ultranest, ultranest_available, pigeons_available
 
 # Plotting
 export plot2d, plot2d_wireframe, plot2d_allepochs
@@ -173,6 +328,15 @@ export plot3d
 export plot_mollweide
 export draw_compass, draw_rotation_axis, draw_rotation_arrow, draw_graticules, draw_limb!
 export plot_rv, plot2d_binary, add_tessel_collection!
+# Makie counterparts (ROTIRMakieExt). Suffixed while both back-ends coexist.
+export plot2d_makie, plot3d_makie, plot2d_wireframe_makie
+export plot2d_binary_makie, plot2d_allepochs_makie, plot_rv_makie
+export plot_mollweide_makie, mollweide_xy, mollweide_grid
+export add_tessel_collection_makie!, draw_limb_makie!, draw_compass_makie!,
+       draw_graticules_makie!, draw_rotation_axis_makie!, draw_rotation_arrow_makie!,
+       plot3d_binary_makie, star_mesh, scene3d, relative_orbit_track, gui,
+       nautilus_available, hmc_available,
+       tessel_polygons, map_colors, sky_axis_max, style_sky_axis!
 
 # Animation
 export binary_movie, binary_frame_maps, frames_to_movie

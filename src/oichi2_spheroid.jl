@@ -54,9 +54,32 @@ end
   return nothing
 end
 
+"""
+    setup_oi!(data, stars)
+
+Precompute the polygon flux and Fourier transform each epoch's geometry needs.
+
+TWO METHODS, and the parametric one is the one that matters. `T` used to be computed as
+`eltype(stars[1].vertices_xyz)` — a type derived at RUN TIME and passed on as a value, so
+`_setup_oi_epoch!` received `::Type` rather than `::Type{Float32}` and the polygon-FT kernel
+below it was inferred at `Any`. Taking `T` from the container's element type makes it a real
+type parameter: JET reports 173 runtime dispatches inside one call on the old signature and 5
+on this one.
+
+The second method is the fallback for a container Julia cannot read a `T` off — a
+`Vector{stellar_geometry}` built by hand, or a mixed-precision one. It still works; it is just
+inferred the way the old one was.
+"""
+function setup_oi!(data, stars::AbstractVector{stellar_geometry{T}}) where {T}
+  _setup_oi_dispatch!(data, stars, T)
+end
+
 function setup_oi!(data, stars)
+  _setup_oi_dispatch!(data, stars, eltype(stars[1].vertices_xyz))
+end
+
+function _setup_oi_dispatch!(data, stars, ::Type{T}) where {T}
   nepochs = size(data,1);
-  T = eltype(stars[1].vertices_xyz);
   if nepochs>1
     Threads.@threads for i=1:nepochs
       _setup_oi_epoch!(stars[i], data[i], T)
@@ -243,8 +266,70 @@ Model observables for a single component. See [`poly_to_cvis`](@ref) for the
 intensity-model keywords.
 """
 function observables(x, star, data; intensity_model::Symbol = :linear, band = nothing)
-  cvis_model = poly_to_cvis(x, star; intensity_model=intensity_model, band=band);
+  # AN EMPTY `polyft` MEANS "no matrix was built", not "an error". `poly_to_cvis` reads
+  # `star.polyft`, which only exists after `setup_oi!`; when it does not, the visibilities are
+  # computed by the matrix-free route instead of failing.
+  #
+  # That makes the choice automatic and puts it where it belongs. A caller with a FIXED
+  # geometry and a varying map — imaging, hundreds of VMLMB iterations — runs `setup_oi!` once
+  # and gets the matrix. A caller whose geometry changes every evaluation, or that just wants
+  # one χ² for a table, skips it and pays nothing for a matrix it would read once. MEASURED on
+  # polaris at HEALPix 3: `setup_oi!` alone is 741 ms, and the whole fused evaluation is 4 ms.
+  cvis_model = isempty(star.polyft) ?
+      fused_cvis(x, star, data; intensity_model=intensity_model, band=band) :
+      poly_to_cvis(x, star; intensity_model=intensity_model, band=band);
   return cvis_to_obs(cvis_model, data)
+end
+
+"""
+    chi2_breakdown(x, star, data; intensity_model=:linear, band=nothing) -> NamedTuple
+    chi2_breakdown(x, stars, data::AbstractVector; ...) -> NamedTuple
+
+The χ² breakdown as DATA rather than as printed output.
+
+[`chi2s`](@ref) returns the three ABSOLUTE χ² but prints the three REDUCED ones, so a caller
+that wants what it saw on screen has to fetch `data.nv2`, `data.nt3amp` and `data.nt3phi` and
+divide — three chances to pair the wrong count with the wrong sum, silently. This returns
+both, with the counts that produced them:
+
+    (; v2, t3amp, t3phi, total,            # absolute
+       nv2, nt3amp, nt3phi, ndata,         # counts
+       v2r, t3ampr, t3phir, totalr)        # reduced
+
+`totalr` divides by the total number of data points, NOT by the number of free parameters:
+this is a goodness-of-fit summary of a fixed map, not a fitted-model χ²ᵥ. Empty observables
+give `NaN` rather than a division error, which is what an OIFITS with no T3 should show.
+
+The multi-epoch method sums over epochs and additionally returns `epochs`, the per-epoch
+breakdowns, which is what a per-epoch table wants.
+"""
+function chi2_breakdown(x, star, data; intensity_model::Symbol = :linear, band = nothing)
+  chi2_v2, chi2_t3amp, chi2_t3phi = chi2s(x, star, data; verbose = false,
+                                          intensity_model = intensity_model, band = band)
+  return _chi2_breakdown(chi2_v2, chi2_t3amp, chi2_t3phi,
+                         data.nv2, data.nt3amp, data.nt3phi)
+end
+
+function chi2_breakdown(x, stars, data::AbstractVector; intensity_model::Symbol = :linear,
+                        band = nothing)
+  per = [chi2_breakdown(x, stars[i], data[i]; intensity_model = intensity_model, band = band)
+         for i in eachindex(data)]
+  tot = _chi2_breakdown(sum(e.v2 for e in per), sum(e.t3amp for e in per),
+                        sum(e.t3phi for e in per), sum(e.nv2 for e in per),
+                        sum(e.nt3amp for e in per), sum(e.nt3phi for e in per))
+  return merge(tot, (; epochs = per))
+end
+
+# 0/0 is NaN for floats already, but the guard is explicit: an integer count of 0 would make
+# this an error rather than a NaN, and "no T3 in this file" must not look like a failure.
+_reduced(chi2, n) = n > 0 ? chi2 / n : oftype(chi2 / oneunit(chi2), NaN)
+
+function _chi2_breakdown(v2, t3amp, t3phi, nv2, nt3amp, nt3phi)
+  total = v2 + t3amp + t3phi
+  ndata = nv2 + nt3amp + nt3phi
+  return (; v2, t3amp, t3phi, total, nv2, nt3amp, nt3phi, ndata,
+          v2r = _reduced(v2, nv2), t3ampr = _reduced(t3amp, nt3amp),
+          t3phir = _reduced(t3phi, nt3phi), totalr = _reduced(total, ndata))
 end
 
 function chi2s(x, star, data; verbose::Bool = true,
@@ -327,14 +412,34 @@ chi2_t = zeros(eltype(x), nepochs);
 Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
   chi2_t[i] = spheroid_chi2_f(x, stars[i], data[i], verbose=verbose);
 end
-f = sum(chi2_t)
-if epochs_weights!=[]
-  f = f.*epochs_weights
-end
+# The weights go on the per-epoch terms, BEFORE the sum. `f = f.*w` after summing — which is
+# what stood here — multiplies a scalar by a vector and returns a VECTOR from a function whose
+# every caller expects a number.
+w = _epoch_weights(epochs_weights, nepochs, eltype(x))
+f = w === nothing ? sum(chi2_t) : sum(chi2_t .* w)
 if verbose == true 
-  printstyled(@sprintf("All epochs, χ²r: %.4f\n\n", f), color=:white);
+  printstyled(@sprintf("All epochs, total χ²: %.4f\n\n", f), color=:white);
 end
 return f;
+end
+
+"""
+    _epoch_weights(w, nepochs, T) -> Vector{T} or nothing
+
+Validate a per-epoch weight vector. `nothing` means "unweighted", which is the common case and
+is worth not multiplying by a vector of ones.
+
+Rejected rather than recycled or padded: a weight vector of the wrong length is a mistake about
+which epochs are being weighted, and quietly broadcasting it would weight the wrong nights.
+"""
+function _epoch_weights(w, nepochs::Int, ::Type{T}) where T
+    (w === nothing || isempty(w)) && return nothing
+    length(w) == nepochs ||
+        throw(DimensionMismatch("epochs_weights has $(length(w)) entries for $(nepochs) " *
+                                "epochs"))
+    any(x -> x < 0 || !isfinite(x), w) &&
+        throw(ArgumentError("epochs_weights must be finite and non-negative"))
+    return collect(T, w)
 end
 
 function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[],
@@ -347,14 +452,21 @@ function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_w
   Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
     chi2_t[i] = spheroid_chi2_fg(x, singleepoch_g[i], stars[i], data[i], verbose=verbose);
   end
-  f = sum(chi2_t)
-  if epochs_weights!=[]
-  #  f = f.*epochs_weights
-    @warn "Epoch weights not implemented"
-   end 
-  g[:] .= sum(singleepoch_g)
+  # PER-EPOCH WEIGHTS, applied to the criterion AND to the gradient. This warned "not
+  # implemented" and silently ignored the argument; the commented-out attempt beside it
+  # (`f = f.*epochs_weights`) could not have worked either, because `f` is already the scalar
+  # sum by that point and the weights have to go on the per-epoch terms.
+  #
+  # What they are for: a night with a bad calibration should be able to count for less without
+  # being thrown away, and down-weighting is the only alternative to dropping it.
+  w = _epoch_weights(epochs_weights, nepochs, T)
+  f = w === nothing ? sum(chi2_t) : sum(chi2_t .* w)
+  # The gradient carries the same weights, or the map is optimised against a different
+  # criterion from the one being reported — which converges, to the wrong thing.
+  g[:] .= w === nothing ? sum(singleepoch_g) :
+          sum(w[i] .* singleepoch_g[i] for i in 1:nepochs)
   if verbose == true
-    printstyled(@sprintf("Total χ²r: %.4f\n", f), color=:white);
+    printstyled(@sprintf("Total χ²: %.4f\n", f), color=:white);
   end
   # Map regularization
   if regularizers!=[]
@@ -800,7 +912,9 @@ function orthold_direction(star, x0, star_params; subset = nothing)
     ld1 = Float64(star_params.ld1)
     ld2 = Float64(hasproperty(star_params, :ld2) ? star_params.ld2 : 0.0)
     nz  = Float64.(star.normals[idx, 3])
-    ld, _, dld_dld1, _ = ld_and_derivs(nz, ldtype, ld1, ld2)
+    ld3 = Float64(hasproperty(star_params, :ld3) ? star_params.ld3 : 0.0)
+    ld4 = Float64(hasproperty(star_params, :ld4) ? star_params.ld4 : 0.0)
+    ld, _, dld_dld1, _ = ld_and_derivs(nz, ldtype, ld1, ld2, ld3, ld4)
     vis = Float64.(star.vis_weights[idx])
     x0v = Float64.(x0[idx])
     v   = x0v .* vis .* dld_dld1                 # model-space degenerate direction
@@ -978,28 +1092,74 @@ end
 
 using OptimPackNextGen
 
-function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf, maxiter = 100, regularizers =[])
+"""
+    image_reconstruct_oi(x_start, data, stars; maxiter, regularizers, callback, callback_every, ...)
+
+Reconstruct a surface map by VMLMB.
+
+`callback`, when given, is called as `callback(x, nevals, f)` every `callback_every`
+evaluations (and once on the first), which is what lets a caller show the map WHILE the engine
+runs instead of only when it stops. A twenty-minute reconstruction otherwise reports nothing
+but a scrolling trace.
+
+Two things the callback must respect:
+
+  * **`x` belongs to the optimiser.** It is the working vector VMLMB is about to overwrite, so
+    a callback that keeps it must `copy` it. Passing it uncopied is deliberate: the common case
+    reads a summary off it and copying every time would charge the whole run for that.
+  * **The count is EVALUATIONS, not iterations.** VMLMB evaluates the criterion more often than
+    it iterates, because a rejected line-search step re-evaluates. There is no iteration number
+    to report from here; `printer` at `OptimPackNextGen`'s own level has one, and does not
+    have `x`.
+
+No throttling policy is imposed beyond the count: at roughly 60 µs per likelihood a callback
+every 25 evaluations is not measurable, and a caller that wants every one can say so.
+"""
+function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf, maxiter = 100, regularizers =[],
+                              callback = nothing, callback_every::Int = 25)
   x_sol = [];
-  crit_imaging = (x,g)->spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers, epochs_weights=  epochs_weights, verbose = verbose);
+  nevals = Ref(0)
+  crit_imaging = function (x, g)
+      f = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers, epochs_weights=epochs_weights, verbose = verbose)
+      nevals[] += 1
+      if callback !== nothing && (nevals[] == 1 || nevals[] % max(1, callback_every) == 0)
+          # A callback that throws must not take the reconstruction with it: it is a progress
+          # report, and the run is the thing worth finishing.
+          try
+              callback(x, nevals[], f)
+          catch err
+              @warn "image_reconstruct_oi: callback failed, continuing without it" exception = err
+              callback = nothing
+          end
+      end
+      return f
+  end
   x_sol = OptimPackNextGen.vmlmb(crit_imaging, x_start, verb=verbose, lower=lower, upper=upper, maxiter=maxiter, blmvm=false, gtol=(0,1e-8));
   dummy = similar(x_sol);
   crit_opt = crit_imaging(x_sol,dummy);
   return x_sol
 end
 
-function image_reconstruct_oi_crit(x, data, stars; regularizers =[],  verbose = verbose)
+# `verbose` defaults to FALSE, not to `verbose`. These three read `verbose = verbose` until
+# 2026-08, which is not a self-reference to the keyword but a lookup of a GLOBAL named
+# `verbose` — there is none, so every call that did not pass `verbose=` explicitly raised
+# `UndefVarError(:verbose)`. It went unnoticed because every caller in the repo does pass it.
+# False is the right default here: unlike `image_reconstruct_oi`, these evaluate a criterion
+# at a given map and are typically called in a scan loop (see demos/rwcep_radflat.jl,
+# demos/alphacen_ld.jl), where per-call printing is noise.
+function image_reconstruct_oi_crit(x, data, stars; regularizers = [], verbose = false)
   g = similar(x);
   crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers,epochs_weights=[],  verbose = verbose);
   return crit
 end
 
-function image_reconstruct_oi_chi2(x, data, stars;  verbose = verbose)
+function image_reconstruct_oi_chi2(x, data, stars; verbose = false)
   g = similar(x);
   crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=[], epochs_weights= [], verbose = verbose);
   return crit
 end
 
-function image_reconstruct_oi_chi2_fg(x, data, stars;  verbose = verbose)
+function image_reconstruct_oi_chi2_fg(x, data, stars; verbose = false)
   g = similar(x);
   crit = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=[], epochs_weights= [], verbose = verbose);
   return crit,g

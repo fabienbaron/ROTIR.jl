@@ -61,6 +61,46 @@ for i in 1:nepochs
     tepochs[i] = mean(data[i].v2_mjd) + 2400000.5
 end
 bands = [band_of(d) for d in data]
+
+# ---------------------------------------------------------------------------------------
+# BAND: which combiner are we pretending to be?
+# ---------------------------------------------------------------------------------------
+# BAND=native (default) uses the wavelengths in the file — CHARA/MIRC-X in H, ~1.61 um.
+# BAND=<microns> re-flies the SAME PHYSICAL BASELINES at a different wavelength, which is
+# what CHARA/SPICA is: the same array, a visible-light combiner (~0.6-0.9 um).
+#
+# `uv` is stored as metres/wavelength, i.e. spatial frequency, so a shorter wavelength on
+# the same baseline is simply uv * (lambda_native / lambda_new). Errors are left at their
+# measured FRACTIONAL values, so this isolates the effect of RESOLUTION and of the Planck
+# lever arm — it is not a prediction of SPICA's photometric performance.
+#
+# Why this matters here: the proximity effects scale with wavelength through two channels
+# that pull in opposite directions in importance.
+#
+#   1. THERMAL. Irradiation and gravity darkening are temperature perturbations, and a
+#      given dT/T produces a flux contrast dlnB/dlnT = x e^x/(e^x - 1) with x = hc/(lambda k T).
+#      At 20585 K this is 1.23 in H and 1.58 at 0.7 um — only a 1.28x gain. Visible light
+#      is NOT deep in the Wien regime for a 20-25 kK star.
+#   2. SPATIAL. Resolution is lambda/2B, so 1.61 -> 0.65 um is 2.5x finer. Decisive, because
+#      the primary's first visibility null moves from 449 m (beyond CHARA's 331 m, so the
+#      curve never turns over) to 181 m (well inside). Only past the null do diameter, limb
+#      darkening and tidal elongation stop trading against one another — and that
+#      degeneracy, not sensitivity, is what limited the H-band result to 1.3 sigma.
+#
+# So the expected gain is much larger than the 1.28x thermal factor alone.
+const BAND = get(ENV, "BAND", "native")
+const BANDLABEL = if BAND == "native"
+    @sprintf("H band, MIRC-X (native, %.3f um)", 1e6mean(bands))
+else
+    lam_new = parse(Float64, BAND) * 1e-6
+    for i in 1:nepochs
+        data[i].uv .*= bands[i] / lam_new       # same baselines, new wavelength
+        bands[i] = lam_new
+    end
+    @sprintf("R band, SPICA-like (%.3f um, same CHARA baselines)", 1e6lam_new)
+end
+println("\nBAND: ", BANDLABEL)
+
 ndata = [d.nv2 + d.nt3amp + d.nt3phi for d in data]
 
 println("\n$nepochs epochs, $(sum(ndata)) data points, " *
@@ -418,9 +458,10 @@ ax.clabel(cs, inline=true, fmt="%.0f")
 im = ax.pcolormesh(As, βs, Z .- Zmin, shading="auto", cmap="viridis")
 ax.plot([A_inj], [BETA], "r*", markersize=16, label="injected")
 ax.set_xlabel("bolometric albedo A"); ax.set_ylabel("von Zeipel β")
-ax.set_title("Δχ² on injected Spica data (contours at 1, 4, 9, 25, 100, 400)")
+ax.set_title("Δχ² on injected Spica data — $BANDLABEL\n(contours at 1, 4, 9, 25, 100, 400)")
 ax.legend(); fig.colorbar(im, ax=ax, label="Δχ²")
-fig.savefig(joinpath(outdir, "beta_albedo_dchi2.png"), dpi=130, bbox_inches="tight")
+_tag = BAND == "native" ? "H" : "R" * replace(BAND, "." => "p")
+fig.savefig(joinpath(outdir, "beta_albedo_dchi2_$(_tag).png"), dpi=130, bbox_inches="tight")
 pyplot.close(fig)
 
 # ---- summary --------------------------------------------------------------------------
@@ -433,6 +474,8 @@ println("="^78)
         dchi2_fixed, sqrt(max(dchi2_fixed, 0)))
 @printf("  Δχ² after absorbing into nuisance params : %.1f  (%.1fσ)\n",
         dchi2_refit, sqrt(max(dchi2_refit, 0)))
-println("  caveats: no mutual occultation (grazing eclipser, $(count(overlap))/$nepochs epochs flagged);")
+println("  band: ", BANDLABEL)
+println("  caveats: mutual occultation is $(OCC === false ? "OFF" : "ON ($OCC)"); " *
+        "$(count(overlap))/$nepochs epochs have overlapping disks (grazing eclipser);")
 println("           one λ per epoch; β and A partly degenerate (see the map).")
 @info "figures in $outdir"

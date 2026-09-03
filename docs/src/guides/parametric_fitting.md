@@ -158,8 +158,42 @@ Both fitters take `method`, selecting how the χ² surface is explored:
 
 ```julia
 fit_sphere_ld(data, tessels; method = :neldermead)   # default — fast point estimate
-fit_sphere_ld(data, tessels; method = :ultranest)    # posterior, uncertainties, log(Z)
+fit_sphere_ld(data, tessels; method = :nautilus)     # posterior, uncertainties, log(Z)
+fit_sphere_ld(data, tessels; method = :ultranest)    # the same, through Python
+fit_sphere_ld(data, tessels; method = :pigeons)      # tempering — for a MULTIMODAL posterior
 ```
+
+!!! tip "Which sampler, and when"
+    `:nautilus` is the default choice for a posterior with one mode: pure Julia, importance
+    nested sampling, and it reuses every likelihood evaluation. `:ultranest` answers the same
+    question through Python and is kept for continuity with published runs.
+
+    `:pigeons` is for the case the other two cannot see. A ROTIR χ² is routinely
+    **multimodal** — `demos/rho_cas_basins.jl` finds several minima between 2.2 and 3.7 mas
+    diameter on one star — and a single NUTS chain samples whichever basin it started in and
+    reports a tight, confident interval that says nothing about the others. Non-reversible
+    parallel tempering moves between basins along the annealed chain ladder and returns
+    `log(Z)` by stepping stone, so nothing is given up for the coverage.
+
+    Read the **round-trip count**, not the sample count: a run whose chains never traversed
+    the ladder has not visited the other modes, and its posterior is the single-basin answer a
+    cheaper sampler would have given. `_fit_pigeons` warns when it is below three.
+
+!!! note "`:pigeons` needs `using Pigeons, Distributions, LogDensityProblems, ADTypes, Zygote`"
+    All four besides Pigeons are Pigeons' own dependencies, so nothing extra is installed.
+    Like PythonCall, Pigeons is a **weak** dependency and the GUI launcher does not load it:
+    measured, `using Pigeons` invalidates the plot-construction code OITOOLS precompiles for
+    its live canvas and takes one canvas build from 370 ms to 3166 ms, i.e. 2.8 s onto every
+    GUI start. Load it in a script, or before `gui()` when you want that fit method.
+
+!!! note "`:ultranest` needs `using PythonCall`"
+    UltraNest is a Python package, and ROTIR reaches it through
+    `ext/ROTIRUltraNestExt.jl`, which PythonCall triggers. PythonCall is a **weak**
+    dependency: loading it invalidates the plot-construction code OITOOLS precompiles for
+    its live canvas — measured at 338 ms → 2477 ms for one canvas build — which put 1.2 s on
+    every ROTIR GUI start whether or not anything sampled. Add `using PythonCall` to a script
+    that wants `:ultranest`, or use `:nautilus`, which is the pure-Julia nested sampler and
+    needs nothing extra.
 
 `:neldermead` uses NLopt's simplex and returns a point. `:ultranest` runs nested sampling
 over the *same* uniform box prior — deliberately the same bounds, so the two methods are

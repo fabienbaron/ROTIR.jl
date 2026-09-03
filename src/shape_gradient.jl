@@ -523,6 +523,28 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
     npix = length(xmap)
     nparams = length(θ)
     stype = star_params_base.surface_type
+    # REFUSED, not approximated. The `else` branch below is the SPHERE layout
+    # (radius, inclination, position_angle), and it used to catch every surface type that was
+    # not 1 or 2 — including 3, the Roche binary, whose shape parameters are `rpole`, `q` and
+    # `fillout_factor` and which has no `radius` at all. `merge` then added a field nothing
+    # reads, the geometry came out identical at every outer iteration, and the θ step
+    # optimised parameters that did nothing: a run that converges, reports a χ², and has not
+    # fitted the shape.
+    stype in (0, 1, 2) || error("""
+        joint_reconstruct_oi: no θ layout for surface_type = $(stype).
+
+        Implemented layouts, matching `shape_chi2_fg!`:
+          0  [radius, inclination, position_angle]
+          1  [radius_x, radius_y, radius_z, inclination, position_angle]
+          2  [rpole, frac_escapevel, inclination, position_angle]
+
+        surface_type 3 (Roche) has no analytic shape gradient, so there is nothing for the θ
+        step to descend. Reconstruct the map at a FIXED Roche geometry with
+        `image_reconstruct_oi`, and fit the shape outside this loop.""")
+    nexpected = stype == 1 ? 5 : stype == 2 ? 4 : 3
+    nparams == nexpected ||
+        throw(DimensionMismatch("joint_reconstruct_oi: surface_type $(stype) takes " *
+                                "$(nexpected) shape parameters, got $(nparams)"))
 
     if θ_lower === nothing
         θ_lower = fill(T(-Inf), nparams)
@@ -544,7 +566,7 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
         elseif stype == 2
             star_params = merge(star_params_base, (rpole=θ[1], frac_escapevel=θ[2],
                                                     inclination=θ[3], position_angle=θ[4]))
-        else
+        else                                       # stype == 0, guarded above
             star_params = merge(star_params_base, (radius=θ[1],
                                                     inclination=θ[2], position_angle=θ[3]))
         end

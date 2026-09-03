@@ -205,3 +205,100 @@ function polyft_nfft_image(proj_west, proj_north, x_weighted, pixsize::Real,
                              ngauss=ngauss, nsub=nsub, T=T, fftflags=fftflags)
     return fftshift(irfft(F, nx))
 end
+
+
+# ── Type-3: the polygon FT at SCATTERED uv, with no grid ────────────────────
+#
+# The functions above answer the image-deconvolution question: the polygon FT on a REGULAR
+# Fourier grid, via an adjoint (type-1) NFFT. Interferometry asks a different one — the
+# transform at 58 616 scattered uv points — and that is a type-3 transform, non-uniform
+# sources to non-uniform targets.
+#
+# NFFT.jl does not have a fast one: `AbstractNFFTs` declares the two-node-set signature but
+# NFFT.jl 0.14 implements only `NNDFTPlan`, the direct O(N·M) sum, which is what we are trying
+# to avoid. FINUFFT's `nufft2d3` is a real type-3 and is what this uses.
+#
+# WHY THIS AND NOT THE RASTERISER. Rasterising the polygons onto a grid and transforming that
+# was measured at 5–74× as well, and it reuses `rasterize_polygon_image` which is already
+# here — but its answer disagrees with the exact polygon FT by ~5e-3 and, measured at
+# nx = 128, 256 and 512, that disagreement does NOT shrink. It is not the transform: an exact
+# DFT of the same image gives the same 4.97e-3, and the rasteriser conserves flux to 1.6e-4.
+# It is the MODEL — a pixel-integrated image is not a polygon, and its edges are gone. The
+# quadrature route has no such floor, because refining `ngauss`/`nsub` refines the integral
+# itself rather than a picture of it: MEASURED at 6.8e-7 (HEALPix 3) and 2.5e-9 (4 and 5) with
+# `ngauss = 4`, the latter being FINUFFT's tolerance rather than the quadrature's error.
+
+"""
+    quadrature_for(proj_west, proj_north, kx, ky; target_rad=1.0) -> (ngauss, nsub)
+
+Pick a quadrature that resolves the OSCILLATION, not one that hopes to.
+
+The integrand is `exp(-2πi k·r)` over a quad, so what decides the rule is the phase span
+across the widest quad, `2π·|k|max·diag`. A fixed rule is therefore accurate at one mesh and
+not at another — measured with `ngauss = 4, nsub = 1`, the error is 2.9e-4 at HEALPix 2 and
+2.5e-9 at HEALPix 4, because coarsening the mesh makes the quads bigger and the phase across
+one of them larger.
+
+Subdivision rather than a higher order: the sub-square span falls as `1/nsub` and the error as
+`1/nsub⁴`, which is the cheaper way to buy accuracy once the span is more than a couple of
+radians (`ngauss` beyond ~6 buys little on an oscillatory integrand).
+
+`target_rad = 2.5` is CALIBRATED, not chosen: on polaris the spans run 16.5 rad at HEALPix 1
+down to 1.3 at HEALPix 5, and the `nsub` this returns for each is the smallest that reaches
+the NUFFT's own tolerance — 2.1e-9 to 2.5e-9 at every level, where a fixed `nsub = 1` ranges
+from 2.0e-2 to 2.5e-9. Uniform accuracy across the mesh is the property that makes the backend
+safe to default to.
+"""
+function quadrature_for(proj_west::AbstractMatrix, proj_north::AbstractMatrix,
+                        kx::AbstractVector, ky::AbstractVector; target_rad::Real = 2.5)
+    kmax = zero(float(eltype(kx)))
+    @inbounds for i in eachindex(kx)
+        k2 = kx[i]^2 + ky[i]^2
+        k2 > kmax && (kmax = k2)
+    end
+    kmax = sqrt(kmax)
+    dmax = zero(float(eltype(proj_west)))
+    @inbounds for q in axes(proj_west, 1)
+        d1 = hypot(proj_west[q,3] - proj_west[q,1], proj_north[q,3] - proj_north[q,1])
+        d2 = hypot(proj_west[q,4] - proj_west[q,2], proj_north[q,4] - proj_north[q,2])
+        dmax = max(dmax, d1, d2)
+    end
+    span = 2π * kmax * dmax                      # radians across the widest quad
+    nsub = clamp(ceil(Int, span / target_rad), 1, 8)
+    return 4, nsub
+end
+
+"""
+    polyft_cvis_nufft(proj_west, proj_north, xw, kx, ky; ngauss=4, nsub=1, tol=1e-9)
+
+Complex visibilities at SCATTERED uv points, by Gauss-Legendre quadrature over each quad
+folded into one type-3 NUFFT.
+
+Returns the same unnormalised sum as [`compute_polyflux_and_cvis!`](@ref) — the caller divides
+by the flux — and agrees with it to `tol` for `ngauss ≥ 4`.
+
+Its cost is set by the SOURCE COUNT (`nvis · (ngauss·nsub)²`) and the target count, not by the
+product of the two, so it overtakes the direct kernel as the mesh is refined: MEASURED against
+`:turbo` at 8.9× (HEALPix 3), 20.9× (4) and 77.6× (5) on polaris.
+
+`ngauss` and `nsub` default to whatever [`quadrature_for`](@ref) reads off the geometry, which
+is what makes the accuracy uniform across meshes: 2.1e-9 to 2.5e-9 from HEALPix 1 to 5 on
+polaris, against 2.0e-2 to 2.5e-9 for a fixed 1-subdivision rule. Pass them explicitly only to
+override that.
+"""
+function polyft_cvis_nufft(proj_west::AbstractMatrix, proj_north::AbstractMatrix,
+                           xw::AbstractVector, kx::AbstractVector, ky::AbstractVector;
+                           ngauss::Union{Nothing,Int} = nothing,
+                           nsub::Union{Nothing,Int} = nothing, tol::Real = 1e-9)
+    # ADAPTIVE by default. A fixed rule is accurate at one mesh and not at another, and the
+    # caller has no way to know which — `quadrature_for` reads it off the geometry.
+    ag, as = quadrature_for(proj_west, proj_north, kx, ky)
+    ng = ngauss === nothing ? ag : ngauss
+    ns = nsub   === nothing ? as : nsub
+    xs, ys, fs = build_gauss_samples(proj_west, proj_north, xw;
+                                     ngauss = ng, nsub = ns, T = Float64)
+    # FINUFFT type 3 computes Σ_j c_j exp(iσ(s_k x_j + t_k y_j)); σ = -1 with the 2π folded
+    # into the targets gives exp(-2πi k·r), which is the polygon FT's convention.
+    return FINUFFT.nufft2d3(xs, ys, ComplexF64.(fs), -1, Float64(tol),
+                            collect(Float64, 2π .* kx), collect(Float64, 2π .* ky))
+end

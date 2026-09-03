@@ -260,6 +260,18 @@ function compute_ldmap(μ, star_params; T = float(real(eltype(μ))))
     ldmap = T(1.0) .- p.ld1*(T(1.0) .-μ) - p.ld2*(T(1.0).-μ).^2
   elseif (p.ldtype == 3)  # 3: Hestroffer power law, I(μ)/I(1) = μ^α
     ldmap = μ.^p.ld1
+  elseif (p.ldtype == 4)
+    # 4: Claret (2000, A&A 363, 1081) four-parameter law
+    #     I(μ)/I(1) = 1 − a₁(1−μ^½) − a₂(1−μ) − a₃(1−μ^{3/2}) − a₄(1−μ²)
+    # The half-integer powers are what let it follow a model atmosphere near the limb, where
+    # the quadratic law is systematically wrong — which is the whole reason published tables
+    # quote Claret coefficients. Four coefficients, so `ld3` and `ld4` are read here and
+    # nowhere else.
+    a3 = hasproperty(p, :ld3) ? p.ld3 : zero(T)
+    a4 = hasproperty(p, :ld4) ? p.ld4 : zero(T)
+    sq = sqrt.(μ)
+    ldmap = T(1.0) .- p.ld1*(T(1.0) .- sq) .- p.ld2*(T(1.0) .- μ) .-
+                      a3*(T(1.0) .- μ.*sq) .- a4*(T(1.0) .- μ.^2)
   end
 end
 
@@ -365,11 +377,19 @@ end
 
 
 
-function create_star_multiepochs(tessels::tessellation, star_params, tepochs; kwargs...)
+# `Vector{stellar_geometry{T}}`, CONCRETELY. This built `Array{stellar_geometry}(undef, n)` —
+# an abstract element type — while every element was a `stellar_geometry{Float32}`. Julia then
+# knew nothing about `stars[i]`, so `star.proj_west` was a `Matrix` of unknown element type and
+# everything downstream of it dispatched at run time: JET reports 173 runtime dispatches inside
+# one `setup_oi!` on the abstract container, and none on the concrete one.
+#
+# `T` follows the TESSELLATION rather than the parameters, which is the same rule `create_star`
+# uses — the geometry is built in the mesh's precision and the parameters are converted into it.
+function create_star_multiepochs(tessels::tessellation{T}, star_params, tepochs;
+                                 kwargs...) where {T}
 nepochs = length(tepochs);
 npix = tessels.npix
-star_epoch_geom = Array{stellar_geometry}(undef, nepochs);
-#println("Creating geometry for $(nepochs) epochs x $(npix) tessels");
+star_epoch_geom = Vector{stellar_geometry{T}}(undef, nepochs);
 for i=1:nepochs
   star_epoch_geom[i] = create_star(tessels, star_params, tepochs[i]; kwargs...);
 end

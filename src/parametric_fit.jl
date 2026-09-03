@@ -28,61 +28,83 @@
 #
 # Against: no gradients are used, cost grows steeply with dimension, and PythonCall is not
 # thread-safe. Safe to call from a multithreaded session (see the note in the body).
-function _fit_ultranest(chi2_of, names, lo, hi;
-                        min_num_live_points::Int = 400, frac_remain = 1e-3,
-                        use_stepsampler::Bool = false, nsteps::Int = 400, verb::Bool = false)
-    # Safe in a multithreaded session: PythonCall's finalizer enqueues the pointer
-    # (`GC.enqueue`) and the queue is drained only by a thread holding the GIL
-    # (`PyGILState_Check`, PythonCall/src/GC/GC.jl), so Py objects may be finalized on any
-    # thread. Verified with a full UltraNest run under `julia -t 8`.
-    #
-    # Python must still only be CALLED from a thread holding the GIL. Driving the sampler
-    # from one thread (as here) is fine; calling Python inside a `Threads.@threads` body
-    # without `PythonCall.GIL.@lock` segfaults.
-    ultranest = pyimport("ultranest")
-    # Finalize any stray PyObject on the main thread before sampling starts.
-    GC.gc(true); GC.gc(true)
-    # UltraNest applies `transform` itself and hands `loglike` the PHYSICAL parameters, not
-    # the unit cube. Do NOT apply the transform a second time inside `loglike`: that maps a
-    # radius of 1.465 to 0.05 + 19.95*1.465 = 29.3 mas, and the sampler converges confidently
-    # on nonsense — D = 0.14 mas with a ±0.0002 error bar at χ²/n = 2e7, against a true
-    # optimum of 2.93 mas at χ²/n = 4.8.
-    # VECTORISED likelihood and transform, following OITOOLS' fit_model_ultranest. UltraNest
-    # hands over a whole BATCH of points as an n x d numpy array and expects arrays back, so
-    # the Julia<->Python crossing is paid once per batch instead of once per live point.
-    #
-    # Three PythonCall details:
-    #   * ARGUMENTS arrive as `Py`. Annotating the closure `::AbstractMatrix{<:Real}` makes
-    #     PythonCall convert the numpy batch to a Julia matrix; without it, `collect` raises
-    #     `MethodError: no method matching (Array{Float64})(::Py)`.
-    #   * RETURN values need `.to_numpy()`. A bare Julia array reaches Python as a
-    #     `juliacall.VectorValue`, on which UltraNest calls numpy methods (`.transpose`).
-    #   * `names` must be a real Python list: UltraNest evaluates `names + [...]`, and a
-    #     `VectorValue` does not support `+`.
-    transform_v = let lo = lo, hi = hi
-        (U::AbstractMatrix{<:Real}) ->
-            Py(reduce(vcat, (u -> (lo .+ (hi .- lo) .* u)').(eachrow(U)))).to_numpy()
-    end
-    loglike_1(p) = (c = chi2_of(collect(Float64, p)); isfinite(c) ? -0.5*Float64(c) : -1e30)
-    loglike_v = (X::AbstractMatrix{<:Real}) -> Py(loglike_1.(eachrow(X))).to_numpy()
+"""
+    _box_transform(lo, hi) -> (to_θ, to_z, logabsjac)
 
-    sampler = ultranest.ReactiveNestedSampler(pylist(names), loglike_v;
-                                              transform = transform_v, vectorized = true)
-    if use_stepsampler
-        ss = pyimport("ultranest.stepsampler")
-        sampler.stepsampler = ss.SliceSampler(nsteps = nsteps,
-                                  generate_direction = ss.generate_mixture_random_direction)
+An unconstrained reparameterisation of a box, and its log-Jacobian.
+
+Every free parameter is mapped from ℝ so NUTS cannot step outside its bounds. That is not
+convenience: a leapfrog trajectory routinely overshoots, and a sampler that has to reject those
+proposals loses most of its steps at exactly the point where the posterior is informative.
+
+Three cases, because the demo's hand-written pair is the one-star special case of them:
+
+  * both bounds finite → a scaled logistic, so `θ` lives strictly inside `(lo, hi)`;
+  * `lo` finite only    → `lo + exp(z)`, the positive-parameter case (`rpole`);
+  * neither finite      → the identity, for an angle.
+
+The log-Jacobian is the SUM over parameters, and it must be added to the log-posterior or the
+sampler is walking a different distribution from the one it reports.
+"""
+function _box_transform(lo::AbstractVector, hi::AbstractVector)
+    n = length(lo)
+    kinds = [isfinite(lo[j]) && isfinite(hi[j]) ? :box :
+             isfinite(lo[j])                    ? :pos : :free for j in 1:n]
+    logistic(x) = 1 / (1 + exp(-x))
+    function to_θ(z)
+        return [kinds[j] === :box  ? lo[j] + (hi[j] - lo[j]) * logistic(z[j]) :
+                kinds[j] === :pos  ? lo[j] + exp(z[j]) : z[j] for j in 1:n]
     end
-    res = sampler.run(min_num_live_points = min_num_live_points,
-                      frac_remain = frac_remain, show_status = verb)
-    verb && sampler.print_results()
-    # `res[...]` entries are `Py`; convert on the way out rather than leaking them to callers.
-    S = pyconvert(Matrix{Float64}, res["samples"])
-    q(pr) = [quantile(view(S, :, j), pr) for j in eachindex(names)]
-    return (median = q(0.5), q16 = q(0.16), q84 = q(0.84),
-            mean = vec(mean(S, dims = 1)), std = vec(std(S, dims = 1)),
-            logz = pyconvert(Float64, res["logz"]),
-            logzerr = pyconvert(Float64, res["logzerr"]), samples = S, result = res)
+    function to_z(θ)
+        return [kinds[j] === :box  ? log((θ[j] - lo[j]) / max(hi[j] - θ[j], eps())) :
+                kinds[j] === :pos  ? log(max(θ[j] - lo[j], eps())) : θ[j] for j in 1:n]
+    end
+    function logabsjac(z)
+        s = zero(eltype(z))
+        @inbounds for j in 1:n
+            if kinds[j] === :box
+                u = logistic(z[j])
+                s += log(hi[j] - lo[j]) + log(u) + log1p(-u)
+            elseif kinds[j] === :pos
+                s += z[j]
+            end
+        end
+        return s
+    end
+    return to_θ, to_z, logabsjac
+end
+
+"""
+    _fit_nested(method, chi2_of, names, lo, hi; kwargs...) -> NamedTuple
+
+Dispatch to whichever nested sampler `method` names, and give one useful error when it is not
+available.
+
+Both backends return the same fields (`median`, `q16`, `q84`, `logz`, `logzerr`, `samples`),
+which is what lets every caller treat them interchangeably. UltraNest-only keywords
+(`use_stepsampler`, `min_num_live_points`) and Nautilus-only ones (`n_live`, `n_eff`) are
+filtered here rather than at each call site, so a caller can pass whatever it has.
+"""
+function _fit_nested(method::Symbol, chi2_of, names, lo, hi; verb::Bool = false,
+                     min_num_live_points::Int = 400, use_stepsampler::Bool = false,
+                     n_live::Int = 1000, n_eff::Real = 10_000, kwargs...)
+    if method === :ultranest
+        ultranest_available() || error(
+            "method = :ultranest needs PythonCall loaded: add `using PythonCall` to this " *
+            "session. It is a weak dependency, because loading it costs every GUI session " *
+            "1.2 s of recompilation whether or not anything samples. `method = :nautilus` " *
+            "is the pure-Julia sampler and needs no Python at all.")
+        return _fit_ultranest(chi2_of, names, lo, hi; verb = verb,
+                              min_num_live_points = min_num_live_points,
+                              use_stepsampler = use_stepsampler)
+    elseif method === :nautilus
+        nautilus_available() || error(
+            "method = :nautilus needs Nautilus.jl loaded: add `using Nautilus` to this " *
+            "session. It is a weak dependency, so ROTIR does not pull it in on its own.")
+        return _fit_nautilus(chi2_of, names, lo, hi; verb = verb, n_live = n_live,
+                             n_eff = n_eff)
+    end
+    error("unknown nested sampler :$method (expected :ultranest or :nautilus)")
 end
 
 """
@@ -104,12 +126,23 @@ a shape fit.
 function parametric_chi2(params, tessels, data, tepochs;
                          weights = [1.0, 1.0, 1.0], uniform::Bool = false)
     stars = create_star_multiepochs(tessels, params, tepochs)
-    setup_oi!(data, stars)
+    # NO `setup_oi!`. This built the dense (nuv × npix) `polyft` for every evaluation, used it
+    # for a single matvec and threw it away — 5 to 10 GiB of temporaries to produce a 189 MiB
+    # matrix that is read once. The fused kernel computes the same visibilities without ever
+    # forming it, and it was already in the package: `parametric_gradient.jl` and
+    # `shape_gradient.jl` have used it all along, and only this function did not.
+    #
+    # MEASURED on polaris at level 3, one epoch: 784 ms → 114 ms with the scalar kernel and
+    # 5.1 ms with `:turbo`. This is the objective every optimiser and every sampler calls, so
+    # it is the cost of a fit.
+    #
+    # Imaging is the opposite case and rightly keeps `setup_oi!`: there the geometry is fixed
+    # and the map varies over hundreds of iterations, so the matrix is worth building once.
     x = uniform ? fill(eltype(stars[1])(params.tpole), stars[1].npix) :
                   parametric_temperature_map(params, stars[1])
     c = 0.0
     for (i, s) in enumerate(stars)
-        v2m, t3am, t3pm = cvis_to_obs(poly_to_cvis(x, s), data[i])
+        v2m, t3am, t3pm = cvis_to_obs(fused_cvis(x, s, data[i]), data[i])
         d = data[i]
         c += weights[1]*sum(abs2, (v2m  .- d.v2)    ./ d.v2_err) +
              weights[2]*sum(abs2, (t3am .- d.t3amp) ./ d.t3amp_err) +
@@ -198,20 +231,21 @@ function fit_sphere_ld(data, tessels;
         verbose && @info "fit_sphere_ld" radius=θ[1] ld1=θ[2] chi2=c
         isfinite(c) ? c : 1e30
     end
-    if method === :ultranest
+    if method in (:ultranest, :nautilus)
         nm = fit_ld2 ? ["radius", "ld1", "ld2"] : ["radius", "ld1"]
-        un = _fit_ultranest(θ -> f(θ), nm, lb, ub;
-                            min_num_live_points = min_num_live_points,
-                            use_stepsampler = use_stepsampler, verb = verbose)
+        un = _fit_nested(method, θ -> f(θ), nm, lb, ub;
+                         min_num_live_points = min_num_live_points,
+                         use_stepsampler = use_stepsampler, verb = verbose)
         m  = un.median
         l2 = fit_ld2 ? m[3] : ld2_0
         return (radius = m[1], ld1 = m[2], ld2 = l2,
                 radius_err = (un.q84[1]-un.q16[1])/2, ld1_err = (un.q84[2]-un.q16[2])/2,
                 chi2 = f(m), chi2_per_datum = f(m)/nd, params = mk(m[1], m[2], l2),
                 logz = un.logz, logzerr = un.logzerr, samples = un.samples,
-                q16 = un.q16, q84 = un.q84, status = :ultranest)
+                q16 = un.q16, q84 = un.q84, status = method)
     end
-    method === :neldermead || error("fit_sphere_ld: method must be :neldermead or :ultranest")
+    method === :neldermead ||
+        error("fit_sphere_ld: method must be :neldermead, :ultranest or :nautilus")
     opt = NLopt.Opt(algorithm, nfree)
     opt.lower_bounds  = lb
     opt.upper_bounds  = ub
@@ -307,20 +341,23 @@ function fit_ellipsoid_ld(data, tessels;
     end
     lo5 = [req_bounds[1], f_bounds[1], inc_bounds[1], pa_bounds[1], ld_bounds[1]]
     hi5 = [req_bounds[2], f_bounds[2], inc_bounds[2], pa_bounds[2], ld_bounds[2]]
-    if method === :ultranest
+    if method in (:ultranest, :nautilus)
         # 5 parameters with two near-degenerate directions: the region sampler struggles, so
-        # the slice step sampler is the default here (unlike the 2-parameter sphere).
-        un = _fit_ultranest(θ -> obj(θ), ["req","flattening","inc","PA","ld1"], lo5, hi5;
-                            min_num_live_points = min_num_live_points,
-                            use_stepsampler = use_stepsampler, verb = verbose)
+        # the slice step sampler is the default here (unlike the 2-parameter sphere). Nautilus
+        # has no equivalent knob — its neural bounds are what it uses instead — so the keyword
+        # is simply not passed on to it.
+        un = _fit_nested(method, θ -> obj(θ), ["req","flattening","inc","PA","ld1"], lo5, hi5;
+                         min_num_live_points = min_num_live_points,
+                         use_stepsampler = use_stepsampler, verb = verbose)
         m = un.median
         return (req = m[1], flattening = m[2], inclination = m[3], position_angle = m[4],
                 ld1 = m[5], rpol = m[1]*(1-m[2]), chi2 = obj(m), chi2_per_datum = obj(m)/nd,
                 chi2_sphere = chi2_sphere, params = mk(m...), logz = un.logz,
                 logzerr = un.logzerr, samples = un.samples, q16 = un.q16, q84 = un.q84,
-                status = :ultranest)
+                status = method)
     end
-    method === :neldermead || error("fit_ellipsoid_ld: method must be :neldermead or :ultranest")
+    method === :neldermead ||
+        error("fit_ellipsoid_ld: method must be :neldermead, :ultranest or :nautilus")
     opt = NLopt.Opt(algorithm, 5)
     opt.lower_bounds  = lo5
     opt.upper_bounds  = hi5

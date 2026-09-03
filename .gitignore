@@ -35,6 +35,20 @@ Manifest.toml
 /demos/betlyr/*.oifits
 /demos/betlyr/*.pdf
 
+# The GUI's one-click save targets. Every one of them writes a FIXED name beside the working
+# directory rather than opening a save dialog — the picker is a file CHOOSER, and inventing a
+# save dialog for a one-click action is a different widget. `unique_path` then numbers rather
+# than overwrites, so repeated saves ACCUMULATE (rotir_sky.png, rotir_sky-2.png, …) instead of
+# replacing each other.
+#
+# test/gui/gui_click.sh runs from the repo root and exercises "Save view…", so every click-test
+# run drops one of these here. Anchored to the root, which is where the launcher and the test
+# both start: a rotir_*.png committed deliberately in a subdirectory still shows up.
+/rotir_*.png
+/rotir_*.fits
+/rotir_*.toml
+/rotirgui_session*.jl
+
 # LaTeX build artifacts (notes/)
 *.aux
 *.log

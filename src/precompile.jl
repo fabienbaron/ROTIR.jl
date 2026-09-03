@@ -1,6 +1,7 @@
 @compile_workload begin
     # Exercise the core computational path with a small tessellation (Float32 default).
-    # Plotting is excluded — PythonCall/matplotlib segfaults during precompilation.
+    # No plotting: every drawing function is a stub here, with methods only in
+    # ROTIRPythonPlotExt or ROTIRMakieExt, and those extensions carry their own workloads.
     tessels = tessellation_healpix(1)
     star_params = (
         surface_type    = 0,
@@ -21,19 +22,16 @@
     tessellation_latlong(8, 16)
 end
 
-# Explicit precompile hints for plotting functions.
-# These can't run in @compile_workload (PythonCall segfaults during precompilation)
-# but the hints still cache inference/compilation results.
+# The geometry builders in both element types, as explicit hints.
+#
+# The matplotlib hints that used to sit here — `plot2d`, `draw_compass(::Py, …)` and the rest —
+# are gone. They named functions that are now STUBS in this module, so `precompile` had nothing
+# to compile and returned false silently; and `Py` is no longer a name this package has, since
+# PythonCall became a weak dependency.
 # Primary: Float32 (default)
 let T = Float32, NT = @NamedTuple{surface_type::Int, radius::Float32, tpole::Float32,
         ldtype::Int, ld1::Float32, ld2::Float32,
         inclination::Float32, position_angle::Float32, rotation_period::Float32}
-    precompile(plot2d, (Vector{T}, stellar_geometry{T}))
-    precompile(plot2d_wireframe, (stellar_geometry{T},))
-    precompile(draw_compass, (Py, T))
-    precompile(draw_rotation_axis, (Py, stellar_geometry{T}))
-    precompile(draw_rotation_arrow, (Py, stellar_geometry{T}))
-    precompile(draw_graticules, (Py, stellar_geometry{T}))
     precompile(create_star, (tessellation{T}, NT, T))
     precompile(parametric_temperature_map, (NT, stellar_geometry{T}))
 end

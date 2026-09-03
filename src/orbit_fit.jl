@@ -550,15 +550,16 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
         NLopt.min_objective!(opt, (p, g) -> chi2_of(p))
         (_, pbest, _) = NLopt.optimize(opt, θ0[idx])
         best = pbest; extra = NamedTuple()
-    elseif method === :ultranest
-        r = _fit_ultranest(chi2_of, string.(spec.names[idx]), spec.lo[idx], spec.hi[idx];
-                           min_num_live_points = min_num_live_points,
-                           use_stepsampler = use_stepsampler, verb = verbose)
+    elseif method in (:ultranest, :nautilus)
+        r = _fit_nested(method, chi2_of, string.(spec.names[idx]), spec.lo[idx], spec.hi[idx];
+                        min_num_live_points = min_num_live_points,
+                        use_stepsampler = use_stepsampler, verb = verbose)
         best  = r.median
         extra = (posterior = r.samples, logz = r.logz, logzerr = r.logzerr,
                  q16 = r.q16, q84 = r.q84)
     else
-        error("fit_orbit: method must be :neldermead or :ultranest (got $method)")
+        error("fit_orbit: method must be :neldermead, :ultranest or :nautilus " *
+              "(got $method)")
     end
 
     θbest = resolve_params(spec, best)

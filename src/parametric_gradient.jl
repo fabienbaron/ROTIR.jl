@@ -120,7 +120,8 @@ Per-tessel limb-darkening map and hand-coded derivatives w.r.t. nz (through μ),
 ld1 and ld2. μ = max(nz,0) (shared `mu_and_dmu`); consistent with the forward
 `compute_ldmap` via `limb_mu`.
 """
-function ld_and_derivs(nz::AbstractVector{T}, ldtype::Integer, ld1::T, ld2::T) where {T}
+function ld_and_derivs(nz::AbstractVector{T}, ldtype::Integer, ld1::T, ld2::T,
+                       ld3::T = zero(T), ld4::T = zero(T)) where {T}
     n = length(nz)
     ld       = Vector{T}(undef, n)
     dld_dnz  = Vector{T}(undef, n)
@@ -139,6 +140,28 @@ function ld_and_derivs(nz::AbstractVector{T}, ldtype::Integer, ld1::T, ld2::T) w
             dld_dμ      = ld1 + T(2)*ld2*m1
             dld_dld1[i] = -m1
             dld_dld2[i] = -m1*m1
+        elseif ldtype == 4
+            # Claret (2000): 1 − a₁(1−μ^½) − a₂(1−μ) − a₃(1−μ^{3/2}) − a₄(1−μ²).
+            #
+            # All FOUR terms are in the forward map, so this is the same law `compute_ldmap`
+            # applies — a gradient path evaluating a two-term approximation of it would be
+            # optimising a different model from the one being reported.
+            #
+            # Derivatives are carried for a₁ and a₂ only, because `build_parametric_logπ`'s θ
+            # has room for two LD coefficients and widening it would change a vector every
+            # caller of `fit_parametric` passes. a₃ and a₄ are held at their model values,
+            # exactly as `ld2` is under the power law.
+            sq          = sqrt(μ)
+            m32         = μ * sq                       # μ^{3/2}
+            ld[i]       = one(T) - ld1*(one(T) - sq) - ld2*(one(T) - μ) -
+                          ld3*(one(T) - m32) - ld4*(one(T) - μ*μ)
+            # d/dμ = a₁/(2√μ) + a₂ + (3/2)a₃√μ + 2a₄μ. The 1/√μ diverges at the limb, where
+            # `dμ` is zero anyway and the product is dropped below.
+            dld_dμ      = μ > zero(T) ?
+                          ld1/(T(2)*sq) + ld2 + T(1.5)*ld3*sq + T(2)*ld4*μ :
+                          ld2 + T(2)*ld4*μ
+            dld_dld1[i] = -(one(T) - sq)
+            dld_dld2[i] = -(one(T) - μ)
         else                                 # ldtype 3, Hestroffer μ^ld1
             ldi         = μ > zero(T) ? μ^ld1 : zero(T)
             ld[i]       = ldi
@@ -154,20 +177,25 @@ function ld_and_derivs(nz::AbstractVector{T}, ldtype::Integer, ld1::T, ld2::T) w
 end
 
 """
-    ld_weight(nz, ldtype, ld1, ld2) -> ld
+    ld_weight(nz, ldtype, ld1, ld2, ld3 = 0, ld4 = 0) -> ld
 
 Forward LD map (Zygote primitive).
 """
-ld_weight(nz, ldtype, ld1, ld2) = first(ld_and_derivs(nz, ldtype, ld1, ld2))
+ld_weight(nz, ldtype, ld1, ld2, ld3 = zero(ld1), ld4 = zero(ld1)) =
+    first(ld_and_derivs(nz, ldtype, ld1, ld2, ld3, ld4))
 
-function ChainRulesCore.rrule(::typeof(ld_weight), nz, ldtype, ld1, ld2)
-    ld, dld_dnz, dld_dld1, dld_dld2 = ld_and_derivs(nz, ldtype, ld1, ld2)
+function ChainRulesCore.rrule(::typeof(ld_weight), nz, ldtype, ld1, ld2,
+                              ld3 = zero(ld1), ld4 = zero(ld1))
+    ld, dld_dnz, dld_dld1, dld_dld2 = ld_and_derivs(nz, ldtype, ld1, ld2, ld3, ld4)
     function ld_pullback(l̄draw)
         l̄d = unthunk(l̄draw)
         n̄z  = l̄d .* dld_dnz
         l̄d1 = dot(l̄d, dld_dld1)
         l̄d2 = dot(l̄d, dld_dld2)
-        return (NoTangent(), n̄z, NoTangent(), l̄d1, l̄d2)
+        # One tangent per argument, `ld3`/`ld4` included: they are held fixed here (see
+        # `ld_and_derivs`), so their tangent is exactly zero rather than absent — a pullback
+        # returning too few tangents is a silent shape error inside Zygote.
+        return (NoTangent(), n̄z, NoTangent(), l̄d1, l̄d2, ZeroTangent(), ZeroTangent())
     end
     return ld, ld_pullback
 end
@@ -374,6 +402,12 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
     colat = tessels.unit_spherical[:, 5, 2]
     sinθ = T.(sin.(colat)); cosθ = T.(cos.(colat))
     ldtype = base_params.ldtype
+    # Claret's third and fourth coefficients, from the model rather than from θ: the θ vector
+    # carries two LD coefficients and widening it would change every caller of
+    # `fit_parametric`. They are still part of the FORWARD law, so the gradient path evaluates
+    # the same limb darkening `compute_ldmap` does.
+    ld3_base = T(hasproperty(base_params, :ld3) ? base_params.ld3 : 0)
+    ld4_base = T(hasproperty(base_params, :ld4) ? base_params.ld4 : 0)
     tpole_base = T(base_params.tpole)
     κT = T(κ); GMT = T(GM)
     nepochs = length(data_epochs)
@@ -396,7 +430,7 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
         Imap = intensity(x, intensity_model, band)
         chi2 = sum(1:nepochs) do ep
             pw, pn, nz = project_geometry(rpole, fev, inc, PA, tessels, ts[ep], base_params)
-            ld = ld_weight(nz, ldtype, ld1, ld2)
+            ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
             vw = visibility_weight(nz, κT)
             xw = Imap .* vw .* ld
             interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])

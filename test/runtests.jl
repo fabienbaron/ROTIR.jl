@@ -62,6 +62,14 @@ end
     # the ANOVA identity that makes RADFLAT and RADIALVAR complementary.
     include(joinpath(TESTDIR, "test_radial_regularizers.jl"))
 
+    # The reconstruction's callable surface: the mid-run callback, per-epoch weights, and the
+    # joint fitter's refusal to guess a θ layout it does not have.
+    include(joinpath(TESTDIR, "test_reconstruct_hooks.jl"))
+
+    # The @turbo forward kernel against the scalar reference it rewrites — both precisions,
+    # three mesh levels, three surface types, three datasets, and the degenerate cases.
+    include(joinpath(TESTDIR, "test_fused_polyft.jl"))
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions

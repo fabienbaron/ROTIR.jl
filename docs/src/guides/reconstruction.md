@@ -340,3 +340,32 @@ Regularization plays a larger role:
 
 See [`demos/polaris_imaging.jl`](https://github.com/fabienbaron/ROTIR.jl/blob/main/demos/polaris_imaging.jl)
 for a complete single-epoch reconstruction of Polaris.
+
+## Saving a reconstruction
+
+A ROTIR map is a bare `Vector` of per-tessel values: nothing in it records the
+tessellation it belongs to or the geometry it was fitted against, so on its own
+it cannot be turned back into a χ². [`save_surface_map`](@ref) writes the map to
+FITS together with the HEALPix level, every `star_params` field, and the epoch
+times:
+
+```julia
+save_surface_map("polaris.fits", x, params;
+                 nside_exp = 4, tepochs = tepochs, mjd = mjd,
+                 chi2 = chi2, ndata = ndata)
+```
+
+[`load_surface_map`](@ref) reads it back with the parameter types it was saved
+with — `surface_type` and `ldtype` stay `Int`, which matters because the code
+branches on them with `==` — so the χ² is reproducible from the file alone:
+
+```julia
+m     = load_surface_map("polaris.fits")
+stars = create_star_multiepochs(tessellation_healpix(m.nside_exp), m.params, m.tepochs)
+setup_oi!(data, stars)
+chi2_breakdown(m.x, stars[1], data[1])
+```
+
+The GUI's **Save model map** / **Load model map** buttons are this pair. Save
+writes the reconstruction if there is one and the model's own parametric map
+otherwise; load brings the parameters back as a model and the values as an image.

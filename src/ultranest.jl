@@ -2,9 +2,9 @@
 #
 # Nested sampling of the parametric model through the Python `ultranest` package.
 #
-# Why this lives in core rather than in an extension: nested sampling never asks for a
-# gradient, so it needs no AD backend, and PythonCall is already a ROTIR dependency. The
-# Python side is reached exactly as OITOOLS' `fit_model_ultranest` does it.
+# Included by ext/ROTIRUltraNestExt.jl, which loads when PythonCall does. It was core until
+# the GUI measured what `using PythonCall` costs — see the header of src/fit_ultranest.jl.
+# The Python side is reached exactly as OITOOLS' `fit_model_ultranest` does it.
 #
 # When to reach for it instead of the optimiser + bootstrap:
 #   - the χ² is multimodal (ρ Cas has several minima between 2.2 and 3.7 mas diameter) and
@@ -15,7 +15,6 @@
 # Against: it ignores the gradients the model can supply (a gradient costs ~3.6× a
 # likelihood here), and the cost grows steeply with the number of free parameters.
 
-using PythonCall
 
 """
     fit_parametric_ultranest(data_epochs, tessels, tepochs, base_params; kwargs...)

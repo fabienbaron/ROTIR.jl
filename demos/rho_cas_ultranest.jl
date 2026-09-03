@@ -24,6 +24,9 @@
 # Above ~5 parameters set STEPSAMPLER=1; the region sampler degrades badly.
 
 using Printf, Statistics
+# UltraNest lives in ROTIRUltraNestExt, which PythonCall triggers: ROTIR does not load
+# Python on its own any more.
+using PythonCall
 include(joinpath(@__DIR__, "rho_cas_model.jl"))
 include(joinpath(@__DIR__, "posterior_utils.jl"))
 
