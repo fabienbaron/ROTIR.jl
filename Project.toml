@@ -13,7 +13,6 @@ FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 FINUFFT = "d8beea63-0952-562e-9c6a-8e8ef7364055"
 FITSIO = "525bcba6-941b-5504-bd06-fd0dc1a4d2eb"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 NFFT = "efe261a4-0d2b-5849-be55-fc731d526b0d"
 NLopt = "76087f3c-5699-56af-9a33-bf431cd00edd"
 OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
@@ -33,6 +32,7 @@ Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
 Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
@@ -50,6 +50,7 @@ OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
 ROTIRGUIExt = ["GLMakie", "Makie", "QML", "QMLMakie"]
 ROTIRHMCExt = ["AdvancedHMC", "LogDensityProblems", "Zygote"]
 ROTIRMakieExt = "Makie"
+ROTIRLoopVectorizationExt = "LoopVectorization"
 ROTIRNautilusExt = "Nautilus"
 ROTIRPigeonsExt = ["Pigeons", "Distributions", "LogDensityProblems", "ADTypes", "Zygote"]
 ROTIRPythonPlotExt = ["PythonPlot", "LaTeXStrings", "PythonCall"]
@@ -84,6 +85,7 @@ julia = "1.12"
 [extras]
 FiniteDifferences = "26cc04aa-876d-5657-8c51-4c34ba976000"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
+LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
 PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 PythonPlot = "274fc56d-3b97-40fa-a1cd-1b4a50311bf9"
@@ -91,4 +93,5 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [targets]
-test = ["Test", "FiniteDifferences", "Zygote", "PythonPlot", "LaTeXStrings", "Nautilus", "PythonCall"]
+test = ["Test", "FiniteDifferences", "Zygote", "PythonPlot", "LaTeXStrings", "Nautilus",
+        "PythonCall", "LoopVectorization"]

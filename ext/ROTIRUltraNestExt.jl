@@ -23,8 +23,7 @@ import ROTIR: _fit_ultranest, fit_parametric_ultranest
 
 # Everything these two need from the core package. They were core files until this extension
 # existed, so they use the unexported internals directly.
-using ROTIR: build_parametric_logπ, default_parametric_bounds, parametric_free_indices,
-             list_free_params
+using ROTIR: build_parametric_logπ, default_parametric_bounds, parametric_free_indices
 
 include(joinpath(pkgdir(ROTIR), "src", "fit_ultranest.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "ultranest.jl"))

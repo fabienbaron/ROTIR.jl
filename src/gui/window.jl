@@ -191,7 +191,8 @@ function ROTIR.gui(session::Session = Session();
                     String[],
                     _session_status(session), nothing, :none, "", Dict{Symbol,Any}(),
                     Ref{Any}(nothing), Ref{Any}(nothing),
-                    post, Ref(1), Ref(2), Ref(false), imstar)
+                    post, Ref(1), Ref(2), Ref(false), imstar,
+                    Ref{Any}(nothing))
     SHELL[] = sh
     # Right-click to reset the zoom, and the zoom bound itself. Both read Makie's event
     # stream, so they attach to the canvases rather than to anything in QML.

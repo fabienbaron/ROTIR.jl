@@ -358,8 +358,14 @@ Pane {
                             }
                         }
 
+                        // free / fixed / tied — but NOT on a discrete field. `ldtype`
+                        // picks which limb-darkening law is applied, and there is no sense in
+                        // which an optimiser could walk 1→2→3→4: it would sample fractional
+                        // laws that do not exist. Nothing follows it on that row, so hiding it
+                        // costs no alignment. `shell_set_param_state` refuses it as well.
                         ComboBox {
-                            Layout.preferredWidth: dp(74)
+                            visible: pkind !== "choice"
+                            Layout.preferredWidth: visible ? dp(74) : 0
                             model: ["fixed", "free", "tied"]
                             font.pointSize: root.fontPt - 1
                             currentIndex: pstate === "free" ? 1 : pstate === "tied" ? 2 : 0

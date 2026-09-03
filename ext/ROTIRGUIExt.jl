@@ -141,7 +141,8 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
                              nothing, :none, "", Dict{Symbol,Any}(),
                              Ref{Any}(nothing), Ref{Any}(nothing),
                              build_post_canvas(Makie.Figure()), Ref(1), Ref(2), Ref(false),
-                             build_star_canvas(Makie.Figure()))
+                             build_star_canvas(Makie.Figure()),
+                             Ref{Any}(nothing))
             SHELL[] = _sh
             # The two refreshes are the whole redraw path: geometry, temperature map, colours,
             # polygons, the 3-D mesh, the Mollweide resampling and the per-epoch χ². MEASURED

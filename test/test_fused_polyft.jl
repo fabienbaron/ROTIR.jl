@@ -12,9 +12,18 @@
 
 using Test
 using ROTIR
+# `_cvis_turbo!` is declared in ROTIR but DEFINED in ROTIRLoopVectorizationExt, so the kernel
+# under test does not exist until LoopVectorization is loaded — it is a weak dependency
+# because loading it costs 1.8 s of GUI startup (see src/turbo_polyft.jl). The `import` below
+# resolves either way, since the stub is ROTIR's; only the methods arrive with the extension.
+using LoopVectorization
 using ROTIR: _cvis_scalar!, _cvis_turbo!, POLYFT_BACKEND
 
 @testset "fused polyft: turbo vs reference" begin
+    # Which is to say: the extension is loaded. Without this the whole file would test a
+    # stub, and `_cvis_turbo!` would fail with a MethodError rather than a wrong number.
+    @test ROTIR.turbo_available()
+
     D = joinpath(pkgdir(ROTIR), "demos", "data")
 
     "Both kernels on one geometry, returning `(F_scalar, F_turbo)`."

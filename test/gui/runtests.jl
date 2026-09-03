@@ -48,7 +48,7 @@ function fresh_shell()
         String[], "", nothing, :none, "", Dict{Symbol,Any}(),
         Ref{Any}(nothing), Ref{Any}(nothing),
         G.build_post_canvas(figs[9]), Ref(1), Ref(2), Ref(false),
-        G.build_star_canvas(figs[10]))
+        G.build_star_canvas(figs[10]), Ref{Any}(nothing))
     G.SHELL[] = sh
     return sh
 end
@@ -187,6 +187,19 @@ end
         @test ld !== nothing
         @test cols(pr[ld])[10] == "choice"
         @test occursin("=", cols(pr[ld])[11])
+        # And it has no free/fixed/tied to make: a law index is not a coordinate an optimiser
+        # can walk, so both the panel and the shell refuse it. Refused, not silently ignored —
+        # a state that was accepted and then dropped would show the wrong thing in the form.
+        @test occursin("discrete choice", G.shell_set_param_state("ldtype", "free"))
+        @test occursin("discrete choice", G.shell_set_param_state("ldtype", "tied"))
+        @test cols(rows(G.shell_params())[ld])[5] == "fixed"
+        @test G.shell_set_param_state("ldtype", "fixed") == ""
+        # Every label has to FIT the form's column, which elides silently rather than
+        # wrapping: a truncated "Limb-darkening l…" is how this was noticed.
+        for x in pr
+            c = cols(x)
+            @test length(c[2]) + (isempty(c[3]) ? 0 : length(c[3]) + 3) <= 20
+        end
     end
     # ONE model, however many were added: "+ model" REPLACES rather than appends, so that
     # nothing but the visible model can decide what the χ² column is about.
@@ -584,6 +597,59 @@ end
     ns = [parse(Int, match(r"^(\d+) evaluations", r).captures[1]) for r in reports]
     @test issorted(ns)
     @test occursin("χ²ᵣ", sh.status)        # and it still finishes normally
+end
+
+@testset "the Imaging views honour the view options" begin
+    # The three Imaging views were drawn ONCE, when a run finished, straight from the map —
+    # so the intensity tick did nothing there while it worked on the Model tab, and neither
+    # did a decoration. The visible difference is limb darkening: a temperature map is flat
+    # across the disk, the emergent intensity falls towards the limb, and that is what the
+    # interferometer actually measures.
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    G.shell_add_model(0)
+
+    # Nothing yet: the tab says so rather than showing an empty frame.
+    @test sh.lastmap[] === nothing
+    G.refresh_image_tab!(sh)
+    @test occursin("no reconstruction", sh.imsky.message[])
+
+    got = G.build_epoch_star(sh)
+    @test got !== nothing
+    star, tmap = got
+    G.show_reconstruction!(sh, star, Float64.(tmap))
+
+    # The map is REMEMBERED, which is what makes a later redraw possible at all.
+    @test sh.lastmap[] !== nothing
+    @test length(sh.lastmap[].x) == length(tmap)
+
+    G.shell_set_surface_field("1", "linear", "0")     # intensity
+    ci = copy(sh.imsky.colors[])
+    mi = copy(sh.immoll.colors[])
+    @test sh.imsky.cbarlabel[] == "I (arb.)"
+    G.shell_set_surface_field("0", "linear", "0")     # temperature
+    ct = copy(sh.imsky.colors[])
+    mt = copy(sh.immoll.colors[])
+    @test sh.imsky.cbarlabel[] == "T (K)"
+
+    # Both views must actually CHANGE. The map here is a uniform-tpole sphere, so the
+    # temperature view is one flat colour and the intensity view is a limb-darkened ramp —
+    # if the tick were still ignored these would be identical arrays.
+    @test length(ci) == length(ct) > 0
+    @test ci != ct
+    @test mi != mt
+    # And the temperature view of a uniform map IS flat, which is the other half of the
+    # check: a difference could otherwise come from anything.
+    @test length(unique(ct)) == 1
+    @test length(unique(ci)) > 1
+
+    # A decoration reaches the tab too, by the same route — the graticule polyline is its own
+    # Observable, empty until the tick is on.
+    @test isempty(sh.imsky.grat[])
+    G.shell_set_decoration("graticules", "1")
+    @test !isempty(sh.imsky.grat[])
+    G.shell_set_decoration("graticules", "0")
+    @test isempty(sh.imsky.grat[])
 end
 
 @testset "a fit is kept whole" begin

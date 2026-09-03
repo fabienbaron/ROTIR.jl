@@ -81,16 +81,16 @@ const _ORIENTATION = [
 ]
 
 const _THERMAL = [
-    ParamSpec(:tpole, "Polar temperature", "K", 6000.0, 1000.0, 60000.0, :thermal,
+    ParamSpec(:tpole, "Polar temp.", "K", 6000.0, 1000.0, 60000.0, :thermal,
               "Effective temperature at the pole, before gravity darkening."),
 ]
 
 # β enters every von Zeipel map. 0.25 is the radiative value, ~0.08 convective (Lucy 1967).
-const _BETA = ParamSpec(:beta, "Gravity darkening β", "", 0.25, 0.0, 0.5, :thermal,
+const _BETA = ParamSpec(:beta, "Grav. darkening β", "", 0.25, 0.0, 0.5, :thermal,
                         "T ∝ g^β. 0.25 radiative, ~0.08 convective.")
 
 const _LIMBDARK = [
-    ParamSpec(:ldtype, "Limb-darkening law", "", 3.0, 1.0, 4.0, :limbdark,
+    ParamSpec(:ldtype, "LD law", "", 3.0, 1.0, 4.0, :limbdark,
               "Which law `compute_ldmap` applies. Anything outside 1–4 silently " *
               "returns nothing and fails later in the visibility model.";
               kind = :choice,
@@ -98,13 +98,13 @@ const _LIMBDARK = [
                          2 => "quadratic: 1 − a(1−μ) − b(1−μ)²",
                          3 => "Hestroffer power law: μ^α",
                          4 => "Claret 4-parameter"]),
-    ParamSpec(:ld1, "LD coefficient 1", "", 0.2, -1.0, 2.0, :limbdark,
+    ParamSpec(:ld1, "LD coeff 1", "", 0.2, -1.0, 2.0, :limbdark,
               "u (linear), a (quadratic), α (power law) or a₁ (Claret)."),
-    ParamSpec(:ld2, "LD coefficient 2", "", 0.0, -1.0, 1.0, :limbdark,
+    ParamSpec(:ld2, "LD coeff 2", "", 0.0, -1.0, 1.0, :limbdark,
               "b of the quadratic law, or a₂ of Claret's."),
-    ParamSpec(:ld3, "LD coefficient 3", "", 0.0, -1.0, 1.0, :limbdark,
+    ParamSpec(:ld3, "LD coeff 3", "", 0.0, -1.0, 1.0, :limbdark,
               "a₃ of Claret's four-parameter law; read only when ldtype = 4."),
-    ParamSpec(:ld4, "LD coefficient 4", "", 0.0, -1.0, 1.0, :limbdark,
+    ParamSpec(:ld4, "LD coeff 4", "", 0.0, -1.0, 1.0, :limbdark,
               "a₄ of Claret's four-parameter law; read only when ldtype = 4."),
 ]
 
@@ -116,17 +116,17 @@ const _LIMBDARK = [
 const _ORBIT = [
     ParamSpec(:P, "Orbital period", "d", 10.0, 1e-4, 1e6, :orbit,
               "Sets both the separation history and, when tidally locked, the spin."),
-    ParamSpec(:a, "Semi-major axis", "mas", 3.0, 1e-4, 1e4, :orbit,
+    ParamSpec(:a, "Semi-major", "mas", 3.0, 1e-4, 1e4, :orbit,
               "Of the RELATIVE orbit. The default is 6x the default `rpole`, which keeps " *
               "the default Roche surface well inside its lobe — at a ~ rpole the star " *
               "strains against L1 and gravity darkening spans tens of thousands of K."),
     ParamSpec(:e, "Eccentricity", "", 0.0, 0.0, 0.99, :orbit, ""),
-    ParamSpec(:T0, "Periastron epoch", "JD", 2450000.0, 0.0, 1e7, :orbit, ""),
-    ParamSpec(:i, "Orbital inclination", "deg", 90.0, 0.0, 180.0, :orbit,
+    ParamSpec(:T0, "Periastron", "JD", 2450000.0, 0.0, 1e7, :orbit, ""),
+    ParamSpec(:i, "Orbital incl.", "deg", 90.0, 0.0, 180.0, :orbit,
               "Distinct from the component's own spin `inclination`."),
-    ParamSpec(:Ω, "Ω, ascending node", "deg", 0.0, -180.0, 360.0, :orbit,
+    ParamSpec(:Ω, "Ω, asc. node", "deg", 0.0, -180.0, 360.0, :orbit,
               "Unicode Ω — an ASCII `Omega` is a different field and fails at runtime."),
-    ParamSpec(:ω, "ω, argument of periapsis", "deg", 0.0, -180.0, 360.0, :orbit,
+    ParamSpec(:ω, "ω, periapsis", "deg", 0.0, -180.0, 360.0, :orbit,
               "Of the RELATIVE orbit (secondary about primary). Unicode ω."),
     ParamSpec(:q, "Mass ratio q", "", 0.5, 1e-3, 1e3, :orbit,
               "M_companion/M_self for the Roche potential: q for the primary, 1/q " *
@@ -134,9 +134,9 @@ const _ORBIT = [
 ]
 
 const _ORBIT_OPTIONAL = [
-    ParamSpec(:dP, "Ṗ, period derivative", "d/d", 0.0, -1.0, 1.0, :orbit,
+    ParamSpec(:dP, "Ṗ, period rate", "d/d", 0.0, -1.0, 1.0, :orbit,
               "Quadratic ephemeris. 0 for a constant period."),
-    ParamSpec(:dω, "ω̇, apsidal motion", "deg/d", 0.0, -1.0, 1.0, :orbit,
+    ParamSpec(:dω, "ω̇, apsidal", "deg/d", 0.0, -1.0, 1.0, :orbit,
               "Unicode dω. 0 for a fixed apsidal line."),
     ParamSpec(:d, "Distance", "pc", 100.0, 0.1, 1e6, :orbit,
               "Carried for physical-unit conversions; the geometry is in mas throughout."),
@@ -194,7 +194,7 @@ const SURFACE_TYPES = Dict{Int,SurfaceSpec}(
                         "Equatorial rotation as a fraction of critical. 1 is break-up: " *
                         "the equatorial radius diverges as it is approached.")],
              _THERMAL, [_BETA], _LIMBDARK, _ORIENTATION),
-        [ParamSpec(:B_rot, "Differential rotation B", "", 0.0, -1.0, 1.0, :orientation,
+        [ParamSpec(:B_rot, "Diff. rotation B", "", 0.0, -1.0, 1.0, :orientation,
                    "Carried by `starparameters` but NOT currently read: the " *
                    "differential-rotation path is not wired in (see rotate_star).")],
         "Roche-model oblate rotator with von Zeipel gravity darkening."),

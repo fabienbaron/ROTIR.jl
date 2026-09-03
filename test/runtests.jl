@@ -66,6 +66,11 @@ end
     # joint fitter's refusal to guess a θ layout it does not have.
     include(joinpath(TESTDIR, "test_reconstruct_hooks.jl"))
 
+    # Every name the extensions import from the core package, without loading any of them —
+    # a phantom import is only a WARNING at load time, and one had been there since the file
+    # was written.
+    include(joinpath(TESTDIR, "test_extensions.jl"))
+
     # The @turbo forward kernel against the scalar reference it rewrites — both precisions,
     # three mesh levels, three surface types, three datasets, and the degenerate cases.
     include(joinpath(TESTDIR, "test_fused_polyft.jl"))

@@ -162,6 +162,25 @@ ApplicationWindow {
         orbitTab.refresh(); orbitTab.redraw()
     }
 
+    // One tab, for a TAB SWITCH. `repaintAll()` was doing this four times over, and the three
+    // invisible ones are not free: `refresh()` rebuilds that tab's ListModels from the shell's
+    // tables — the epoch table has one entry per epoch and the parameter form one per field —
+    // and a ListModel rebuild is QML-engine work whether or not anyone can see the result.
+    //
+    // Nothing needs RECOMPUTING either way. The Julia side of all four refreshes measures
+    // 0.03 ms together: each tab owns its own Figures and they keep their contents, so a
+    // switch has always been a repaint rather than a rebuild. This is about not doing the
+    // repaint three extra times.
+    //
+    // The tabs left behind stay correct because every path that changes the DATA goes through
+    // `refreshAll()`, which still refreshes all four.
+    function repaintTab(i) {
+        if      (i === 0) { dataTab.refresh();  dataTab.redraw()  }
+        else if (i === 1) { modelTab.refresh(); modelTab.redraw() }
+        else if (i === 2) { imageTab.refresh(); imageTab.redraw() }
+        else if (i === 3) { orbitTab.refresh(); orbitTab.redraw() }
+    }
+
     // Saved appearance defaults, applied BEFORE the first plot is drawn: the plot layer sizes
     // its type from the scale, and applying it afterwards would draw once at the wrong size.
     function applySavedSettings() {
@@ -486,7 +505,7 @@ ApplicationWindow {
             // Repaint only. Makie draws on demand, so a MakieArea that was not visible while
             // its Observables were reassigned still holds the previous frame and needs an
             // update() — but nothing needs recomputing, because nothing changed.
-            onCurrentIndexChanged: win.repaintAll()
+            onCurrentIndexChanged: win.repaintTab(currentIndex)
 
             DataTab  { id: dataTab; fontFamily: win.uiFontFamily;  uiScale: win.uiScale; fontPt: pt(10)
                        onStatusChanged: function (s) { if (s.length > 0) win.status = s }

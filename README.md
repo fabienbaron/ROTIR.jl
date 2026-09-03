@@ -151,6 +151,46 @@ See the [full documentation](https://fabienbaron.github.io/ROTIR.jl/dev/guides/s
 ROTIR uses [OITOOLS.jl](https://github.com/fabienbaron/OITOOLS.jl) for OIFITS
 I/O and data handling.
 
+## Graphical interface (work in progress)
+
+One window over one session — the same dataset moves from epoch browsing to model fitting to
+reconstruction without being written out and read back. Three tabs: **Data exploring** (epochs,
+uv coverage, observables, per-epoch reduced χ² against the current model), **Modeling** (a
+parameter form generated from the surface schema, each parameter free/fixed/tied, and the fit
+backends below), and **Imaging** (tessellation, the ten regularisers, and the reconstruction).
+It is under active development: the panels work, but not every control behind them is wired yet.
+
+```julia
+using ROTIR, GLMakie, QMLMakie, QML   # these three activate the GUI extension
+gui()                                 # optionally gui(session), or pass files to load
+```
+
+GLMakie, QMLMakie and QML are weak dependencies, so `using ROTIR` still costs no Makie and no
+Qt. From a clone there is a pinned launcher environment, which also sets the graphics hints
+that must precede the first OpenGL context (and picks native Wayland over XWayland where it
+can):
+
+```
+julia --project=bin bin/rotirgui.jl [file.oifits ...]
+```
+
+A fit or a reconstruction runs on a worker thread with its optimiser trace streaming to the
+console at the bottom, so the window stays responsive and a long run can be watched rather than
+waited on. Nelder–Mead and gradient descent are always available; the nested samplers
+(Nautilus), Hamiltonian Monte Carlo and parallel tempering (Pigeons) appear when their packages
+are loaded, and bring a posterior view with them. The panel says which gradient paths are
+offered and, where one is not, why.
+
+Every action also echoes the equivalent ROTIR call to the console, so the window doubles as a
+way to learn the scripting API. **Export script…** turns the session into a runnable `.jl`;
+**Save model map** writes the HEALPix map to FITS along with every keyword needed to reproduce
+its χ², and **Load model map** reads one back.
+
+Three surface views are shared by Modeling and Imaging — the orthographic sky projection (the
+default, since it is what the interferometer measures), a rotatable 3-D view with real
+depth-buffer occlusion, and the Mollweide whole-surface map — with the decorations, colormaps
+and epoch slider common to all of them.
+
 ## Documentation
 
 Full documentation is available at

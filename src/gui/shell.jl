@@ -91,6 +91,11 @@ mutable struct ShellState
     # MakieArea at a time — pointing two tabs at one figure leaves one blank and draws the
     # other detached across the panel beside it.
     imstar::Any                           # StarCanvas
+    # The map the Imaging views are currently showing, as `(star, x, title)` — or `nothing`
+    # before the first reconstruction. Kept because those views are drawn ONCE, when a run
+    # finishes, so a later change to how a map is drawn (the intensity tick, a decoration, the
+    # graticule) had nothing to redraw from and silently did nothing on this tab.
+    lastmap::Base.RefValue{Any}
 end
 
 const SHELL = Ref{Any}(nothing)
@@ -500,6 +505,16 @@ function shell_set_param_state(name, state)
     m = current_model(sh.session)
     m === nothing && return "no model"
     n = Symbol(String(name)); s = String(state)
+    # A DISCRETE field has no free/fixed/tied to make: `ldtype` selects which limb-darkening
+    # law `compute_ldmap` applies, and an optimiser cannot walk 1→2→3→4 as a continuous
+    # coordinate — every backend would sample fractional laws that do not exist. The panel
+    # hides the selector for these, and this refuses it, so the rule lives with the schema
+    # rather than only in the QML that happens to draw it.
+    specs = surface_params(m.surface_type)
+    i = findfirst(ps -> ps.name === n, specs)
+    if i !== nothing && specs[i].kind === :choice && s != "fixed"
+        return "$(specs[i].label) is a discrete choice, not a value that can be $(s)"
+    end
     if s == "free"
         push!(m.free, n); delete!(m.ties, n)
     elseif s == "fixed"
@@ -625,7 +640,9 @@ shell_polyft_backends() = join((
     "the mesh. Accurate to 6.8e-7 at HEALPix 3 and 2.5e-9 above it",
     "turbo\tExact, vectorised\t" *
     "the closed-form polygon transform with SIMD transcendentals — no approximation " *
-    "parameters at all, 17x the reference at HEALPix 3",
+    "parameters at all, 17x the reference at HEALPix 3. Selecting it LOADS " *
+    "LoopVectorization, which pauses the window for a few seconds, once per session" *
+    (ROTIR.turbo_available() ? " (already loaded)" : ""),
     "scalar\tExact, reference\t" *
     "the same arithmetic in plain Julia; the definition the other two are tested against, " *
     "and what to fall back on if a fit looks wrong"), "\n")
@@ -643,6 +660,32 @@ function shell_set_polyft_backend(kind)
     sh = _sh()
     k = Symbol(String(kind))
     k in (:nufft, :turbo, :scalar) || return "backend must be nufft, turbo or scalar"
+    # `:turbo` needs LoopVectorization, which ROTIR does NOT load: measured, loading it
+    # invalidates OITOOLS' precompiled canvas code and takes one `build_canvas` from 341 ms to
+    # 2685 ms — 1.8 s onto every GUI start, for a kernel that is now the cross-check rather
+    # than the default. So it is loaded HERE, when someone asks for it, and never otherwise.
+    #
+    # Synchronously, on the GUI thread, rather than through `start_job!`: package loading takes
+    # locks that the render thread also wants, and a `using` on a worker can deadlock against
+    # it. A few seconds of frozen window is the honest cost, and the panel says so before the
+    # click. It is only ever paid once — the second selection finds the extension loaded.
+    if k === :turbo && !ROTIR.turbo_available()
+        console!(sh, "loading LoopVectorization for the turbo kernel (one-time)…")
+        try
+            # Into `Main`, whose load path is the ACTIVE PROJECT — `bin`, which carries
+            # LoopVectorization as a direct dep for exactly this. An extension module resolves
+            # only the parent's deps plus its own triggers, so a `using` in here would not
+            # find a weakdep of ROTIR that is not one of ROTIRGUIExt's triggers. The binding
+            # is not what is wanted anyway: loading the package is what activates
+            # ROTIRLoopVectorizationExt and gives `_cvis_turbo!` its methods.
+            @eval Main using LoopVectorization
+        catch e
+            return "turbo needs LoopVectorization, which failed to load: " *
+                   sprint(showerror, e)
+        end
+        ROTIR.turbo_available() ||
+            return "LoopVectorization loaded but ROTIRLoopVectorizationExt did not"
+    end
     ROTIR.POLYFT_BACKEND[] = k
     sh.chi2key[] = nothing
     console!(sh, "polyft backend: $(k)")
@@ -698,6 +741,7 @@ function shell_set_graticule(lat_deg, lon_deg, colour)
     c = String(colour)
     c in GRATICULE_COLORS && (sh.gratcolor[] = c)
     refresh_both!(sh)
+    refresh_image_tab!(sh)
     return ""
 end
 
@@ -712,6 +756,7 @@ function shell_set_decoration(name, on)
     haskey(sh.decor, k) || return "unknown decoration $(name)"
     sh.decor[k] = String(on) == "1"
     refresh_both!(sh)
+    refresh_image_tab!(sh)
     return ""
 end
 
@@ -759,6 +804,7 @@ function shell_set_surface_field(intensity, model, band_um)
     end
     refresh_data_tab!(sh)
     refresh_model_tab!(sh)
+    refresh_image_tab!(sh)
     return sh.intensity[] ? "colouring by intensity ($(m))" : "colouring by temperature"
 end
 
@@ -2205,13 +2251,42 @@ map the model generates — which is also the comparison being made most of the 
 function show_reconstruction!(sh::ShellState, star, x; title::AbstractString = "")
     m = current_model(sh.session)
     sp = m === nothing ? nothing : star_params(m)
-    show_map!(sh.imsky, star, Float64.(x[star.index_quads_visible]);
+    sh.lastmap[] = (star = star, x = Vector{Float64}(x), title = String(title))
+    # Through `surface_values`, exactly as the Model tab does. This drew `x` raw, so the
+    # intensity tick — and with it the limb darkening, which is the whole visible difference
+    # between a temperature map and what the interferometer sees — did nothing on this tab.
+    # A reconstructed map is a temperature map like any other; there is no reason for the two
+    # tabs to disagree about how one is displayed.
+    allv = surface_values(sh, x, star; visible_only = false)
+    sh.imsky.cbarlabel[] = sh.intensity[] ? "I (arb.)" : "T (K)"
+    show_map!(sh.imsky, star, allv[star.index_quads_visible];
               title = title, star_params = sp, _decor(sh)...)
-    show_mollweide!(sh.immoll, Float64.(x), star)
-    sh.imstar === nothing || show_star3d!(sh.imstar, star, Float64.(x))
+    show_mollweide!(sh.immoll, allv, star)
+    sh.imstar === nothing || show_star3d!(sh.imstar, star, allv)
     # And the Model tab's own 3-D scene, which is where the recovered map is compared with the
     # parametric one it started from.
-    show_star3d!(sh.star, star, Float64.(x))
+    show_star3d!(sh.star, star, allv)
+    return sh
+end
+
+"""
+    refresh_image_tab!(sh)
+
+Redraw the Imaging views from the last reconstruction, if there is one.
+
+Unlike the other two tabs there is nothing to recompute: the map came from a run that has
+finished, and only the way it is DRAWN can have changed. Without this the tab was frozen at
+whatever the run left behind — every view option was live on the Model tab and dead here.
+"""
+function refresh_image_tab!(sh::ShellState)
+    lm = sh.lastmap[]
+    if lm === nothing
+        msg = "no reconstruction yet — set up the regularisers and press Reconstruct"
+        idle!(sh.imsky, msg); idle!(sh.immoll, msg)
+        sh.imstar === nothing || idle!(sh.imstar, msg)
+        return sh
+    end
+    show_reconstruction!(sh, lm.star, lm.x; title = lm.title)
     return sh
 end
 

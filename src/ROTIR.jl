@@ -16,7 +16,6 @@ using NLopt
 using Printf
 using PrecompileTools
 using ChainRulesCore
-using LoopVectorization
 import FINUFFT
 import FITSIO
 import FITSIO: read_header
@@ -290,6 +289,7 @@ export sigmoid, dsigmoid, soft_visibility
 # Fused two-pass polyft (matrix-free forward/adjoint)
 export compute_polyflux_and_cvis!, compute_adjoint_cvis!, compute_adjoint_vertices!
 export precompute_k2_inv_im, fused_spheroid_chi2_fg, fused_cvis, POLYFT_BACKEND
+export turbo_available
 
 # Rasterization (polygon -> image via Sutherland-Hodgman clipping)
 export rasterize_polygon_image!, rasterize_polygon_image, rasterize_adjoint!
