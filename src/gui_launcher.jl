@@ -52,6 +52,43 @@ const OPTIONAL_PACKAGES = [
      gives = ":pigeons — multimodal posteriors; ~2.8 s per start"),
 ]
 
+"""
+    _source_url(name) -> String or nothing
+
+The git URL ROTIR's own `[sources]` gives for `name`, if it has one.
+
+NOT every package here is registered: Nautilus lives at a URL, so `Pkg.add("Nautilus")` fails
+with "not found in a registry" — and `[sources]` does NOT propagate from a dependency, so a
+user's own project cannot learn the URL from ROTIR's Project.toml by itself. Reading it back
+out at install time keeps one copy of the address: change `[sources]` and this follows.
+"""
+function _source_url(name::Symbol)
+    proj = joinpath(pkgdir(ROTIR), "Project.toml")
+    isfile(proj) || return nothing
+    entry = get(get(TOML.parsefile(proj), "sources", Dict{String,Any}()), String(name), nothing)
+    entry isa AbstractDict || return nothing
+    url = get(entry, "url", nothing)
+    return url isa AbstractString ? url : nothing
+end
+
+"""
+    _pkg_add(Pkg, names) -> nothing
+
+`Pkg.add` the named packages, by URL for the unregistered ones.
+
+Called through `invokelatest` because `Pkg` was loaded moments ago: `Pkg.PackageSpec` is a
+constructor in a module newer than the frame that wants it.
+"""
+function _pkg_add(Pkg, names::Vector{Symbol})
+    specs = map(names) do n
+        url = _source_url(n)
+        url === nothing ? Pkg.PackageSpec(name = String(n)) :
+                          Pkg.PackageSpec(name = String(n), url = url)
+    end
+    Pkg.add(specs)
+    return nothing
+end
+
 "The optional groups that are not fully installed, as indices into `OPTIONAL_PACKAGES`."
 _missing_optional() =
     [i for (i, o) in enumerate(OPTIONAL_PACKAGES) if !isempty(_not_installed(o.pkgs))]
@@ -216,7 +253,7 @@ function _provision(install, samplers::Bool)
     @info "installing $(_and_list(add)) into $(proj)"
     # `invokelatest`: Pkg was loaded on the line above, so its methods are newer than this
     # frame — the same rule that governs every other load in this file.
-    Base.invokelatest(Pkg.add, String.(add))
+    Base.invokelatest(_pkg_add, Pkg, add)
     return nothing
 end
 
@@ -225,7 +262,7 @@ end
 
 `using` the named packages in `Main`, or raise an error naming them together.
 
-Reached only after [`_ensure_installed`](@ref), so a failure here is not a missing package but
+Reached only after `_provision`, so a failure here is not a missing package but
 a broken one — a precompilation error, or a version that cannot resolve.
 """
 function _load_or_explain(names::Vector{Symbol})
@@ -285,7 +322,7 @@ requires.
   `@info` line, not a question on every launch.
 - `session` — an existing `Session` to reopen instead of a fresh one.
 
-Anything else is passed to [`gui`](@ref) — `autoquit_ms` and `qmlfile`, which is how an
+Anything else is passed to `gui` — `autoquit_ms` and `qmlfile`, which is how an
 automated run drives the window without a person to close it.
 
 Returns when the window closes.

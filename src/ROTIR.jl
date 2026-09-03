@@ -20,6 +20,7 @@ import FINUFFT
 import FITSIO
 import FITSIO: read_header
 import Dates
+import TOML          # read [sources] back in src/gui_launcher.jl
 
 include("oistars.jl");
 include("surface_schema.jl");

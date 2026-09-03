@@ -37,6 +37,36 @@ using ROTIR
 
 See the [installation guide](https://fabienbaron.github.io/ROTIR.jl/dev/install/) for details.
 
+### Optional packages
+
+`using ROTIR` loads no plotting toolkit, no Qt, no sampler and no Python. Everything optional
+is a **weak dependency**: the code ships inside ROTIR and becomes active when you load its
+trigger package yourself.
+
+That is measured, not tidiness — `using PythonCall` alone takes one OITOOLS canvas build from
+338 ms to 2477 ms by invalidating precompiled plotting code, and Pigeons and LoopVectorization
+cost 2.8 s and 2.3 s of GUI startup the same way. A script should not pay for what it does not
+use.
+
+| Load this | and you get |
+|-----------|-------------|
+| `Makie` | `plot2d_makie`, `plot3d_makie`, `plot_mollweide_makie`, the decorations |
+| `GLMakie, QMLMakie, QML` | the graphical interface (`rotirgui`, `gui`) |
+| `PythonPlot` | the matplotlib plotting layer (`plot2d`, `plot3d`, …) |
+| `Zygote` | `fit_parametric`, `bootstrap_parametric`, the gradient fit |
+| `AdvancedHMC, LogDensityProblems` | `method = :nuts` |
+| `Nautilus` | `method = :nautilus` — nested sampling, with an evidence |
+| `Pigeons, Distributions, ADTypes` | `method = :pigeons` — parallel tempering |
+| `PythonCall` | `method = :ultranest` |
+| `LoopVectorization` | `POLYFT_BACKEND[] = :turbo`, the vectorised exact kernel |
+
+Each has to be installed in **your own** project — a weak dependency of ROTIR is not
+automatically available to you — and `rotirgui()` offers to do exactly that for the ones the
+window needs. Calling something whose extension is not loaded raises a `MethodError` naming the
+function, not an `UndefVarError`, because the names are declared in ROTIR itself; several also
+have a predicate you can ask first (`nautilus_available()`, `hmc_available()`,
+`pigeons_available()`, `ultranest_available()`, `turbo_available()`).
+
 ## Quick start
 
 ```julia
@@ -160,15 +190,33 @@ parameter form generated from the surface schema, each parameter free/fixed/tied
 backends below), and **Imaging** (tessellation, the ten regularisers, and the reconstruction).
 It is under active development: the panels work, but not every control behind them is wired yet.
 
+One call opens it, from a plain session:
+
+```julia
+using ROTIR
+rotirgui()                             # empty session
+rotirgui("mydata.oifits")              # with a dataset loaded
+rotirgui("ep1.oifits", "ep2.oifits")   # several epochs
+```
+
+`rotirgui` does the whole startup: it applies the Mesa, GLFW and Qt hints — which have to be
+set *before* the first OpenGL context exists, so no extension can do it, and which pick native
+Wayland over XWayland where they can — then loads GLMakie, QMLMakie and QML, then the optional
+samplers, then opens the window.
+
+If GLMakie, QMLMakie or QML are not installed it offers to add them, and lists the optional
+samplers alongside; **Enter** installs only what the window needs and goes straight to the GUI.
+`install = true` takes everything without asking, `install = false` explains and stops, and
+`samplers = false` starts faster at the cost of those fit methods not being offered.
+
+To open the window with a stack you loaded yourself — what `rotirgui` ultimately calls:
+
 ```julia
 using ROTIR, GLMakie, QMLMakie, QML   # these three activate the GUI extension
 gui()                                 # optionally gui(session), or pass files to load
 ```
 
-GLMakie, QMLMakie and QML are weak dependencies, so `using ROTIR` still costs no Makie and no
-Qt. From a clone there is a pinned launcher environment, which also sets the graphics hints
-that must precede the first OpenGL context (and picks native Wayland over XWayland where it
-can):
+From a clone there is also a pinned launcher environment, the reproducible way to run it:
 
 ```
 julia --project=bin bin/rotirgui.jl [file.oifits ...]
