@@ -55,6 +55,18 @@ for f in "$QMLDIR"/*.qml; do
     fi
 done
 
+# DETACHED JULIA DOCSTRINGS. Inserting a documented function immediately above another
+# function's `function` line strands that function's docstring, which Julia then applies to a
+# string literal — a load-time error in the loud case, and a silently undocumented function in
+# the quiet one. Both happened here.
+if python3 "$(dirname "$0")/julia_docstrings.py" "$(dirname "$0")/../../src"; then :; else FAIL=1; fi
+
+# MODEL ROLES, which qmllint does not check either. A delegate that reads a role its ListModel
+# never appends throws a ReferenceError when the handler runs — so a signal handler fails
+# silently and completely, the control looking as though it worked while nothing behind it
+# moved. See the script's header for the case that motivated it.
+if python3 "$(dirname "$0")/qml_model_roles.py" "$QMLDIR"; then :; else FAIL=1; fi
+
 # SIGNAL ARITY, which qmllint does not check at all. A signal declared with two parameters and
 # emitted with one passes every check above while the QML engine reports "Insufficient
 # arguments" at run time and the handler sees `undefined` — see the script's own header.

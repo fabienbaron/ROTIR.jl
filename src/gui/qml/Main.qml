@@ -183,6 +183,22 @@ ApplicationWindow {
     //
     // The tabs left behind stay correct because every path that changes the DATA goes through
     // `refreshAll()`, which still refreshes all four.
+    // "Save plot…" from any tab: remember WHAT to save, then ask where. The picker returns a
+    // path under mode "savefig" and `onAccepted` finishes the job — the write cannot happen
+    // before the user has named a file, and the size has to be captured now because the area
+    // that knows it is on a tab the picker is about to cover.
+    property string saveWhich: ""
+    property int saveW: 0
+    property int saveH: 0
+    function askSaveFigure(which, w, h) {
+        win.saveWhich = which; win.saveW = w; win.saveH = h
+        picker.purpose = "image"
+        picker.canAdd = false
+        picker.saveMode = true
+        picker.suggestedName = "rotir_" + which + ".png"
+        picker.openAt(Julia.image_dir())
+    }
+
     function repaintTab(i) {
         if      (i === 0) { dataTab.refresh();  dataTab.redraw()  }
         else if (i === 1) { modelTab.refresh(); modelTab.redraw() }
@@ -441,6 +457,12 @@ ApplicationWindow {
                 win.refreshAll()
                 return
             }
+            if (mode === "savefig") {
+                var path = paths.split("\n")[0]
+                var msg = Julia.shell_save_figure(win.saveWhich, path, win.saveW, win.saveH)
+                win.status = msg.length > 0 ? msg : "saved " + path
+                return
+            }
             if (mode === "map") {
                 win.status = Julia.shell_load_map(paths.split("\n")[0])
                 win.refreshAll()
@@ -523,6 +545,7 @@ ApplicationWindow {
                 onClicked: {
                     picker.purpose = "map"
                     picker.canAdd = false
+                    picker.saveMode = false
                     picker.openAt(initialFolder)
                 }
             }
@@ -565,24 +588,29 @@ ApplicationWindow {
 
             DataTab  { id: dataTab; fontFamily: win.uiFontFamily;  uiScale: win.uiScale; fontPt: pt(10)
                        onStatusChanged: function (s) { if (s.length > 0) win.status = s }
+                       onSaveRequested: function (which, w, h) { win.askSaveFigure(which, w, h) }
                        onRefreshAllRequested: win.refreshAll() }
             ModelTab { id: modelTab; fontFamily: win.uiFontFamily;
                        precision: precisionBox.currentText; uiScale: win.uiScale; fontPt: pt(10)
                        jobRunning: win.jobRunning; jobElapsed: win.jobElapsed
                        jobProgress: win.jobProgress
-                       onStatusChanged: function (s) { if (s.length > 0) win.status = s } }
+                       onStatusChanged: function (s) { if (s.length > 0) win.status = s }
+                       onSaveRequested: function (which, w, h) { win.askSaveFigure(which, w, h) } }
             ImageTab { id: imageTab; fontFamily: win.uiFontFamily; uiScale: win.uiScale; fontPt: pt(10)
                        jobRunning: win.jobRunning; jobElapsed: win.jobElapsed
-                       onStatusChanged: function (s) { if (s.length > 0) win.status = s } }
+                       onStatusChanged: function (s) { if (s.length > 0) win.status = s }
+                       onSaveRequested: function (which, w, h) { win.askSaveFigure(which, w, h) } }
             // Orbit last: it is the one perspective that is about the SYSTEM rather than
             // about one star's surface, and it does not depend on the other three.
             OrbitTab { id: orbitTab; fontFamily: win.uiFontFamily
                        uiScale: win.uiScale; fontPt: pt(10)
                        jobRunning: win.jobRunning
                        onStatusChanged: function (s) { if (s.length > 0) win.status = s }
+                       onSaveRequested: function (which, w, h) { win.askSaveFigure(which, w, h) }
                        onPickFile: function (mode) {
                            picker.purpose = mode
                            picker.canAdd = false
+                    picker.saveMode = false
                            // Orbits have a folder of their own, seeded with the ones that
                            // ship — so "Load orbit…" opens on β Lyr and Spica rather than on
                            // whatever directory Julia was started from.

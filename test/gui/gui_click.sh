@@ -201,8 +201,29 @@ CL "$(FX 132)" "$(FY 113)" 2          # surface-type combo -> popup (second GL s
 SHOT 05_type_popup
 KEY Down 1
 KEY Return 2
-CL "$(FX 294)" "$(FY 113)" 5          # "+ model"
+# RE-READ after the "secondary" tick was added to this row. The type combo has fillWidth, so a
+# new fixed-width control shrinks it and everything between moves LEFT: "+ model" went from
+# x=400 to x=299. "− model" did not move, because the tick took exactly the space the combo
+# lost. Nothing errored — the click landed on the disabled tick — so the run carried on and
+# failed six checks later, which is how a coordinate drift shows up here.
+CL "$(FX 220)" "$(FY 113)" 5          # "+ model"
 SHOT 06_model_added
+
+# FREE A PARAMETER THROUGH THE FORM, then fit. This is the only test that can see a broken
+# parameter row: the headless suite calls `shell_set_param_state` directly and passes whatever
+# the QML does. A model role that was never added — `pcomp`, carrying which component a row
+# belongs to — made every handler in this form throw a ReferenceError before it reached Julia,
+# so editing a value, a state, a bound or a tie all did nothing at all. The only visible sign
+# was the Fit button staying greyed, because it is enabled on the count of free parameters.
+#
+# Coordinates read off 06_model_added.png at 1360x920: the "Radius x" state combo, and Fit.
+CL "$(FX 218)" "$(FY 252)" 2          # "Radius x" state combo -> popup
+KEY Down 1                            # fixed -> free
+KEY Return 2
+SHOT 06b_param_freed
+CL "$(FX 294)" "$(FY 504)" 4          # Fit: enabled only when something is free
+SHOT 06c_fit_started
+CL "$(FX 357)" "$(FY 529)" 3          # Stop, so the rest of the run is not racing a job
 
 CL "$(FX 491)" "$(FY 89)" 3           # Mollweide
 SHOT 07_view_mollweide
@@ -216,8 +237,13 @@ SHOT 09_view_ortho
 # which under QMLMakie hands back noise (see src/gui/snapshot.jl). Done HERE, on a view that
 # has a map on it: from the posterior view with no fit yet the panel correctly refuses, which
 # is right behaviour and a useless assertion.
-CL "$(FX 966)" "$(FY 88)" 5           # Save view…
-SHOT 09a_saved
+# "Save plot…" now ASKS where, through the same file picker, opening on the Saved images
+# folder with the name already filled in and focused. Return accepts it — which is also the
+# check that the field gets focus, since without it the key goes nowhere and no file appears.
+CL "$(FX 966)" "$(FY 88)" 3           # Save plot… -> the picker, in save mode
+SHOT 09a_save_dialog
+CL "$(FX 685)" "$(FY 784)" 4          # the picker's Save button
+SHOT 09b_saved
 # Zoom out with the wheel, then reset with a RIGHT-CLICK on the plot — the gesture replaced a
 # button, so this is the only way to exercise it.
 DISPLAY="$DISP" xdotool mousemove --window "$WID" "$(FX 700)" "$(FY 480)" click 5 click 5
@@ -238,7 +264,7 @@ SHOT 10_colormap
 CL "$(FX 357)" "$(FY 113)" 3          # "− model"
 SHOT 10d_model_cleared
 # ...and back, because the reconstruction below needs a geometry to sit on.
-CL "$(FX 294)" "$(FY 113)" 5          # "+ model"
+CL "$(FX 220)" "$(FY 113)" 5          # "+ model"
 
 # ── the Imaging tab: tick a regulariser and run one ──────────────────────────
 CL "$TAB_IMAGING" "$TAB_Y" 2
@@ -315,14 +341,23 @@ grep -qF "add:" "$DUMP"           && ck "Add epoch appended a second night" 1 \
 grep -qE "model .*surface_type" "$DUMP" && ck "a model was created" 1 \
                                         || ck "a model was created" 0
 grep -qF "cleared model" "$DUMP" && ck "− model cleared it" 1 || ck "− model cleared it" 0
+# The whole chain: QML row -> Julia state -> free count -> Fit enabled -> job started.
+# `fit done:`, not the line that announces the start — that one is logged with `kind = :cmd`
+# and goes to the command log rather than to the console this dump captures. Waiting for the
+# END is the better assertion anyway: it proves the whole chain ran, from the QML row through
+# the free count and the enabled button to a criterion that actually converged.
+grep -qE "^fit done:" "$DUMP" \
+    && ck "freeing a parameter in the form enables Fit" 1 \
+    || ck "freeing a parameter in the form enables Fit" 0
 grep -qF "image_reconstruct_oi" "$DUMP" && ck "a reconstruction was started" 1 \
                                         || ck "a reconstruction was started" 0
 grep -qE "χ²ᵣ = " "$DUMP"         && ck "the reconstruction finished and reported χ²" 1 \
                                   || ck "the reconstruction finished and reported χ²" 0
-grep -qF "star model: tessellated" "$DUMP" && ck "the 3-D star model was selected" 1 \
-                                           || ck "the 3-D star model was selected" 0
-grep -qE "wrote .*\.png" "$DUMP" && ck "Save view wrote a PNG" 1 \
-                                 || ck "Save view wrote a PNG" 0
+grep -qF "define a binary" "$DUMP" \
+    && ck "tessellated components refuse without a binary" 1 \
+    || ck "tessellated components refuse without a binary" 0
+grep -qE "wrote .*\.png" "$DUMP" && ck "Save plot wrote a PNG" 1 \
+                                 || ck "Save plot wrote a PNG" 0
 grep -qE "now has 2 epoch\(s\)" "$DUMP" && ck "Ctrl-click selected two files at once" 1 \
                                         || ck "Ctrl-click selected two files at once" 0
 

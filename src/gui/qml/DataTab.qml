@@ -30,6 +30,10 @@ Pane {
     function dp(px) { return Math.round(px * uiScale) }
 
     signal statusChanged(string s)
+    // "Save plot…" goes through the window's file picker rather than writing a fixed name:
+    // the window owns the picker, and a tab has no way to reach it. `which` names the plot,
+    // and the size is the area's, so the PNG matches what is on screen.
+    signal saveRequested(string which, int w, int h)
     // Removing an epoch or a dataset changes what every tab shows, so the window refreshes
     // all of them rather than this tab redrawing itself in isolation.
     signal refreshAllRequested()
@@ -335,15 +339,13 @@ Pane {
                     }
                 }
                 Button {
-                    text: "Save view…"
+                    text: "Save plot…"
                     font.pointSize: root.fontPt - 1
                     onClicked: {
                         // Rebuilt offscreen, not grabbed: see src/gui/snapshot.jl.
                         var w = root.viewIndex < root.nObs ? "obs"
                               : root.viewIndex === root.nObs ? "sky" : "chi2"
-                        var m = Julia.shell_save_figure(w, "rotir_" + w + ".png",
-                                                        obsArea.width, obsArea.height)
-                        root.statusChanged(m.length > 0 ? m : "saved rotir_" + w + ".png")
+                        root.saveRequested(w, obsArea.width, obsArea.height)
                     }
                 }
                 Item { Layout.fillWidth: true }

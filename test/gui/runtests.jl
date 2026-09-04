@@ -772,8 +772,16 @@ end
     @test length(frows) == 1
     f1 = cols(frows[1])
     @test length(f1) == 9
-    @test f1[2] == "neldermead" && f1[6] == "—" && f1[8] == "0"   # no evidence, no draws
-    @test isempty(G.current_fit(sh.session).samples)
+    @test f1[2] == "neldermead" && f1[6] == "—"                   # no evidence
+    # The draws/evals column holds whichever number the METHOD produced: a sampler reports
+    # draws, a local optimiser reports how many times it evaluated the criterion. It used to
+    # read "0" here, which said nothing — an optimiser has no draws, and the count it does
+    # have is the thing that says whether it converged or ran out of budget.
+    @test f1[8] != "0" && f1[8] != "—"
+    nev = parse(Int, f1[8])
+    @test 0 < nev <= 300                                          # NLopt's own count, ≤ budget
+    @test G.current_fit(sh.session).nevals == nev
+    @test isempty(G.current_fit(sh.session).samples)              # and still no posterior
     G.refresh_posterior!(sh)
     @test occursin("no posterior", sh.post.message[])
 

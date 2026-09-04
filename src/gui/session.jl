@@ -143,6 +143,10 @@ mutable struct FitEntry
     chi2::Float64
     ndata::Int
     diagnostics::String            # divergences, round trips, chains — sampler-specific
+    # How many times the criterion was EVALUATED, for a local optimiser. Zero for a sampler,
+    # which reports draws instead — the two answer the same question about how much work the
+    # fit did, and the table shows whichever the method actually produced.
+    nevals::Int
 end
 
 """

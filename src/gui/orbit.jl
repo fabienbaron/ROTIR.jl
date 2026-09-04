@@ -686,8 +686,12 @@ function shell_set_orbit_star_model(kind)
     # Without one there is nothing to render, so this refuses rather than quietly falling back
     # to a hardcoded pair of Roche spheres.
     if k === :tessellated && _orbit_binary(sh) === nothing
-        return "define a binary on the Model tab first: add a model, tick binary, and its " *
-               "two components become the 3-D stars here"
+        msg = "define a binary on the Model tab first: add a model, tick secondary, and its " *
+              "two components become the 3-D stars here"
+        # To the CONSOLE as well as the status bar: it is a refusal with an instruction in it,
+        # and the status bar is overwritten by the next thing that happens.
+        console!(sh, msg)
+        return msg
     end
     o.model = k
     # A 3-D component only exists on screen once it is drawn, so choosing it turns rendering
@@ -910,6 +914,30 @@ function orbit_dir()
     catch err
         # A read-only home is not a reason to fail to open a picker.
         @warn "could not create the orbit folder" dir exception = err
+        return pwd()
+    end
+    return dir
+end
+
+"""
+    image_dir() -> String
+
+Where saved views go, created on first use.
+
+Beside the orbits, and per user for the same reason: a PNG of a fit is a thing you keep, and the
+working directory a GUI happens to have been launched from is not somewhere anyone looks for it
+later. It was the working directory until now, so "Save view" scattered `rotir_star3d-2.png`
+through whatever tree the launcher was run in.
+"""
+function image_dir()
+    base = Sys.iswindows() ? get(ENV, "APPDATA", homedir()) :
+           get(ENV, "XDG_CONFIG_HOME", joinpath(homedir(), ".config"))
+    dir = joinpath(base, "rotir", "images")
+    isdir(dir) && return dir
+    try
+        mkpath(dir)
+    catch err
+        @warn "could not create the image folder" dir exception = err
         return pwd()
     end
     return dir

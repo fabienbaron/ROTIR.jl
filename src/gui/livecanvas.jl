@@ -673,16 +673,22 @@ function build_star_canvas(fig)
     # is right-handed — see `star_mesh` — so viewed down +z it puts East on the left, matching
     # the sky view.
     #
-    # The opening camera is the observer's, tilted 10 degrees off it.
+    # The opening camera is off the observer's axis in BOTH angles, so that all three axes are
+    # legible at once.
     #
     # Straight down the line of sight is the view the orthographic panel already gives, so a
     # 3-D scene that opens there looks like a flat picture with axes round it and gives no
-    # reason to drag. FORTY-FIVE degrees: the z axis gets the same visible extent as x and y,
-    # the body reads as a solid rather than a disc, and the near hemisphere — the one the data
-    # constrain — still fills most of the frame.
+    # reason to drag. But tilting in elevation alone is not enough: at `azimuth = pi/2` the y
+    # and z axes project onto the SAME edge of the frame, so their labels overlap and their
+    # tick numbers print on top of each other — the scene shows two axes where it has three,
+    # and nothing on screen says which way y runs.
+    #
+    # Thirty degrees of azimuth separates them; twenty-two of elevation keeps the near
+    # hemisphere — the one the data constrain — facing the viewer and filling the frame, with
+    # the body still reading as a solid rather than a disc.
     ls = Makie.Axis3(fig[1, 1]; aspect = :data, perspectiveness = 0f0,
                      xlabel = "x → W (mas)", ylabel = "y → N (mas)", zlabel = "z → obs (mas)",
-                     azimuth = pi/2, elevation = pi/2 - deg2rad(45))
+                     azimuth = pi/2 + deg2rad(30), elevation = deg2rad(22))
 
     # The colour vector must match the mesh's vertex count, EMPTY INCLUDED. A 3-vertex
     # placeholder mesh with a zero-length colour vector fails to build a render object at all

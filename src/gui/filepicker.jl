@@ -45,6 +45,12 @@ function picker_places()
         ""
     end
     isempty(o) || !isdir(o) || push!(rows, "Orbits\t$(o)")
+    im = try
+        image_dir()
+    catch
+        ""
+    end
+    isempty(im) || !isdir(im) || push!(rows, "Saved images\t$(im)")
     push!(rows, "Home\t$(homedir())")
     push!(rows, "Working dir\t$(pwd())")
     forced = get(ENV, "ROTIRGUI_DATA_DIR", "")

@@ -41,6 +41,10 @@ Pane {
     function dp(px) { return Math.round(px * uiScale) }
 
     signal statusChanged(string s)
+    // "Save plot…" goes through the window's file picker rather than writing a fixed name:
+    // the window owns the picker, and a tab has no way to reach it. `which` names the plot,
+    // and the size is the area's, so the PNG matches what is on screen.
+    signal saveRequested(string which, int w, int h)
 
     ListModel { id: backendModel }
 
@@ -68,6 +72,9 @@ Pane {
     ListModel { id: posModel }
 
     property bool isBinary: false
+    // How many parameters a fit would move. Refreshed with the form, so the Fit button
+    // follows every change of state without the panel recounting anything.
+    property int freeCount: 0
     ListModel { id: modelListModel }
     ListModel { id: typeModel }
     ListModel { id: methodModel }
@@ -144,7 +151,7 @@ Pane {
                                     // does not read. Julia has already zeroed it and dropped
                                     // it from the free set; this greys the row so the form
                                     // says which coefficients the law in force actually uses.
-                                    pinert: f.length > 12 && f[12] === "1" })
+                                    pinert: f.length > 12 && f[12] === "1", pcomp: 1 })
             }
         }
         // The companion, when there is one.
@@ -159,7 +166,7 @@ Pane {
                 param2Model.append({ pname: g[0], plabel: g[1], punit: g[2], pvalue: g[3],
                                      pstate: g[4], plo: g[5], phi: g[6], ptie: g[7],
                                      pgroup: g[8], pkind: g[9], pchoices: g[10], pdoc: g[11],
-                                     pinert: g.length > 12 && g[12] === "1" })
+                                     pinert: g.length > 12 && g[12] === "1", pcomp: 2 })
             }
         }
         var prows = root.isBinary ? Julia.shell_position_params() : ""
@@ -177,6 +184,7 @@ Pane {
         }
         var pl = Julia.shell_binary_placement()
         if (pl.length > 0) placeBox.currentIndex = pl.split("\t")[0] === "offset" ? 1 : 0
+        root.freeCount = parseInt(Julia.shell_free_count())
         warnLabel.text = Julia.shell_validate_model()
         var res = Julia.shell_last_fit()
         resultModel.clear()
@@ -737,8 +745,17 @@ Pane {
                 Item { Layout.fillWidth: true }
                 Button {
                     text: "Fit"
-                    enabled: !root.jobRunning
+                    // Nothing free is nothing to fit. The count comes from Julia because for
+                    // a binary the free parameters are spread over three tables and a position
+                    // only counts when a fixed offset places the secondary — counting rows
+                    // here would be a second answer that could disagree.
+                    enabled: !root.jobRunning && root.freeCount > 0
                     font.pointSize: root.fontPt
+                    ToolTip.text: root.freeCount > 0
+                        ? "fit the " + root.freeCount + " free parameter" +
+                          (root.freeCount === 1 ? "" : "s")
+                        : "nothing is free — set a parameter to \"free\" first"
+                    ToolTip.visible: hovered
                     onClicked: {
                         if (methodBox.currentIndex < 0) return
                         root.statusChanged(Julia.shell_fit(
@@ -872,7 +889,7 @@ Pane {
                         Label { Layout.fillWidth: true; text: "log(Z)"
                                 color: "#7f8c98"; font.pointSize: root.fontPt - 2
                                 horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: dp(56); text: "draws"
+                        Label { Layout.preferredWidth: dp(76); text: "draws/evals"
                                 color: "#7f8c98"; font.pointSize: root.fontPt - 2
                                 horizontalAlignment: Text.AlignRight }
                     }
@@ -915,7 +932,7 @@ Pane {
                                     text: flogz === "—" ? "—" : flogz + " ± " + flogzerr
                                     font.pointSize: root.fontPt - 1
                                     horizontalAlignment: Text.AlignRight }
-                            Label { Layout.preferredWidth: dp(56); text: fns
+                            Label { Layout.preferredWidth: dp(76); text: fns
                                     color: fns === "0" ? "#a0a6ac" : "#333"
                                     font.pointSize: root.fontPt - 1
                                     horizontalAlignment: Text.AlignRight }
@@ -958,7 +975,7 @@ Pane {
                 // QMLMakie renders into Qt's FBO, so reading the live framebuffer hands back
                 // noise. See src/gui/snapshot.jl.
                 Button {
-                    text: "Save view…"
+                    text: "Save plot…"
                     Layout.alignment: Qt.AlignTop
                     font.pointSize: root.fontPt - 1
                     ToolTip.text: "write this plot to a PNG beside the working directory"
@@ -1061,9 +1078,7 @@ Pane {
 
     function saveView() {
         var w = root.currentPlotName()
-        var m = Julia.shell_save_figure(w, "rotir_" + w + ".png",
-                                        viewStack.width, viewStack.height)
-        root.statusChanged(m.length > 0 ? m : "saved rotir_" + w + ".png")
+        root.saveRequested(w, viewStack.width, viewStack.height)
     }
 
     // Which plot area `shell_save_figure` should rebuild. The name follows the VIEW, not the

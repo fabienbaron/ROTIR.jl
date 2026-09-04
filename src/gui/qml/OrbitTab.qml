@@ -32,6 +32,10 @@ Pane {
     function dp(px) { return Math.round(px * uiScale) }
 
     signal statusChanged(string s)
+    // "Save plot…" goes through the window's file picker rather than writing a fixed name:
+    // the window owns the picker, and a tab has no way to reach it. `which` names the plot,
+    // and the size is the area's, so the PNG matches what is on screen.
+    signal saveRequested(string which, int w, int h)
     signal pickFile(string mode)          // the window owns the picker
 
     ListModel { id: paramModel }
@@ -464,12 +468,10 @@ Pane {
                 }
                 Item { Layout.fillWidth: true }
                 Button {
-                    text: "Save view…"
+                    text: "Save plot…"
                     font.pointSize: root.fontPt - 1
                     onClicked: {
-                        var m = Julia.shell_save_figure("orbit", "rotir_orbit.png",
-                                                        orbitArea.width, orbitArea.height)
-                        root.statusChanged(m.length > 0 ? m : "saved rotir_orbit.png")
+                        root.saveRequested("orbit", orbitArea.width, orbitArea.height)
                     }
                 }
             }

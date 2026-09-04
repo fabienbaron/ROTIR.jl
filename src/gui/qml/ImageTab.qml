@@ -42,6 +42,10 @@ Pane {
     function dp(px) { return Math.round(px * uiScale) }
 
     signal statusChanged(string s)
+    // "Save plot…" goes through the window's file picker rather than writing a fixed name:
+    // the window owns the picker, and a tab has no way to reach it. `which` names the plot,
+    // and the size is the area's, so the PNG matches what is on screen.
+    signal saveRequested(string which, int w, int h)
 
     ListModel { id: backendModel }
 
@@ -384,14 +388,12 @@ Pane {
                     onStatusChanged: function (s) { root.statusChanged(s) }
                 }
                 Button {
-                    text: "Save view…"
+                    text: "Save plot…"
                     Layout.alignment: Qt.AlignTop
                     font.pointSize: root.fontPt - 1
                     onClicked: {
                         var w = ["imaging", "imaging_moll", "imaging_3d"][root.viewIndex]
-                        var m = Julia.shell_save_figure(w, "rotir_" + w + ".png",
-                                                        imSkyArea.width, imSkyArea.height)
-                        root.statusChanged(m.length > 0 ? m : "saved rotir_" + w + ".png")
+                        root.saveRequested(w, imSkyArea.width, imSkyArea.height)
                     }
                 }
             }

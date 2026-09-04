@@ -37,8 +37,26 @@ Popup {
     // Set by the caller: an orbit file is chosen through the same picker but goes somewhere
     // else entirely, so it bypasses the three dataset modes.
     property string purpose: "data"
+    // SAVE MODE: the same browser, but the answer is a path to WRITE rather than files to
+    // read. A save needs a name that does not exist yet, so the listing becomes a way to
+    // choose the folder and to see what is already there, and the name comes from a field.
+    property bool saveMode: false
+    property string suggestedName: ""
+
+    // The caret goes to the name once the popup is actually up: `forceActiveFocus` before
+    // `open()` has nothing to focus into, so the field looked ready and swallowed nothing.
+    onOpened: if (root.saveMode) {
+        nameField.forceActiveFocus()
+        var dot = nameField.text.lastIndexOf(".")
+        nameField.select(0, dot > 0 ? dot : nameField.text.length)
+    }
 
     function openAt(startFolder) {
+        nameField.text = root.suggestedName
+        // FOCUS the name in save mode: the dialog exists to answer "what shall I call it",
+        // so the caret belongs where the answer goes. The base name is selected rather than
+        // the extension, so typing replaces `rotir_star3d` and leaves `.png` alone.
+
         folder = Julia.picker_start(startFolder)
         selected = ""
         checked = []
@@ -54,6 +72,14 @@ Popup {
         return checked.length > 0 ? checked.join("\n") : selected
     }
 
+    // The chosen path, as one string, under a mode of its own so `onAccepted` cannot mistake
+    // a save for an open.
+    function acceptSave() {
+        if (nameField.text.length === 0) return
+        accepted(Julia.picker_join(folder, nameField.text), "savefig")
+        close()
+    }
+
     // What Return does on a row, shared by the key handler and the double-click.
     function activate(i) {
         if (i < 0 || i >= entries.count) return
@@ -62,6 +88,11 @@ Popup {
             folder = Julia.picker_join(folder, e.name)
             refresh()
             fileView.currentIndex = 0
+        } else if (root.saveMode) {
+            // Picking an existing file in save mode means "that name", not "open that": it is
+            // how you overwrite a view you saved before.
+            nameField.text = e.name
+            return
         } else {
             selected = Julia.picker_join(folder, e.name)
             // BOTH arguments: `accepted(string paths, string mode)`. This passed only the
@@ -363,6 +394,22 @@ Popup {
                 elide: Text.ElideMiddle
                 color: "#7f8c98"
                 font.pointSize: root.fontPt
+            }
+            TextField {
+                id: nameField
+                visible: root.saveMode
+                Layout.preferredWidth: dp(240)
+                placeholderText: "file name"
+                font.pointSize: root.fontPt
+                selectByMouse: true
+                onAccepted: if (text.length > 0) root.acceptSave()
+            }
+            Button {
+                visible: root.saveMode
+                text: "Save"
+                enabled: nameField.text.length > 0
+                font.pointSize: root.fontPt
+                onClicked: root.acceptSave()
             }
             Button {
                 text: "Cancel"

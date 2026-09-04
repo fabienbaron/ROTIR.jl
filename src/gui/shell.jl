@@ -289,13 +289,6 @@ function _log_dataset!(sh::ShellState, e::DatasetEntry)
 end
 
 """
-    shell_select_dataset(i) -> String
-
-Make dataset `i` current. One-based, and out of range is a no-op rather than an error: the
-index comes from a list view whose model can be a frame behind.
-"""
-
-"""
     shell_datasets() -> String
 
 `name\tnepochs\tnV2\tnT3` per dataset, one per line. Empty when nothing is loaded.
@@ -355,6 +348,12 @@ function shell_epochs()
     return join(rows, "\n")
 end
 
+"""
+    shell_select_dataset(i) -> String
+
+Make dataset `i` current. One-based, and out of range is a no-op rather than an error: the
+index comes from a list view whose model can be a frame behind.
+"""
 function shell_select_dataset(i)
     sh = _sh()
     n = Int(i)
@@ -1601,9 +1600,28 @@ function build_obs_canvas(fig)
     O === nothing && return (nothing, Makie.Observable(Makie.Point2f[]))
     ax = Makie.Axis(fig[1, 1])
     c  = O.build_canvas(fig, ax)
+    # Right-click returns the view to the data. `build_canvas` gives this axis Makie's own
+    # `:limitreset`, which resets to `ax.limits[]` — and `update_canvas!` calls `autolimits!`,
+    # leaving that automatic, so the reset had nothing to go back to and did nothing visible.
+    # `autolimits!` is the honest "everything" here, since unlike a sky view there is no framed
+    # extent to return to: the plot is whatever the data span.
+    haskey(Makie.interactions(ax), :limitreset) &&
+        Makie.deregister_interaction!(ax, :limitreset)
+    Makie.register_interaction!(ax, :limitreset) do event::Makie.MouseEvent, axis
+        if event.type === Makie.MouseEventTypes.rightclick
+            Makie.autolimits!(axis)
+            return Makie.Consume(true)
+        end
+        return Makie.Consume(false)
+    end
     pts = Makie.Observable(Makie.Point2f[])
-    Makie.scatter!(ax, pts; color = (:black, 0.0), strokecolor = :black, strokewidth = 1.1,
-                   markersize = 9, marker = :circle)
+    # SMALL GREY SQUARES. The model is an annotation on the data, not a second dataset: it has
+    # to be legible where it lands on top of a point and not compete with it anywhere else.
+    # Square because every data series here is round, so the shape alone says which is which
+    # even in one colour; grey because the data carry the colour, coded by baseline, wavelength
+    # or epoch, and a black ring at markersize 9 read as another observation.
+    Makie.scatter!(ax, pts; color = (:grey35, 0.85), markersize = 5, marker = :rect,
+                   strokewidth = 0)
     return (c, pts)
 end
 
@@ -2278,6 +2296,23 @@ function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop)
 end
 
 """
+    shell_free_count() -> String
+
+How many parameters a fit would move, as a decimal string.
+
+The panel greys the Fit button on this rather than counting rows itself, because for a binary
+the free parameters are spread over three tables — the primary, the secondary and the
+positions — and a position is only free when a fixed offset is what places the secondary.
+`binary_fit_names` already resolves all of that; counting in QML would be a second, quietly
+different answer.
+"""
+function shell_free_count()
+    m = current_model(_sh().session)
+    m === nothing && return "0"
+    return string(m.companion === nothing ? length(m.free) : length(binary_fit_names(m)))
+end
+
+"""
     shell_fit(method, maxeval) -> String
 
 Fit the FREE parameters of the current model against every epoch of the current dataset.
@@ -2396,7 +2431,7 @@ function shell_fit(method, maxeval)
             end
             return isfinite(c) ? c : 1e30
         end
-        best, chi2, extra, post = if meth === :hmc
+        best, chi2, extra, post, nevals = if meth === :hmc
             _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
         elseif meth === :pigeons
             _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
@@ -2430,7 +2465,7 @@ function shell_fit(method, maxeval)
                                                           [get(extra, n, NaN) for n in names])
                                                       if isfinite(v)),
                                    ),
-                names = labels, best = best, errs = extra, post = post,
+                names = labels, best = best, errs = extra, post = post, nevals = nevals,
                 method = meth, model = snap.name, surface_type = snap.surface_type,
                 chi2 = chi2, ndata = nd,
                 status = Printf.@sprintf("fit done: χ²ᵣ = %.4f over %d points", chi2 / nd, nd))
@@ -2479,7 +2514,7 @@ function _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, 
                                           verb = true)
     best = [θ̂[findfirst(==(PARAMETRIC_THETA[n]), θnames)] for n in names]
     nd = sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data)
-    return best, chi2r * nd, Dict{Symbol,Float64}(), nothing
+    return best, chi2r * nd, Dict{Symbol,Float64}(), nothing, 0
 end
 
 """
@@ -2525,7 +2560,7 @@ function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxev
     return best, NaN, errs,
            _posterior(r; order = invperm(order),
                       diagnostics = Printf.@sprintf("%d draws, %d divergences",
-                                                    size(r.samples, 1), r.divergences))
+                                                    size(r.samples, 1), r.divergences)), 0
 end
 
 """
@@ -2579,7 +2614,7 @@ function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, m
            _posterior(r; order = invperm(order),
                       diagnostics = Printf.@sprintf("%d draws, %d chains, %d round trips",
                                                     size(r.samples, 1), r.n_chains,
-                                                    r.round_trips))
+                                                    r.round_trips)), 0
 end
 
 """
@@ -2630,7 +2665,7 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
                                blmvm = false, verb = false)
     best = [θ̂[layout[nm]] for nm in names]
     c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, tepochs)
-    return best, c, Dict{Symbol,Float64}(), nothing
+    return best, c, Dict{Symbol,Float64}(), nothing, 0
 end
 
 # One place that knows how each backend is driven, so `shell_fit` stays about the model.
@@ -2651,7 +2686,8 @@ function _run_fit(meth::Symbol, obj, θ0, lb, ub, names, maxeval)
                          min_num_live_points = clamp(maxeval ÷ 4, 100, 2000))
         return un.median, obj(un.median),
                Dict(n => ((un.q84[k] - un.q16[k]) / 2) for (k, n) in enumerate(names)),
-               _posterior(un; diagnostics = Printf.@sprintf("%d samples", size(un.samples, 1)))
+               _posterior(un; diagnostics = Printf.@sprintf("%d samples", size(un.samples, 1))),
+               0
     end
     alg = meth === :bobyqa ? :LN_BOBYQA : :LN_NELDERMEAD
     opt = NLopt.Opt(alg, length(θ0))
@@ -2666,7 +2702,12 @@ function _run_fit(meth::Symbol, obj, θ0, lb, ub, names, maxeval)
     chi2, best, _ = NLopt.optimize(opt, copy(θ0))
     # No fourth value: an optimiser has no posterior, and inventing an empty one that the
     # panel then draws as a spike would be worse than saying there is none.
-    return best, chi2, Dict{Symbol,Float64}(), nothing
+    #
+    # The EVALUATION COUNT is what it has instead, and it is worth reporting: it says whether
+    # the search converged or simply ran out of budget, which the χ² alone does not. NLopt
+    # counts them itself, so this is the number of calls that actually happened rather than
+    # the ceiling the panel asked for — a Nelder-Mead that stops on `xtol_rel` reports fewer.
+    return best, chi2, Dict{Symbol,Float64}(), nothing, NLopt.numevals(opt)
 end
 
 """
@@ -3128,7 +3169,8 @@ function _record_fit!(sh::ShellState, result)
                  post === nothing ? NaN : post.logz,
                  post === nothing ? NaN : post.logzerr,
                  Float64(result.chi2), Int(result.ndata),
-                 post === nothing ? "" : post.diagnostics)
+                 post === nothing ? "" : post.diagnostics,
+                 hasproperty(result, :nevals) ? Int(result.nevals) : 0)
     add_fit!(sh.session, e)
     isempty(S) ||
         console!(sh, "posterior kept: $(size(S, 1)) draws x $(size(S, 2)) parameters" *
@@ -3137,6 +3179,25 @@ function _record_fit!(sh::ShellState, result)
         console!(sh, Printf.@sprintf("log(Z) = %.4f ± %.4f", e.logz, e.logzerr))
     return e
 end
+
+"""
+    _work_done(f) -> String
+
+How much work a fit did, for the one column that reports it.
+
+A sampler answers in DRAWS and a local optimiser in criterion EVALUATIONS. They are not the
+same quantity and there is no converting between them, but they answer the same question — how
+hard did this run work — and a table with a column for each would leave one of them empty on
+every row. So the column holds whichever the method produced, and the row already says which
+method that was.
+
+The evaluation count is NLopt's own, not the budget the panel asked for: a Nelder-Mead that
+stops on `xtol_rel` reports fewer than its ceiling, and that difference is exactly the
+difference between converging and running out of budget.
+"""
+_work_done(f) =
+    size(f.samples, 1) > 0 ? string(size(f.samples, 1)) :
+    f.nevals > 0           ? string(f.nevals) : "—"
 
 """
     shell_fits() -> String
@@ -3156,7 +3217,7 @@ function shell_fits()
                           f.ndata > 0 ? Printf.@sprintf("%.4f", f.chi2 / f.ndata) : "—",
                           isfinite(f.logz) ? Printf.@sprintf("%.3f", f.logz) : "—",
                           isfinite(f.logzerr) ? Printf.@sprintf("%.3f", f.logzerr) : "—",
-                          string(size(f.samples, 1)), f.diagnostics), "\t"))
+                          _work_done(f), f.diagnostics), "\t"))
     end
     return join(rows, "\n")
 end
