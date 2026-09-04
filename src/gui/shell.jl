@@ -279,7 +279,8 @@ function _log_dataset!(sh::ShellState, e::DatasetEntry)
     isempty(sh.session.log) || (sh.session.log[end].binding == "data" &&
                                  pop!(sh.session.log))
     code = length(e.paths) == 1 ?
-        "data = split_epochs(readoifits($(_literal(e.paths[1])))[1,1])[1]" :
+        "data = split_epochs(readoifits($(_literal(e.paths[1])); warn = false, " *
+        "verbose = false)[1,1])[1]" :
         "files = " * _literal(e.paths) * "\n" *
         "data  = collect(readoifits_multiepochs(files; warn = false, verbose = false)[1, :])"
     code *= "\ntepochs = [d.mean_mjd for d in data]; tepochs .-= minimum(tepochs)"
@@ -456,10 +457,40 @@ Rows a given `ldtype` does not use are still listed, with `state` forced to `fix
 them would make the form jump around as the law is changed, and a value that is never read
 must not be left floating in a fit.
 """
-function shell_params()
-    sh = _sh()
-    m = current_model(sh.session)
-    m === nothing && return ""
+shell_params() = (m = current_model(_sh().session); m === nothing ? "" : _params_table(m))
+
+"""
+    _fmt_param(v) -> String
+
+One parameter value, for a text field a person reads and edits.
+
+`repr` of a Float64 gives every digit it takes to round-trip the binary value — a fitted
+radius came back as `1.6007181518514104`, seventeen characters in a box that fits about ten,
+so the field scrolled and showed only the tail. The digits were not information either: the
+mesh and the polygon transform are evaluated in the model's own precision, Float32 by default,
+which carries about 7 significant decimal digits. Everything past that is the printing of a
+binary fraction, not a measurement.
+
+Eight significant digits, with `%g` so a whole number stays whole (`5000`, not `5000.0000`)
+and a small one does not become an exponent. Wide enough to round-trip Float32 exactly, short
+enough to fit.
+"""
+function _fmt_param(v)
+    x = Float64(v)
+    isfinite(x) || return string(x)
+    s = Printf.@sprintf("%.8g", x)
+    # `%g` can still produce an exponent for genuinely large or tiny values (T0 is a JD near
+    # 2.45e6, and a bound can be 1e-4); that is correct and short, so it is left alone.
+    return s
+end
+
+"""
+    _params_table(m) -> String
+
+The form rows for ONE model. Shared by the primary and, for a binary, the companion — so the
+two forms cannot drift apart, and a column added here appears in both.
+"""
+function _params_table(m)
     used = ld_coefficients_used(round(Int, get(m.params, :ldtype, 3.0)))
     rows = String[]
     for ps in surface_params(m.surface_type)
@@ -471,11 +502,133 @@ function shell_params()
         state = !isempty(tie) ? "tied" :
                 (inert ? "fixed" : (ps.name in m.free ? "free" : "fixed"))
         ch = join(("$(k)=$(vv)" for (k, vv) in ps.choices), "|")
-        push!(rows, join((ps.name, ps.label, ps.unit, repr(v), state, repr(lo), repr(hi),
+        push!(rows, join((ps.name, ps.label, ps.unit, _fmt_param(v), state,
+                          _fmt_param(lo), _fmt_param(hi),
                           tie, ps.group, ps.kind, ch,
-                          replace(ps.doc, "\n" => " ", "\t" => " ")), "\t"))
+                          replace(ps.doc, "\n" => " ", "\t" => " "),
+                          inert ? "1" : "0"), "\t"))
     end
     return join(rows, "\n")
+end
+
+"""
+    shell_binary() -> String
+
+`"1"` when the current model is a binary, `"0"` otherwise, `""` with no model.
+"""
+function shell_binary()
+    m = current_model(_sh().session)
+    m === nothing && return ""
+    return m.companion === nothing ? "0" : "1"
+end
+
+"""
+    shell_set_binary(on, surface_type) -> String
+
+Give the current model a companion, or take it away.
+
+The companion is a full model of its own — its own surface type, parameters, bounds and ties —
+because the two stars of a binary are rarely the same thing: Spica is two limb-darkened
+spheroids of very different size, β Lyr is a star and a disc-shrouded companion. What they
+SHARE is the orbit, and that lives on the Orbit tab rather than being copied into either.
+
+Defaults to a Roche component, since that is the surface type whose whole reason for existing
+is that it sits in a binary.
+"""
+function shell_set_binary(on, surface_type = 3)
+    sh = _sh()
+    m = current_model(sh.session)
+    m === nothing && return "no model"
+    if String(on) == "1"
+        if m.companion === nothing
+            st = round(Int, Float64(surface_type))
+            st in SURFACE_TYPE_ORDER || return "unknown surface type $(st)"
+            spec = surface_spec(st)
+            pr = default_star_params(st)
+            m.companion = ModelEntry(
+                m.name * "_B", st,
+                Dict{Symbol,Float64}(k => Float64(v) for (k, v) in pairs(pr)
+                                     if k !== :surface_type),
+                Set{Symbol}(),
+                Dict{Symbol,Tuple{Float64,Float64}}(ps.name => (ps.lo, ps.hi)
+                                                    for ps in surface_params(st)),
+                Dict{Symbol,String}(), true, nothing)
+            console!(sh, "binary: added a $(spec.name) companion")
+        end
+    else
+        m.companion === nothing || console!(sh, "binary: companion removed")
+        m.companion = nothing
+    end
+    sh.chi2key[] = nothing
+    refresh_both!(sh)
+    return m.companion === nothing ? "single star" : "binary"
+end
+
+# The companion's form is the SAME table as the primary's, read from the companion instead —
+# so the QML that draws one row draws either, and a column added to one appears in both.
+_companion(sh) = (m = current_model(sh.session); m === nothing ? nothing : m.companion)
+
+"""
+    shell_params2() -> String
+
+[`shell_params`](@ref) for the companion; empty when the model is not a binary.
+"""
+shell_params2() = (c = _companion(_sh()); c === nothing ? "" : _params_table(c))
+
+"""
+    shell_set_param2(name, value) -> String
+
+[`shell_set_param`](@ref) for the companion.
+"""
+function shell_set_param2(name, value)
+    sh = _sh()
+    c = _companion(sh)
+    c === nothing && return "not a binary"
+    v = tryparse(Float64, String(value))
+    v === nothing && return "not a number: $(value)"
+    c.params[Symbol(String(name))] = v
+    Symbol(String(name)) === :ldtype && _reset_unused_ld!(c)
+    sh.chi2key[] = nothing
+    refresh_both!(sh)
+    return ""
+end
+
+"""
+    shell_companion_type(surface_type) -> String
+
+Change the companion's surface type, rebuilding it at that type's defaults.
+"""
+function shell_companion_type(surface_type)
+    sh = _sh()
+    m = current_model(sh.session)
+    (m === nothing || m.companion === nothing) && return "not a binary"
+    m.companion = nothing
+    return shell_set_binary("1", surface_type)
+end
+
+"""
+    _reset_unused_ld!(m) -> m
+
+Zero the limb-darkening coefficients the current law does not read, and release them.
+
+`compute_ldmap` reads `ld1` for the linear and power laws, `ld1`+`ld2` for the quadratic and
+all four for Claret. A value left in `ld2` after switching from quadratic to linear is not
+harmless: it is invisible in the fit, it reappears the moment the law is switched back, and if
+it was FREE it stays in the parameter vector as a coordinate that changes nothing — which is
+how an optimiser spends its evaluations on a direction the χ² is flat along.
+
+So the unused ones are set to zero, dropped from `free`, and their ties removed. The panel
+greys them, which is the visible half of the same rule.
+"""
+function _reset_unused_ld!(m)
+    used = ld_coefficients_used(round(Int, get(m.params, :ldtype, 3.0)))
+    for n in (:ld1, :ld2, :ld3, :ld4)
+        n in used && continue
+        haskey(m.params, n) && (m.params[n] = 0.0)
+        delete!(m.free, n)
+        delete!(m.ties, n)
+    end
+    return m
 end
 
 """
@@ -491,6 +644,7 @@ function shell_set_param(name, value)
     v = tryparse(Float64, String(value))
     v === nothing && return "not a number: $(value)"
     m.params[Symbol(String(name))] = v
+    Symbol(String(name)) === :ldtype && _reset_unused_ld!(m)
     refresh_model_tab!(sh)
     return ""
 end
@@ -514,6 +668,13 @@ function shell_set_param_state(name, state)
     i = findfirst(ps -> ps.name === n, specs)
     if i !== nothing && specs[i].kind === :choice && s != "fixed"
         return "$(specs[i].label) is a discrete choice, not a value that can be $(s)"
+    end
+    # A limb-darkening coefficient the current law does not read is not a coordinate: freeing
+    # it would add a direction the χ² is exactly flat along, and tying it would compute a value
+    # nothing reads. The panel greys these; this is the same rule where it can be enforced.
+    if n in (:ld1, :ld2, :ld3, :ld4) && s != "fixed" &&
+       !(n in ld_coefficients_used(round(Int, get(m.params, :ldtype, 3.0))))
+        return "$(n) is not used by the current limb-darkening law"
     end
     if s == "free"
         push!(m.free, n); delete!(m.ties, n)
@@ -708,8 +869,10 @@ projection with nothing to zoom into, and the χ² panel is a bar chart.
 function shell_set_zoom_step(x)
     sh = _sh()
     v = set_zoom_step!(Float64(x))
-    for c in (sh.sky, sh.msky, sh.imsky)
-        c === nothing || apply_zoom_step!(c.axis)
+    # The 2-D handlers read the step per event, but `Axis3` keeps Makie's `ScrollZoom`, whose
+    # speed is fixed when it is constructed — so those two are re-registered.
+    for c in (sh.star, sh.imstar)
+        c === nothing || _install_zoom!(c.scene)
     end
     return v > 0 ? Printf.@sprintf("wheel zoom: %.2fx per detent", v) :
                    "wheel zoom: default"
@@ -897,9 +1060,27 @@ function build_epoch_star(sh::ShellState)
     p = star_params(m)
     isempty(validate_star_params(p)) || return nothing
     try
-        star = create_star(model_tessellation(sh), p, t; secondary = m.secondary)
+        tess = model_tessellation(sh)
+        star = create_star(tess, p, t; secondary = m.secondary)
         tmap = parametric_temperature_map(p, star; secondary = m.secondary)
-        return (star, tmap)
+        c = m.companion
+        c === nothing && return (star, tmap)
+        # A BINARY: the companion at the same epoch, and where the orbit puts it. The offset
+        # is in the sky frame the polygons are drawn in, which is what `orbit_to_rotir_offset`
+        # returns — and it needs JD, while the epoch times here are relative days.
+        p2 = star_params(c)
+        isempty(validate_star_params(p2)) || return (star, tmap)
+        star2 = create_star(tess, p2, t; secondary = true)
+        tmap2 = parametric_temperature_map(p2, star2; secondary = true)
+        off = try
+            d === nothing ? (0.0, 0.0) :
+                orbit_to_rotir_offset(orbit_bparams(sh.orbit; binary = m),
+                                      d.mjd[clamp(sh.session.current_epoch, 1,
+                                                  length(d.mjd))] + 2_400_000.5)
+        catch
+            (0.0, 0.0)
+        end
+        return (star, tmap, star2, tmap2, off)
     catch err
         console!(sh, "preview failed: $(sprint(showerror, err))")
         return nothing
@@ -935,7 +1116,9 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
         idle!(sh.msky, msg); idle!(sh.star, msg); idle!(sh.moll, msg)
         return sh
     end
-    star, tmap = got
+    star, tmap = got[1], got[2]
+    # A binary carries two more entries and the sky offset between them.
+    bin2 = length(got) >= 5 ? (got[3], got[4], got[5]) : nothing
     # All three, every time. They are three views of one map, and refreshing only the visible
     # one would mean a stale picture appearing the moment the view is switched — which is
     # worse than the cost, because switching is meant to be instant.
@@ -948,7 +1131,16 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
     # (`surface_values` differs only in the index it applies), so one call covers all three.
     allv = surface_values(sh, tmap, star; visible_only = false)
     visv = allv[star.index_quads_visible]
-    show_map!(sh.msky, star, visv; star_params = star_params(m), _decor(sh)...)
+    if bin2 === nothing
+        show_map!(sh.msky, star, visv; star_params = star_params(m), _decor(sh)...)
+    else
+        # Both components, one colour range. The 3-D and Mollweide views stay on the PRIMARY:
+        # a Mollweide is a map of one surface, and two of them in one frame is two pictures.
+        star2, tmap2, off = bin2
+        v2 = surface_values(sh, tmap2, star2; visible_only = true)
+        show_binary_map!(sh.msky, star, visv, star2, v2, off;
+                         star_params = star_params(m), _decor(sh)...)
+    end
     show_star3d!(sh.star, star, allv)
     show_mollweide!(sh.moll, allv, star)
     return sh
@@ -966,7 +1158,8 @@ function refresh_data_tab!(sh::ShellState; got = build_epoch_star(sh))
                       "no dataset — use Open OIFITS…" :
                       "no model — add one on the Model tab")
     else
-        star, tmap = got
+        star, tmap = got[1], got[2]
+        bin2 = length(got) >= 5 ? (got[3], got[4], got[5]) : nothing
         vals = surface_values(sh, tmap, star; visible_only = true)
         sh.sky.cbarlabel[] = sh.intensity[] ? "I (arb.)" : "T (K)"
         d = current_dataset(sh.session)
@@ -974,14 +1167,74 @@ function refresh_data_tab!(sh::ShellState; got = build_epoch_star(sh))
               Printf.@sprintf("epoch %d — MJD %.4f  (t = %.3f d)", sh.session.current_epoch,
                               d.mjd[clamp(sh.session.current_epoch, 1, length(d.mjd))],
                               d.tepochs[clamp(sh.session.current_epoch, 1, length(d.tepochs))])
-        show_map!(sh.sky, star, vals; title = ttl, star_params = star_params(m),
-                  _decor(sh)...)
+        if bin2 === nothing
+            show_map!(sh.sky, star, vals; title = ttl, star_params = star_params(m),
+                      _decor(sh)...)
+        else
+            star2, tmap2, off = bin2
+            v2 = surface_values(sh, tmap2, star2; visible_only = true)
+            show_binary_map!(sh.sky, star, vals, star2, v2, off; title = ttl,
+                             star_params = star_params(m), _decor(sh)...)
+        end
     end
     c = epoch_chi2(sh)
     c === nothing ? idle!(sh.chi2, "no χ² yet — load a dataset and set a model") :
                     show_chi2!(sh.chi2, c)
     refresh_obs!(sh)
     return sh
+end
+
+"""
+    _binary_model_state(sh, d, m, c, p, p2, key) -> NamedTuple or nothing
+
+The binary half of [`model_state`](@ref): both components, their separation at each epoch, and
+the χ² of the PAIR against the data.
+
+Built the way `demos/spica_binary_roche.jl` builds it, and for the same reason it does it that
+way: each component is created on its own with `create_star_multiepochs`, its own
+`secondary` convention, and the two are brought together only at the visibility stage by
+`binary_phase_shift`. `create_binary_geometry` exists and sets `center_offsets` instead, but
+the offset the transform needs is per-EPOCH and in the sky frame the polygon FT uses, which is
+exactly what `orbit_to_rotir_offset` returns.
+
+The orbit comes from the Orbit tab — one description of the system, shared, rather than a
+second copy that can disagree with it.
+"""
+function _binary_model_state(sh::ShellState, d, m, c, p, p2, key)
+    try
+        tess = model_tessellation(sh)
+        bp   = orbit_bparams(sh.orbit; binary = m)
+        # The elements are in JD and the datasets carry MJD, which is the one unit slip that
+        # would put the companion in the wrong place with no error anywhere.
+        tjd = d.mjd .+ 2_400_000.5
+        stars1 = create_star_multiepochs(tess, p,  d.tepochs; secondary = false)
+        stars2 = create_star_multiepochs(tess, p2, d.tepochs; secondary = true)
+        x1 = parametric_temperature_map(p,  stars1[1]; secondary = false)
+        x2 = parametric_temperature_map(p2, stars2[1]; secondary = true)
+        chi2 = map(eachindex(d.data)) do i
+            ox, oy = orbit_to_rotir_offset(bp, tjd[i])
+            ph = binary_phase_shift(d.data[i].uv, ox, oy)
+            v2m, t3am, t3pm = binary_observables(x1, stars1[i], x2, stars2[i], d.data[i], ph)
+            dat = d.data[i]
+            cv2 = sum(abs2, (v2m   .- dat.v2)    ./ dat.v2_err)
+            ca  = sum(abs2, (t3am  .- dat.t3amp) ./ dat.t3amp_err)
+            cp  = sum(abs2, ROTIR.mod360(t3pm .- dat.t3phi) ./ dat.t3phi_err)
+            n   = dat.nv2 + dat.nt3amp + dat.nt3phi
+            (v2 = cv2, t3amp = ca, t3phi = cp, total = cv2 + ca + cp,
+             nv2 = dat.nv2, nt3amp = dat.nt3amp, nt3phi = dat.nt3phi, ndata = n,
+             v2r = cv2 / max(dat.nv2, 1), t3ampr = ca / max(dat.nt3amp, 1),
+             t3phir = cp / max(dat.nt3phi, 1), totalr = (cv2 + ca + cp) / max(n, 1))
+        end
+        offs = [orbit_to_rotir_offset(bp, tjd[i]) for i in eachindex(d.data)]
+        out = (stars = stars1, x = x1, chi2 = chi2,
+               stars2 = stars2, x2 = x2, offsets = offs)
+        sh.chi2key[] = key; sh.chi2cache[] = out
+        return out
+    catch err
+        console!(sh, "binary χ² failed: $(sprint(showerror, err))")
+        sh.chi2key[] = nothing
+        return nothing
+    end
 end
 
 """
@@ -1010,9 +1263,19 @@ function model_state(sh::ShellState)
     (d === nothing || m === nothing) && return nothing
     p = star_params(m)
     isempty(validate_star_params(p)) || return nothing
-    key = (objectid(d), length(d.data), m.secondary, p, sh.nside_exp[], sh.precision[],
-           sh.tessel[])
+    c = m.companion
+    p2 = c === nothing ? nothing : star_params(c)
+    if c !== nothing && !isempty(validate_star_params(p2))
+        return nothing
+    end
+    # The ORBIT is part of the key for a binary: the separation at each epoch comes from the
+    # Orbit tab, so editing an element there changes this χ² and must invalidate the cache.
+    key = (objectid(d), length(d.data), m.secondary, p, p2,
+           c === nothing ? nothing : apply_orbit_ties(sh.orbit),
+           c === nothing ? nothing : sh.orbit.q,
+           sh.nside_exp[], sh.precision[], sh.tessel[])
     sh.chi2key[] === key && return sh.chi2cache[]
+    c === nothing || return _binary_model_state(sh, d, m, c, p, p2, key)
     try
         tess  = model_tessellation(sh)
         stars = create_star_multiepochs(tess, p, d.tepochs; secondary = m.secondary)
@@ -1079,6 +1342,34 @@ function build_obs_canvas(fig)
     return (c, pts)
 end
 
+# Which PLOTS each availability flag enables.
+#
+# The two vocabularies are not the same and mapping one onto the other by name was wrong in
+# both directions. `observable_availability` answers "does the file have this table?" and
+# returns `v2, t3amp, t3phi, cvis, flux, diffvis`; `OBS_SPECS` — what `update_canvas!` can
+# actually draw — is keyed `v2, t3amp, t3amp_max, t3phi, t3phi_max, visamp, visphi, flux,
+# diffphi, diffvisamp`.
+#
+# The `_max` variants are deliberately NOT listed. They are the same observable against a
+# different x, and OITOOLS does not offer them as views either — it uses them for residual
+# plots. A view per combination doubles the button row to say one thing, so the choice of
+# baseline is a TICK beside the plot and `shell_set_obs_view` appends the suffix.
+#
+# So `cvis` named a view that does not exist (it is the flag for "there are visamp/visphi
+# data", and `kind = :cvis` raises "unknown plot"), which is the empty panel polaris offered;
+# and `visamp`, `visphi`, `diffphi` and `diffvisamp` could never be reached at all, because no
+# flag is called that. The `_max` variants plot a closure quantity against the LONGEST baseline
+# of its triangle rather than the geometric mean — a different question about the same data,
+# and the one to ask when resolution is what matters.
+const OBS_KINDS_FOR_FLAG = Dict(
+    "v2"      => ["v2"],
+    "t3amp"   => ["t3amp"],
+    "t3phi"   => ["t3phi"],
+    "cvis"    => ["visamp", "visphi"],
+    "flux"    => ["flux"],
+    "diffvis" => ["diffphi", "diffvisamp"],
+)
+
 """
     shell_obs_kinds() -> String
 
@@ -1107,7 +1398,11 @@ function shell_obs_kinds()
     for part in split(flags, ',')
         kv = split(strip(part), '=')
         length(kv) == 2 || continue
-        push!(rows, "$(strip(kv[1]))\t$(strip(kv[2]))")
+        k = String(strip(kv[1]))
+        avail = strip(kv[2])
+        for kind in get(OBS_KINDS_FOR_FLAG, k, String[])
+            push!(rows, "$(kind)\t$(avail)")
+        end
     end
     # A file whose tables confuse the check should still be explorable.
     length(rows) == length(always) &&
@@ -1121,9 +1416,16 @@ end
 Redraw the observable plot: which quantity, what to colour by, whether to overlay the model's
 prediction, and whether the y axis is logarithmic.
 """
-function shell_set_obs_view(kind, color, overlay, logy)
+function shell_set_obs_view(kind, color, overlay, logy, maxbaseline = "0")
     sh = _sh()
-    sh.obskind[]    = Symbol(String(kind))
+    k = String(kind)
+    # A closure quantity can be plotted against the geometric mean of its triangle's baselines
+    # or against the LONGEST leg — the resolution the closure actually probes. Same data, so it
+    # is a modifier on the view rather than a view of its own.
+    if String(maxbaseline) == "1" && k in ("t3amp", "t3phi")
+        k *= "_max"
+    end
+    sh.obskind[]    = Symbol(k)
     sh.obscolor[]   = Symbol(String(color))
     sh.obsoverlay[] = String(overlay) == "1"
     sh.obslog[]     = String(logy) == "1"
@@ -1283,27 +1585,32 @@ Called once, from `gui()`, after the canvases exist and before the window does.
 """
 function install_interactions!(sh::ShellState)
     for c in (sh.sky, sh.msky, sh.imsky)
-        scene = c.axis.scene
-        ev = Makie.events(scene)
-        downat = Ref((0.0, 0.0))
-        Makie.on(ev.mousebutton, priority = 100) do e
-            pos = Tuple(Float64.(ev.mouseposition[]))
-            if e.button == Makie.Mouse.right
-                if e.action == Makie.Mouse.press
-                    downat[] = pos
-                elseif e.action == Makie.Mouse.release &&
-                       hypot(pos[1] - downat[][1], pos[2] - downat[][2]) < 5
-                    reset_zoom!(c)
-                end
-            end
-            return Makie.Consume(false)
-        end
-        # The clamp runs on the LIMITS, not on the scroll event: a drag-zoom never produces a
-        # scroll, and clamping only the wheel would leave the other gesture unbounded.
-        Makie.on(c.axis.finallimits; priority = 1) do _
-            clamp_zoom!(c)
-            return Makie.Consume(false)
-        end
+        # ONE handler owns the wheel and the right-click, and it enforces the bounds BEFORE it
+        # moves the view — see `_install_zoom!`. What was here instead was Makie's own
+        # `ScrollZoom` plus a `finallimits` listener that pulled the view back afterwards, and
+        # the two fought:
+        #
+        #   * QMLMakie delivers 120 units per wheel click, so Makie's `0.9^120` zoomed by
+        #     ~270000x per notch and every click ended pinned against a bound;
+        #   * the listener re-entered itself, because the clamp set x and then y and each
+        #     write fired it again — 4216 nested calls, ending in "Can't set x limits to the
+        #     same value 0.0", swallowed by QMLMakie's render callback;
+        #   * and Makie's `:limitreset` returned to `ax.limits[]`, the rectangle the clamp had
+        #     just written, so right-click went back to the last zoom rather than to the star.
+        #
+        # Refusing an out-of-range step is also why no listener is needed to catch the
+        # rectangle drag-zoom: that gesture is bounded by what can be drawn on screen, where
+        # the wheel was not bounded by anything.
+        _install_zoom!(c)
+    end
+    # The other two view types get it as well: a Mollweide is an `Axis` like the sky and takes
+    # the same treatment, and the 3-D scene is an `Axis3` whose zoom cannot be reimplemented
+    # here but receives the same oversized event — so it gets a speed that cancels the detent.
+    for c in (sh.moll, sh.immoll)
+        c === nothing || _install_zoom!(c)
+    end
+    for c in (sh.star, sh.imstar)
+        c === nothing || _install_zoom!(c.scene)
     end
     return sh
 end
@@ -1669,8 +1976,10 @@ function shell_fit(method, maxeval)
         return "a starting value is outside its bounds"
 
     # Snapshot the model: the worker must not read a struct the GUI thread can edit under it.
+    # The companion is deliberately NOT carried: this fit path moves one star's parameters,
+    # and `fit_binary` does not exist yet. A binary's χ² is shown, not fitted.
     snap = ModelEntry(m.name, m.surface_type, copy(m.params), copy(m.free), copy(m.bounds),
-                      copy(m.ties), m.secondary)
+                      copy(m.ties), m.secondary, nothing)
     data = d.data
     tepochs = copy(d.tepochs)
     nd = sum(dd.nv2 + dd.nt3amp + dd.nt3phi for dd in data)

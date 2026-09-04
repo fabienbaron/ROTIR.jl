@@ -181,7 +181,14 @@ end
         @test isempty(G.shell_validate_model())      # defaults must build
         pr = rows(G.shell_params())
         @test length(pr) == length(surface_params(code))
-        @test all(length(cols(x)) == 12 for x in pr)
+        # THIRTEEN columns: the twelve the form draws, plus `inert` — whether the row is a
+        # limb-darkening coefficient the current law does not read. The panel greys those and
+        # `shell_set_param_state` refuses to free them.
+        @test all(length(cols(x)) == 13 for x in pr)
+        @test all(cols(x)[13] in ("0", "1") for x in pr)
+        # Only limb-darkening coefficients are ever inert.
+        @test all(cols(x)[1] in ("ld1", "ld2", "ld3", "ld4")
+                  for x in pr if cols(x)[13] == "1")
         # The `ldtype` row is a choice field carrying its options.
         ld = findfirst(x -> cols(x)[1] == "ldtype", pr)
         @test ld !== nothing
@@ -194,6 +201,26 @@ end
         @test occursin("discrete choice", G.shell_set_param_state("ldtype", "tied"))
         @test cols(rows(G.shell_params())[ld])[5] == "fixed"
         @test G.shell_set_param_state("ldtype", "fixed") == ""
+        # Switching the LD law zeroes the coefficients it does not read, releases them, and
+        # marks them inert. A value left behind is invisible in the fit, reappears when the
+        # law is switched back, and if it was FREE it stays in the parameter vector as a
+        # direction the χ² is exactly flat along.
+        G.shell_set_param("ldtype", "4")
+        for (n, v) in (("ld1", "0.3"), ("ld2", "0.4"), ("ld3", "0.5"), ("ld4", "0.6"))
+            G.shell_set_param(n, v)
+        end
+        G.shell_set_param_state("ld2", "free")
+        ldrow(nm) = only(filter(x -> cols(x)[1] == nm, rows(G.shell_params())))
+        @test all(cols(ldrow(n))[13] == "0" for n in ("ld1", "ld2", "ld3", "ld4"))
+        G.shell_set_param("ldtype", "1")                 # linear reads ld1 only
+        @test cols(ldrow("ld1"))[13] == "0"
+        @test all(cols(ldrow(n))[13] == "1" for n in ("ld2", "ld3", "ld4"))
+        @test all(parse(Float64, cols(ldrow(n))[4]) == 0.0 for n in ("ld2", "ld3", "ld4"))
+        @test cols(ldrow("ld2"))[5] == "fixed"           # released, not left free
+        @test occursin("not used", G.shell_set_param_state("ld2", "free"))
+        G.shell_set_param("ldtype", "2")                 # quadratic brings ld2 back
+        @test cols(ldrow("ld2"))[13] == "0"
+        @test G.shell_set_param_state("ld2", "free") == ""
         # Every label has to FIT the form's column, which elides silently rather than
         # wrapping: a truncated "Limb-darkening l…" is how this was noticed.
         for x in pr
@@ -815,6 +842,13 @@ end
     G.shell_set_orbit_param("a", "3.0"); G.shell_set_orbit_param("P", "10.0")
     G.shell_set_orbit_param("e", "0.3")
     before = [cols(r)[3] for r in rows(G.shell_orbit_params())]
+    # THE 3-D COMPONENTS ARE THE MODEL TAB'S BINARY, so without one there is nothing to put at
+    # the two orbital positions and this refuses rather than falling back to a hardcoded pair.
+    @test occursin("define a binary", G.shell_set_orbit_star_model("tessellated"))
+    @test G.shell_orbit_star_model() == "analytic"      # and it does not half-switch
+    G.shell_add_model(3)
+    G.shell_set_binary("1", 3)
+    @test G.shell_binary() == "1"
     @test occursin("tessellated", G.shell_set_orbit_star_model("tessellated"))
     @test G.shell_orbit_star_model() == "tessellated"
     # SWITCHING THE STAR MODEL MUST NOT MOVE THE SECONDARY. The elements describe the orbit,
@@ -837,9 +871,20 @@ end
     @test length(sh.orbitcanvas.polycolors[]) == nanalytic
     @test sh.orbitcanvas.cbarlabel[] == "relative brightness"
     G.shell_set_orbit_star_model("tessellated")
-    G.show_orbit!(sh.orbitcanvas, sh.orbit, [0.0, 2.5, 5.0])
+    G.show_orbit!(sh.orbitcanvas, sh.orbit, [0.0, 2.5, 5.0];
+                  binary = G._orbit_binary(sh))
     @test length(sh.orbitcanvas.polys[]) > nanalytic
     @test sh.orbitcanvas.cbarlabel[] == "T (K)"
+    # And the components carry the MODEL TAB's parameters, not a hardcoded pair: change the
+    # companion's polar radius and the bparams the renderer builds must follow.
+    m = G.current_model(sh.session)
+    m.companion.params[:rpole] = 0.83
+    @test G.orbit_bparams(sh.orbit; binary = m).star2.rpole ≈ 0.83
+    m.params[:ldtype] = 2.0; m.params[:ld1] = 0.37
+    bp = G.orbit_bparams(sh.orbit; binary = m)
+    @test bp.star1.ldtype == 2 && bp.star1.ld1 ≈ 0.37
+    # Without the binary it falls back to the tab's own thin description, which is different.
+    @test G.orbit_bparams(sh.orbit).star1.ldtype == 3
     # Off is off, in both.
     G.shell_set_orbit_option("render", "0")
     G.show_orbit!(sh.orbitcanvas, sh.orbit, [0.0, 2.5])

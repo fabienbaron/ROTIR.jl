@@ -60,6 +60,16 @@ mutable struct ModelEntry
     bounds::Dict{Symbol,Tuple{Float64,Float64}}
     ties::Dict{Symbol,String}
     secondary::Bool              # Roche: which component's potential convention to use
+    # The COMPANION, for a binary: another `ModelEntry`, or `nothing` for a single star.
+    #
+    # A field on the primary rather than a second entry in `session.models`, because the two
+    # are not independent models — they share one orbit, they are drawn in one frame, and
+    # their χ² is a single number over the pair. `session.models` holds exactly one entry, and
+    # this keeps that true for a binary as well.
+    #
+    # `Any` rather than `Union{Nothing,ModelEntry}`: the struct cannot name itself in its own
+    # definition. Everything that reads it checks for `nothing` first.
+    companion::Any
 end
 
 """
@@ -205,7 +215,7 @@ function load_dataset!(session::Session, paths::AbstractVector;
     ps = String.(paths)
     isempty(ps) && throw(ArgumentError("no files given"))
     if length(ps) == 1
-        raw = OITOOLS.readoifits(ps[1])[1, 1]
+        raw = OITOOLS.readoifits(ps[1]; warn = false, verbose = false)[1, 1]
         # `split = false` takes the file as ONE epoch. The gap rule is right for a file holding
         # several campaigns, and wrong for one night that happens to have a long gap in it —
         # a target lost to cloud and re-acquired two hours later is still one epoch of a star
@@ -288,7 +298,7 @@ function add_model!(session::Session, surface_type;
         ps.name => (ps.lo, ps.hi) for ps in surface_params(spec.code))
     nm = isempty(name) ? "$(spec.name)_$(length(session.models) + 1)" : String(name)
     m = ModelEntry(nm, spec.code, params, Set{Symbol}(), bounds, Dict{Symbol,String}(),
-                   secondary)
+                   secondary, nothing)
     push!(session.models, m)
     session.current_model = length(session.models)
     return m

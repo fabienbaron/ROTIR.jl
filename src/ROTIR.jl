@@ -294,6 +294,7 @@ export sigmoid, dsigmoid, soft_visibility
 # Fused two-pass polyft (matrix-free forward/adjoint)
 export compute_polyflux_and_cvis!, compute_adjoint_cvis!, compute_adjoint_vertices!
 export precompute_k2_inv_im, fused_spheroid_chi2_fg, fused_cvis, POLYFT_BACKEND
+export fused_cvis_parts
 export turbo_available
 
 # Rasterization (polygon -> image via Sutherland-Hodgman clipping)

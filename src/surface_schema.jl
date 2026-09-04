@@ -91,13 +91,15 @@ const _BETA = ParamSpec(:beta, "Grav. darkening β", "", 0.25, 0.0, 0.5, :therma
 
 const _LIMBDARK = [
     ParamSpec(:ldtype, "LD law", "", 3.0, 1.0, 4.0, :limbdark,
-              "Which law `compute_ldmap` applies. Anything outside 1–4 silently " *
-              "returns nothing and fails later in the visibility model.";
+              "Which law `compute_ldmap` applies: 1 linear, 1 − u(1−μ); 2 quadratic, " *
+              "1 − a(1−μ) − b(1−μ)²; 3 Hestroffer power law, μ^α; 4 Claret four-parameter. " *
+              "Anything outside 1–4 silently returns nothing and fails later in the " *
+              "visibility model.";
               kind = :choice,
-              choices = [1 => "linear: 1 − u(1−μ)",
-                         2 => "quadratic: 1 − a(1−μ) − b(1−μ)²",
-                         3 => "Hestroffer power law: μ^α",
-                         4 => "Claret 4-parameter"]),
+              choices = [1 => "linear",
+                         2 => "quadratic",
+                         3 => "power law",
+                         4 => "Claret-4"]),
     ParamSpec(:ld1, "LD coeff 1", "", 0.2, -1.0, 2.0, :limbdark,
               "u (linear), a (quadratic), α (power law) or a₁ (Claret)."),
     ParamSpec(:ld2, "LD coeff 2", "", 0.0, -1.0, 1.0, :limbdark,

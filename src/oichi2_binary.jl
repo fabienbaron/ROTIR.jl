@@ -123,7 +123,7 @@ components unconditionally, which is wrong once their disks overlap on the sky �
 """
 function binary_cvis(x1, star1, x2, star2, phase_shift;
                      intensity_model::Symbol = :linear, band = nothing,
-                     occultation = false)
+                     occultation = false, data = nothing)
     I1 = intensity_model === :linear ? x1 : intensity(x1, intensity_model, band)
     I2 = intensity_model === :linear ? x2 : intensity(x2, intensity_model, band)
 
@@ -137,17 +137,29 @@ function binary_cvis(x1, star1, x2, star2, phase_shift;
         occultation[1], occultation[2]
     end
 
-    indx1 = star1.index_quads_visible
-    xw1 = I1[indx1] .* star1.vis_weights[indx1] .* star1.ldmap[indx1]  # soft visibility × limb darkening
-    ow1 === nothing || (xw1 = xw1 .* ow1[indx1])                       # mutual occultation
-    flux1 = dot(star1.polyflux, xw1)
-    F1 = star1.polyft * xw1
-
-    indx2 = star2.index_quads_visible
-    xw2 = I2[indx2] .* star2.vis_weights[indx2] .* star2.ldmap[indx2]  # soft visibility × limb darkening
-    ow2 === nothing || (xw2 = xw2 .* ow2[indx2])
-    flux2 = dot(star2.polyflux, xw2)
-    F2 = star2.polyft * xw2
+    # MATRIX-FREE when `setup_oi!` has not been run, exactly as `observables` chooses for a
+    # single star — and it needs `data` to do it, since the uv points are what the transform is
+    # evaluated at. Whichever `POLYFT_BACKEND[]` is selected then applies to a binary too:
+    # :nufft (the default), :turbo or :scalar.
+    #
+    # The dense route stays for the case it was built for — imaging, where the geometry is
+    # fixed and the same matrix is reused over hundreds of iterations.
+    F1, flux1, F2, flux2 = if data === nothing || !isempty(star1.polyft)
+        indx1 = star1.index_quads_visible
+        xw1 = I1[indx1] .* star1.vis_weights[indx1] .* star1.ldmap[indx1]  # soft vis × LD
+        ow1 === nothing || (xw1 = xw1 .* ow1[indx1])                       # mutual occultation
+        indx2 = star2.index_quads_visible
+        xw2 = I2[indx2] .* star2.vis_weights[indx2] .* star2.ldmap[indx2]
+        ow2 === nothing || (xw2 = xw2 .* ow2[indx2])
+        (star1.polyft * xw1, dot(star1.polyflux, xw1),
+         star2.polyft * xw2, dot(star2.polyflux, xw2))
+    else
+        f1, fl1 = fused_cvis_parts(x1, star1, data; intensity_model = intensity_model,
+                                   band = band, extra_weights = ow1)
+        f2, fl2 = fused_cvis_parts(x2, star2, data; intensity_model = intensity_model,
+                                   band = band, extra_weights = ow2)
+        (f1, fl1, f2, fl2)
+    end
 
     return (F1 .+ F2 .* phase_shift) ./ (flux1 + flux2)
 end
@@ -164,7 +176,8 @@ function binary_observables(x1, star1, x2, star2, data, phase_shift;
                             intensity_model::Symbol = :linear, band = nothing,
                             occultation = false)
     cvis = binary_cvis(x1, star1, x2, star2, phase_shift;
-                       intensity_model=intensity_model, band=band, occultation=occultation)
+                       intensity_model=intensity_model, band=band, occultation=occultation,
+                       data=data)
     return cvis_to_obs(cvis, data)
 end
 

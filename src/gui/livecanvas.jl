@@ -234,6 +234,86 @@ function show_map!(c::SkyCanvas, star, values;
     return c
 end
 
+"""
+    show_binary_map!(canvas, star1, values1, star2, values2, offset; kwargs...) -> canvas
+
+Both components of a binary in one sky view, the secondary displaced by `offset` (West, North)
+in mas.
+
+ONE `poly!` plot draws both, by concatenating the two sets of quads and the two sets of
+colours. That is not a shortcut — it is the plot-once constraint: the canvas builds its plots
+before the window exists, so a second star cannot be a second plot added later. It also gives
+the pair a SHARED colour range, which is what makes the picture readable: the secondary of
+Spica is 4700 K cooler than the primary, and scaling each to its own range would draw them as
+though they were the same temperature.
+
+Decorations follow the PRIMARY. A limb and a spin axis drawn for both would be two of
+everything over a picture whose point is the pair's geometry; the axis extent, though, covers
+both, or the companion would sit outside the frame at every epoch but conjunction.
+"""
+function show_binary_map!(c::SkyCanvas, star1, values1, star2, values2, offset;
+                          colorrange = nothing, offset_west = 0.0, offset_north = 0.0,
+                          limb = true, graticules = false, compass = true, plotmesh = false,
+                          rotation_axis = false, rotation_arrow = false,
+                          graticule_nlat::Int = 5, graticule_nlon::Int = 8,
+                          graticule_color::Symbol = :black,
+                          star_params = nothing, pad = 0.5, title = "")
+    busy!(c)
+    ow2 = offset_west + Float64(offset[1])
+    on2 = offset_north + Float64(offset[2])
+    v1 = collect(Float64, values1); v2 = collect(Float64, values2)
+    both = vcat(v1, v2)
+    cr = colorrange === nothing ? _map_range(both) : colorrange
+    c.lastvalues[] = both
+    c.laststroke[] = plotmesh
+    cols = vcat(map_colors(v1, c.colormap[], cr), map_colors(v2, c.colormap[], cr))
+    c.polys[] = vcat(tessel_polygons(star1; offset_west, offset_north),
+                     tessel_polygons(star2; offset_west = ow2, offset_north = on2))
+    c.colors[] = cols
+    c.strokecolors[] = plotmesh ?
+        fill(Makie.RGBAf(0.45, 0.45, 0.45, 1), length(cols)) : cols
+    c.cbarlimits[] = (Float32(cr[1]), Float32(cr[2]))
+
+    if limb
+        vis = star1.index_quads_visible
+        hx, hy = convex_hull_2d(vec(-star1.proj_west[vis, :] .- offset_west),
+                                vec( star1.proj_north[vis, :] .+ offset_north))
+        c.limb[] = _closed_ring(hx, hy)
+    else
+        c.limb[] = Makie.Point2f[]
+    end
+    c.grat[] = graticules ?
+        _flatten_segments(graticule_segments(star1; star_params = star_params,
+                                             nlat = graticule_nlat, nlon = graticule_nlon,
+                                             offset_west = offset_west,
+                                             offset_north = offset_north)) : Makie.Point2f[]
+    c.gratplot.color[] = (graticule_color, 0.55)
+    c.axis3d[] = rotation_axis ?
+        _axis_polyline(star1, star_params, offset_west, offset_north) : Makie.Point2f[]
+    c.spin[] = rotation_arrow ?
+        _spin_polyline(star1, star_params, offset_west, offset_north) : Makie.Point2f[]
+
+    # The frame must hold BOTH stars and the separation between them, at every epoch.
+    amax = max(sky_axis_max(star1; pad),
+               sky_axis_max(star2; pad) + hypot(Float64(offset[1]), Float64(offset[2])))
+    if compass
+        cpts, cpos, clab = _compass_geometry(amax)
+        c.compass[] = cpts; c.compasstext[] = cpos; c.compasslabels[] = clab
+    else
+        c.compass[] = Makie.Point2f[]; c.compasstext[] = Makie.Point2f[]
+        c.compasslabels[] = String[]
+    end
+    style_live_axis!(c.axis)
+    c.cbarlabel[] = c.cbarlabel[]
+    c.colorbar.labelsize[] = 16 * live_plot_scale()
+    c.colorbar.ticklabelsize[] = 13 * live_plot_scale()
+    c.homespan[] = 2amax
+    Makie.xlims!(c.axis, amax, -amax)
+    Makie.ylims!(c.axis, -amax, amax)
+    isempty(title) || (c.axis.title = title)
+    return c
+end
+
 # ── zoom ─────────────────────────────────────────────────────────────────────────────────
 #
 # The sky view is a picture of a star of known angular size, so unlimited zoom is not a
@@ -280,21 +360,136 @@ end
 "Makie's `ScrollZoom.speed` for a per-detent factor: `(1 - speed)^-1 == step`."
 _zoom_speed(step::Real) = 1 - 1 / step
 
-"""
-    apply_zoom_step!(ax) -> ax
+# ONE WHEEL DETENT, in the units the event actually carries.
+#
+# Makie's own `ScrollZoom` applies `(1 - speed)^event.y` on the assumption that something
+# delivers small numbers. QMLMakie does not, and not by choice: it scales `angleDelta` by its
+# wheel factor ONLY when `pixelDelta` is zero, reading a non-zero `pixelDelta` as fine-grained
+# scrolling that needs no scaling. Under libinput a discrete wheel reports BOTH as ±120, so the
+# guard is false, 120 arrives unscaled, and the default speed of 0.1 gives 0.9^120 ≈ 3.7e-6 —
+# a single click zooming by about 270000x, which lands on a bound instantly whatever the bound
+# is. That is what made the zoom look broken however the limits were enforced.
+#
+# A touchpad sends many small deltas instead, so the fix has to normalise the EVENT rather than
+# lower the speed: a speed small enough to tame 120 units per detent would leave a touchpad
+# barely zooming at all. Dividing by one detent gives both devices the same meaning — a wheel
+# click is one step, a touchpad's small deltas are fractions of a step.
+const WHEEL_DETENT = 120.0
 
-Re-register `:scrollzoom` on `ax` with the current step.
-
-Makie fixes the speed when the interaction is CONSTRUCTED — `ScrollZoom` is an immutable
-struct with a plain `Float32` field — so changing it means replacing the registration, not
-mutating it. Deregistering first because `register_interaction!` refuses a name already there.
 """
-function apply_zoom_step!(ax)
+    zoom_step!(canvas, steps; at = nothing) -> Bool
+
+Zoom by `steps` wheel detents about the data point `at`, honouring the bounds. Positive steps
+zoom in. Returns whether the view actually moved, which is `false` once a stop is reached.
+
+Separate from the interaction that calls it so the bounds can be tested without a mouse: a
+synthetic scroll event is not a faithful stand-in for a wheel, and the arithmetic is the part
+worth pinning down.
+"""
+zoom_step!(c::SkyCanvas, steps::Real; at = nothing) =
+    zoom_step!(c.axis, c.homespan[], steps; at = at)
+
+# The Mollweide is a WHOLE-SPHERE projection, so its home extent is a constant of the
+# projection rather than something the data set: λ ∈ [-π, π] gives x = 2√2·λ·cos θ/π, so
+# |x| ≤ 2√2, and |y| ≤ √2. The axis is a DataAspect, so the span that matters is the wider one.
+const MOLL_HOME_SPAN = 4 * sqrt(2)
+
+function zoom_step!(ax, h::Real, steps::Real; at = nothing)
+    steps == 0 && return false
+    fl = ax.finallimits[]
+    ox, oy = Float64(fl.origin[1]), Float64(fl.origin[2])
+    wx, wy = Float64(fl.widths[1]), Float64(fl.widths[2])
+    (isfinite(wx) && isfinite(wy) && wx > 0 && wy > 0) || return false
+    h > 0 || return false
+
+    # One factor for both axes: scaling them differently would quietly change the aspect ratio,
+    # and the sky is drawn with DataAspect, where that is a lie about the star.
+    factor = zoom_per_detent()^(-steps)
+    nwx, nwy = wx * factor, wy * factor
+
+    # REFUSE the whole step rather than clamp it to the bound: overzooming does nothing.
+    #
+    # Clamping was tried here and is worse. The bound cannot be landed on exactly —
+    # `finallimits` is a `Rect2f`, so the span round-trips through Float32 and the two axes
+    # finish straddling the bound in opposite directions — so a clamp goes on requesting
+    # invisible corrections for ever and the view never comes to rest. Refusing stops within
+    # one detent of the bound, which is about 10% and invisible.
+    if nwx < ZOOM_MIN_SPAN * h || nwy < ZOOM_MIN_SPAN * h ||
+       nwx > ZOOM_MAX_SPAN * h || nwy > ZOOM_MAX_SPAN * h
+        return false
+    end
+
+    fx, fy = at === nothing ? (0.5, 0.5) :
+             (clamp((Float64(at[1]) - ox) / wx, 0.0, 1.0),
+              clamp((Float64(at[2]) - oy) / wy, 0.0, 1.0))
+    x0 = ox + fx * (wx - nwx)
+    y0 = oy + fy * (wy - nwy)
+    # Emit each pair in the axis's OWN direction. `finallimits` always reports positive widths,
+    # so a reversed axis is a flag rather than an ordering, and handing `limits!` an ascending
+    # pair silently un-reverses it — which would mirror the sky east-for-west, since
+    # `show_map!` reverses x to put East on the left.
+    xlo, xhi = ax.xreversed[] ? (x0 + nwx, x0) : (x0, x0 + nwx)
+    ylo, yhi = ax.yreversed[] ? (y0 + nwy, y0) : (y0, y0 + nwy)
+    # `limits!`, not an assignment to `finallimits`: while `ax.limits` is still automatic,
+    # Makie recomputes the view from the plots and a directly-assigned rectangle is discarded.
+    Makie.limits!(ax, xlo, xhi, ylo, yhi)
+    return true
+end
+
+"""
+    _install_zoom!(canvas) -> nothing
+
+Replace Makie's wheel zoom and right-click reset with ones that know about the bounds.
+
+Makie's `ScrollZoom` cannot be configured out of the problem above — its speed is fixed at
+construction and the event it reads is already 120x too large — so it is deregistered rather
+than re-registered with a different constant. The handler reads [`zoom_per_detent`](@ref) on
+every event, so the settings panel changes the step with no re-registration at all.
+"""
+_install_zoom!(c::SkyCanvas)  = _install_zoom!(c.axis, s -> zoom_step!(c, s), () -> reset_zoom!(c))
+
+"""
+    _install_zoom!(ax::Makie.Axis3) -> nothing
+
+The 3-D scene, where the fix is the DETENT and not the bound.
+
+`Axis3`'s zoom is not a rectangle of limits — depending on `viewmode` it scales `zoom_mult` or
+solves for a cursor-anchored target in world space — so it is not reimplemented here. What it
+shares with the 2-D axes is the event: it receives the same unscaled 120 units per wheel click
+and applies `(1 - speed)^120`.
+
+So the SPEED is chosen to cancel the detent instead: `1 - step^(-1/120)` makes one wheel click
+zoom by exactly one step, and a touchpad's fractional deltas scale with it. Re-registered
+whenever the step changes, since `ScrollZoom` fixes its speed at construction.
+"""
+function _install_zoom!(ax::Makie.Axis3)
     haskey(Makie.interactions(ax), :scrollzoom) &&
         Makie.deregister_interaction!(ax, :scrollzoom)
-    Makie.register_interaction!(ax, :scrollzoom,
-                                Makie.ScrollZoom(Float32(_zoom_speed(zoom_per_detent())), 0.2))
-    return ax
+    speed = 1 - zoom_per_detent()^(-1 / WHEEL_DETENT)
+    Makie.register_interaction!(ax, :scrollzoom, Makie.ScrollZoom(Float32(speed), 0.2))
+    return nothing
+end
+
+function _install_zoom!(ax, step!, reset!)
+    haskey(Makie.interactions(ax), :scrollzoom) &&
+        Makie.deregister_interaction!(ax, :scrollzoom)
+    Makie.register_interaction!(ax, :scrollzoom) do event::Makie.ScrollEvent, axis
+        step!(Float64(event.y) / WHEEL_DETENT)
+        return Makie.Consume(true)
+    end
+    # Own the right-click reset too. Makie's `:limitreset` returns to `ax.limits[]`, which is
+    # the rectangle the last zoom wrote — so it went back to the previous zoom rather than to
+    # the whole star.
+    haskey(Makie.interactions(ax), :limitreset) &&
+        Makie.deregister_interaction!(ax, :limitreset)
+    Makie.register_interaction!(ax, :limitreset) do event::Makie.MouseEvent, axis
+        if event.type === Makie.MouseEventTypes.rightclick
+            reset!()
+            return Makie.Consume(true)
+        end
+        return Makie.Consume(false)
+    end
+    return nothing
 end
 
 """
@@ -327,13 +522,23 @@ function clamp_zoom!(c::SkyCanvas)
     lo, hi = ZOOM_MIN_SPAN * h, ZOOM_MAX_SPAN * h
     span = max(wx, wy)
     (lo <= span <= hi) && return false
-    f = clamp(span, lo, hi) / span
+    # IDEMPOTENT: write a square view of the clamped span about the current centre, rather
+    # than SCALE what is there by a factor. The difference matters because the axes are set
+    # one at a time and this runs on every limit change, so it can see a half-updated view —
+    # x already corrected, y not. Scaling then shrank the corrected axis a second time and
+    # left the sky non-square: asking for 20x out gave wx 2.4 against wy 12.0. Writing the
+    # target instead gives the same answer however many times it runs, from whatever state.
+    #
+    # Square is right here because the sky axis is a `DataAspect`: the two spans are equal by
+    # construction, and any difference between them is a transient to be resolved, not a
+    # shape to preserve.
+    target = clamp(span, lo, hi)
     cx = Float64(fl.origin[1]) + wx / 2
     cy = Float64(fl.origin[2]) + wy / 2
     # HIGH then LOW on x, or the clamp silently un-reverses the axis and the sky flips
     # east-west the first time somebody scrolls past a bound.
-    Makie.xlims!(c.axis, cx + wx * f / 2, cx - wx * f / 2)
-    Makie.ylims!(c.axis, cy - wy * f / 2, cy + wy * f / 2)
+    Makie.xlims!(c.axis, cx + target / 2, cx - target / 2)
+    Makie.ylims!(c.axis, cy - target / 2, cy + target / 2)
     return true
 end
 
@@ -680,6 +885,23 @@ struct MollCanvas
     message::Makie.Observable{String}
     messageplot::Any
 end
+
+"""
+    reset_zoom!(c::MollCanvas) -> c
+
+Back to the whole sphere, which for this projection is a fixed rectangle rather than something
+the data decide.
+"""
+function reset_zoom!(c::MollCanvas)
+    Makie.xlims!(c.axis, -MOLL_HOME_SPAN / 2, MOLL_HOME_SPAN / 2)
+    Makie.ylims!(c.axis, -MOLL_HOME_SPAN / 4, MOLL_HOME_SPAN / 4)
+    return c
+end
+
+zoom_step!(c::MollCanvas, steps::Real; at = nothing) =
+    zoom_step!(c.axis, MOLL_HOME_SPAN, steps; at = at)
+
+_install_zoom!(c::MollCanvas) = _install_zoom!(c.axis, s -> zoom_step!(c, s), () -> reset_zoom!(c))
 
 function build_moll_canvas(fig)
     ax = Makie.Axis(fig[1, 1]; aspect = Makie.DataAspect())

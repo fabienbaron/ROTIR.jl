@@ -64,7 +64,14 @@ Popup {
             fileView.currentIndex = 0
         } else {
             selected = Julia.picker_join(folder, e.name)
-            accepted(chosen())
+            // BOTH arguments: `accepted(string paths, string mode)`. This passed only the
+            // paths, so a double-click or Return on a file reached the handler with `mode`
+            // undefined — "Insufficient arguments" from the QML engine, and then a silent
+            // fall through every branch of the mode dispatch, so the file simply did not open.
+            //
+            // The mode is the PRIMARY button's: "open" for a dataset, and the purpose itself
+            // for an orbit or a map, which is what those pickers' single Open button sends.
+            accepted(chosen(), root.purpose === "data" ? "open" : root.purpose)
             close()
         }
     }

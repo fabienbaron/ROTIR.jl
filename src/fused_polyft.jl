@@ -51,11 +51,32 @@ and this computes the sum directly.
 Use it wherever the geometry changes per evaluation — a parametric fit — and `poly_to_cvis`
 wherever it is fixed and the map varies, which is imaging.
 """
-function fused_cvis(x, star, data; intensity_model::Symbol = :linear, band = nothing)
+fused_cvis(x, star, data; intensity_model::Symbol = :linear, band = nothing) =
+    ((F, flux) = fused_cvis_parts(x, star, data; intensity_model = intensity_model,
+                                  band = band); F ./ flux)
+
+"""
+    fused_cvis_parts(x, star, data; intensity_model, band, extra_weights) -> (F, flux)
+
+The two HALVES of the matrix-free visibility computation: the unnormalised polygon transform
+and the total flux it should be divided by.
+
+[`fused_cvis`](@ref) is just their quotient. They are exposed separately because a BINARY
+cannot use the quotient: two components combine as `(F1 + F2·phase) / (flux1 + flux2)`, which
+needs each star's transform and flux before either is normalised. Without this,
+[`binary_cvis`](@ref) had no matrix-free route at all and every binary χ² had to build the
+dense `nuv × npix` matrix through `setup_oi!` — twice, once per component.
+
+`extra_weights` multiplies the per-tessel weights after limb darkening and soft visibility,
+which is where mutual occultation enters.
+"""
+function fused_cvis_parts(x, star, data; intensity_model::Symbol = :linear, band = nothing,
+                          extra_weights = nothing)
     T = eltype(star.proj_west)
     indx = star.index_quads_visible
     I = intensity_model === :linear ? x : intensity(x, intensity_model, band)
     xw = T.(I[indx] .* star.vis_weights[indx] .* star.ldmap[indx])
+    extra_weights === nothing || (xw = xw .* T.(extra_weights[indx]))
     pjx = star.proj_west[indx, :]; pjy = star.proj_north[indx, :]
     kx = T.(data.uv[1, :]) * T(-π / (180 * 3600000))
     ky = T.(data.uv[2, :]) * T( π / (180 * 3600000))
@@ -73,10 +94,10 @@ function fused_cvis(x, star, data; intensity_model::Symbol = :linear, band = not
                               mpjx[q,4]*mpjy[q,1] - mpjx[q,1]*mpjy[q,4])
         end
         Fn = polyft_cvis_nufft(mpjx, mpjy, xw, kx, ky)
-        return Complex{T}.(Fn) ./ dot(pf, xw)
+        return Complex{T}.(Fn), dot(pf, xw)
     end
     compute_polyflux_and_cvis!(F, pf, kx, ky, k2, mpjx, mpjy, xw)
-    return F ./ dot(pf, xw)
+    return F, dot(pf, xw)
 end
 
 """

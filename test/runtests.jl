@@ -75,6 +75,11 @@ end
     # three mesh levels, three surface types, three datasets, and the degenerate cases.
     include(joinpath(TESTDIR, "test_fused_polyft.jl"))
 
+    # The binary forward model: the matrix-free route against the dense one it replaced.
+    # AFTER the file above, which loads LoopVectorization — otherwise the `:turbo` case here
+    # skips itself and the backend it is meant to pin goes untested.
+    include(joinpath(TESTDIR, "test_binary_cvis.jl"))
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions

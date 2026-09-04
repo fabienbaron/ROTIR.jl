@@ -59,6 +59,13 @@ Pane {
             if (backendModel.get(j).bkey === cur) backendBox.currentIndex = j
     }
     ListModel { id: paramModel }
+    // The COMPANION's form, for a binary. Same twelve columns as the primary's — both come
+    // from `_params_table`, so a column added there appears in both without touching this.
+    ListModel { id: param2Model }
+    // The last fit's parameters: name, value, and the uncertainty when the method produced
+    // one. Filled from `shell_last_fit`, which returns one `name⇥value⇥error` line each.
+    ListModel { id: resultModel }
+    property bool isBinary: false
     ListModel { id: modelListModel }
     ListModel { id: typeModel }
     ListModel { id: methodModel }
@@ -130,11 +137,41 @@ Pane {
                 if (f.length < 12) continue
                 paramModel.append({ pname: f[0], plabel: f[1], punit: f[2], pvalue: f[3],
                                     pstate: f[4], plo: f[5], phi: f[6], ptie: f[7],
-                                    pgroup: f[8], pkind: f[9], pchoices: f[10], pdoc: f[11] })
+                                    pgroup: f[8], pkind: f[9], pchoices: f[10], pdoc: f[11],
+                                    // INERT: a limb-darkening coefficient the current law
+                                    // does not read. Julia has already zeroed it and dropped
+                                    // it from the free set; this greys the row so the form
+                                    // says which coefficients the law in force actually uses.
+                                    pinert: f.length > 12 && f[12] === "1" })
+            }
+        }
+        // The companion, when there is one.
+        root.isBinary = Julia.shell_binary() === "1"
+        var rows2 = root.isBinary ? Julia.shell_params2() : ""
+        param2Model.clear()
+        if (rows2.length > 0) {
+            var l2 = rows2.split("\n")
+            for (var j = 0; j < l2.length; ++j) {
+                var g = l2[j].split("\t")
+                if (g.length < 12) continue
+                param2Model.append({ pname: g[0], plabel: g[1], punit: g[2], pvalue: g[3],
+                                     pstate: g[4], plo: g[5], phi: g[6], ptie: g[7],
+                                     pgroup: g[8], pkind: g[9], pchoices: g[10], pdoc: g[11],
+                                     pinert: g.length > 12 && g[12] === "1" })
             }
         }
         warnLabel.text = Julia.shell_validate_model()
-        fitTable.text = Julia.shell_last_fit()
+        var res = Julia.shell_last_fit()
+        resultModel.clear()
+        if (res.length > 0) {
+            var rl = res.split("\n")
+            for (var k = 0; k < rl.length; ++k) {
+                var h = rl[k].split("\t")
+                if (h.length < 2) continue
+                resultModel.append({ rname: h[0], rvalue: h[1],
+                                     rerr: h.length > 2 ? h[2] : "" })
+            }
+        }
         var ep = Julia.shell_epochs()
         root.epochCount = ep.length > 0 ? ep.split("\n").length : 0
     }
@@ -199,6 +236,42 @@ Pane {
                             Julia.shell_add_model(parseInt(typeModel.get(typeBox.currentIndex).code)))
                         root.refresh()
                         root.redraw()
+                    }
+                }
+                // BINARY. A companion is a second full component — its own surface type and
+                // its own parameters — sharing the orbit defined on the Orbit tab. It is a
+                // property of the model rather than a second model, because the two stars are
+                // not independent: one orbit, one frame, one χ² over the pair.
+                CheckBox {
+                    id: binaryBox
+                    text: "binary"
+                    enabled: modelListModel.count > 0
+                    checked: root.isBinary
+                    font.pointSize: root.fontPt
+                    ToolTip.text: "add a companion; the orbit comes from the Orbit tab"
+                    ToolTip.visible: hovered
+                    onToggled: {
+                        root.statusChanged(Julia.shell_set_binary(checked ? "1" : "0",
+                                                                  compTypeBox.currentIndex >= 0
+                                                                  ? parseInt(typeModel.get(
+                                                                      compTypeBox.currentIndex).code)
+                                                                  : 3))
+                        root.refresh(); root.redraw()
+                    }
+                }
+                ComboBox {
+                    id: compTypeBox
+                    visible: root.isBinary
+                    Layout.preferredWidth: dp(120)
+                    model: typeModel
+                    textRole: "label"
+                    font.pointSize: root.fontPt - 1
+                    ToolTip.text: "the companion's surface type"
+                    ToolTip.visible: hovered
+                    onActivated: {
+                        root.statusChanged(Julia.shell_companion_type(
+                            parseInt(typeModel.get(currentIndex).code)))
+                        root.refresh(); root.redraw()
                     }
                 }
                 Button {
@@ -314,8 +387,12 @@ Pane {
                             text: plabel + (punit.length > 0 ? " (" + punit + ")" : "")
                             elide: Text.ElideRight
                             font.pointSize: root.fontPt
-                            ToolTip.text: pdoc
-                            ToolTip.visible: ma.containsMouse && pdoc.length > 0
+                            // Greyed rather than hidden: hiding them would make the form jump
+                            // by up to three rows every time the law is changed, and the point
+                            // is to SHOW which coefficients this law uses.
+                            opacity: pinert ? 0.45 : 1
+                            ToolTip.text: pinert ? "not used by the current LD law" : pdoc
+                            ToolTip.visible: ma.containsMouse
                             MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true }
                         }
 
@@ -332,7 +409,14 @@ Pane {
                                 text: pvalue
                                 font.pointSize: root.fontPt
                                 selectByMouse: true
-                                enabled: pstate !== "tied"
+                                enabled: pstate !== "tied" && !pinert
+                                // Show the START of the value, not the end. A TextField keeps
+                                // its cursor at the end of newly assigned text, so anything
+                                // wider than the box scrolled and displayed only the last
+                                // digits — a radius read as "...518514104". Values are
+                                // formatted short now, but a JD or an exponent can still
+                                // overflow, and the leading digits are the ones that matter.
+                                onTextChanged: if (!activeFocus) cursorPosition = 0
                                 onEditingFinished: {
                                     var msg = Julia.shell_set_param(pname, text)
                                     if (msg.length > 0) root.statusChanged(msg)
@@ -373,6 +457,9 @@ Pane {
                         // costs no alignment. `shell_set_param_state` refuses it as well.
                         ComboBox {
                             visible: pkind !== "choice"
+                            // A coefficient the law does not read cannot be freed: it would be
+                            // a direction the χ² is flat along. Julia refuses it too.
+                            enabled: !pinert
                             Layout.preferredWidth: visible ? dp(74) : 0
                             model: ["fixed", "free", "tied"]
                             font.pointSize: root.fontPt - 1
@@ -449,6 +536,77 @@ Pane {
                 }
             }
 
+            // ── the companion, for a binary ──────────────────────────────────
+            //
+            // VALUES ONLY, deliberately. The primary's form offers free/fixed/tied and bounds
+            // because an optimiser can move those; nothing fits a binary yet — `fit_orbit`
+            // refuses a tessellated one and the Model tab's fit snapshot drops the companion —
+            // so the same controls here would be three widgets per row that do nothing. When
+            // a binary fit exists they belong here, driven by the same `_params_table` rows
+            // this already reads.
+            Label {
+                visible: root.isBinary
+                text: "Companion"
+                font.bold: true
+                font.pointSize: root.fontPt
+                color: "#7f8c98"
+            }
+            Frame {
+                visible: root.isBinary
+                Layout.fillWidth: true
+                Layout.preferredHeight: dp(150)
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: dp(2)
+                    Label {
+                        Layout.fillWidth: true
+                        text: "shares the orbit defined on the Orbit tab"
+                        color: "#7f8c98"
+                        font.pointSize: root.fontPt - 2
+                    }
+                    ListView {
+                        id: param2List
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        model: param2Model
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: ItemDelegate {
+                            width: param2List.width
+                            leftPadding: 0
+                            rightPadding: 0
+                            contentItem: RowLayout {
+                                spacing: dp(4)
+                                Label {
+                                    Layout.preferredWidth: dp(118)
+                                    text: plabel + (punit.length > 0 ? " (" + punit + ")" : "")
+                                    elide: Text.ElideRight
+                                    font.pointSize: root.fontPt
+                                    ToolTip.text: pdoc
+                                    ToolTip.visible: cma.containsMouse && pdoc.length > 0
+                                    MouseArea { id: cma; anchors.fill: parent
+                                                hoverEnabled: true }
+                                }
+                                TextField {
+                                    Layout.preferredWidth: dp(120)
+                                    text: pvalue
+                                    enabled: !pinert
+                                    font.pointSize: root.fontPt
+                                    selectByMouse: true
+                                    onTextChanged: if (!activeFocus) cursorPosition = 0
+                                    onEditingFinished: {
+                                        var msg = Julia.shell_set_param2(pname, text)
+                                        if (msg.length > 0) root.statusChanged(msg)
+                                        root.refresh(); root.redraw()
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
+                        }
+                    }
+                }
+            }
+
             Label {
                 id: warnLabel
                 Layout.fillWidth: true
@@ -516,15 +674,68 @@ Pane {
                 elide: Text.ElideRight
             }
 
+            // The last fit's numbers. A TABLE rather than the monospace blob this was: the
+            // shell already returns `name⇥value⇥error` per line, so the three columns existed
+            // all along and were being flattened into one string whose alignment depended on
+            // the font. The error column is empty for a local search — Nelder-Mead makes no
+            // uncertainty claim, and an empty cell says that where a 0 would have claimed
+            // precision it does not have.
+            Label { text: "Results"; font.bold: true; font.pointSize: root.fontPt }
             Frame {
                 Layout.fillWidth: true
                 Layout.preferredHeight: dp(110)
-                Text {
-                    id: fitTable
+                ColumnLayout {
                     anchors.fill: parent
-                    font.family: "monospace"
-                    font.pointSize: root.fontPt - 1
-                    text: ""
+                    spacing: dp(2)
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.rightMargin: resScroll.visible ? resScroll.width : 0
+                        spacing: dp(4)
+                        Label { Layout.preferredWidth: dp(118); text: "parameter"
+                                color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
+                        Label { Layout.preferredWidth: dp(96); text: "value"
+                                color: "#7f8c98"; font.pointSize: root.fontPt - 2
+                                horizontalAlignment: Text.AlignRight }
+                        Label { Layout.fillWidth: true; text: "± uncertainty"
+                                color: "#7f8c98"; font.pointSize: root.fontPt - 2
+                                horizontalAlignment: Text.AlignRight }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: resultModel.count === 0
+                        text: "no fit yet"
+                        color: "#7f8c98"
+                        font.pointSize: root.fontPt - 1
+                    }
+                    ListView {
+                        id: resultList
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        model: resultModel
+                        ScrollBar.vertical: ScrollBar { id: resScroll }
+                        delegate: ItemDelegate {
+                            width: resultList.width
+                            leftPadding: 0
+                            rightPadding: 0
+                            contentItem: RowLayout {
+                                spacing: dp(4)
+                                Label { Layout.preferredWidth: dp(118); text: rname
+                                        elide: Text.ElideRight
+                                        font.pointSize: root.fontPt - 1 }
+                                Label { Layout.preferredWidth: dp(96); text: rvalue
+                                        font.family: "monospace"
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                                Label { Layout.fillWidth: true
+                                        text: rerr.length > 0 ? "\u00b1 " + rerr : "—"
+                                        color: rerr.length > 0 ? "#5a6772" : "#aab4bd"
+                                        font.family: "monospace"
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -537,7 +748,7 @@ Pane {
             //
             // Fits ACCUMULATE where models do not: fit a sphere, switch surface type, fit
             // again, and the two rows are the comparison.
-            Label { text: "Fits"; font.bold: true; font.pointSize: root.fontPt }
+            Label { text: "Fits history"; font.bold: true; font.pointSize: root.fontPt }
             // The header sits INSIDE the frame, above the list, and the rows carry no padding
             // of their own. With the header outside it, the two were offset by the Frame's
             // padding plus the ItemDelegate's — a couple of dozen pixels of style-dependent
@@ -551,6 +762,11 @@ Pane {
                     spacing: dp(2)
                     RowLayout {
                         Layout.fillWidth: true
+                        // The rows lose their right edge to the vertical scrollbar and the
+                        // header does not, so the last column drifted by exactly its width.
+                        // Reserved here rather than subtracted from a column, because the bar
+                        // only appears once the list overflows.
+                        Layout.rightMargin: fitScroll.visible ? fitScroll.width : 0
                         spacing: dp(4)
                         Label { Layout.preferredWidth: dp(96); text: "method"
                                 color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
@@ -572,7 +788,7 @@ Pane {
                         Layout.fillHeight: true
                         clip: true
                         model: fitModel
-                        ScrollBar.vertical: ScrollBar {}
+                        ScrollBar.vertical: ScrollBar { id: fitScroll }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0) {
                             root.statusChanged(Julia.shell_select_fit(currentIndex + 1))

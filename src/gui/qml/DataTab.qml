@@ -52,7 +52,8 @@ Pane {
             root.statusChanged(Julia.shell_set_obs_view(
                 root.obsKinds[root.viewIndex], colorBox.currentText,
                 overlayBox.checked ? "1" : "0",
-                logBox.enabled && logBox.checked ? "1" : "0"))
+                logBox.enabled && logBox.checked ? "1" : "0",
+                maxBaseBox.enabled && maxBaseBox.checked ? "1" : "0"))
         }
         root.redraw()
     }
@@ -67,6 +68,8 @@ Pane {
              : k === "visamp" ? "vis amp"
              : k === "visphi" ? "vis phase"
              : k === "flux"   ? "flux"
+             : k === "diffphi" ? "diff. phase"
+             : k === "diffvisamp" ? "diff. vis amp"
              : k
     }
 
@@ -217,6 +220,10 @@ Pane {
                     spacing: dp(2)
                     RowLayout {
                         Layout.fillWidth: true
+                        // The rows lose their right edge to the vertical scrollbar and the
+                        // header does not, so the last column drifts by its width as soon as
+                        // the list overflows — which for epochs is the normal case.
+                        Layout.rightMargin: epochScroll.visible ? epochScroll.width : 0
                         spacing: dp(6)
                         Label { text: "#";     Layout.preferredWidth: dp(24); font.pointSize: root.fontPt - 1; color: "#7f8c98" }
                         Label { text: "MJD";   Layout.fillWidth: true;        font.pointSize: root.fontPt - 1; color: "#7f8c98" }
@@ -231,7 +238,7 @@ Pane {
                     Layout.fillHeight: true
                     clip: true
                     model: epochModel
-                    ScrollBar.vertical: ScrollBar {}
+                    ScrollBar.vertical: ScrollBar { id: epochScroll }
                     onCurrentIndexChanged: {
                         // The REPAINT is the second half of this and it is not optional:
                         // `shell_select_epoch` refills the Observables, but Makie draws on
@@ -380,6 +387,20 @@ Pane {
                     enabled: ["v2", "t3amp"].indexOf(root.obsKinds[root.viewIndex]) >= 0
                     font.pointSize: root.fontPt - 1
                     ToolTip.text: "points at or below zero are dropped, not piled on the floor"
+                    ToolTip.visible: hovered
+                    onToggled: root.applyView()
+                }
+                CheckBox {
+                    id: maxBaseBox
+                    text: "max baseline"
+                    // Only the closure quantities have a choice to make: a triangle has three
+                    // legs, so it has both a mean baseline and a longest one. V² has a single
+                    // baseline and uv coverage is a geometry.
+                    enabled: ["t3amp", "t3phi"].indexOf(root.obsKinds[root.viewIndex]) >= 0
+                    font.pointSize: root.fontPt - 1
+                    ToolTip.text: "plot against the LONGEST leg of each triangle instead of " +
+                                  "the geometric mean — the resolution the closure actually " +
+                                  "probes"
                     ToolTip.visible: hovered
                     onToggled: root.applyView()
                 }

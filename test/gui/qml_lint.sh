@@ -55,6 +55,11 @@ for f in "$QMLDIR"/*.qml; do
     fi
 done
 
+# SIGNAL ARITY, which qmllint does not check at all. A signal declared with two parameters and
+# emitted with one passes every check above while the QML engine reports "Insufficient
+# arguments" at run time and the handler sees `undefined` — see the script's own header.
+if python3 "$(dirname "$0")/qml_signal_arity.py" "$QMLDIR"; then :; else FAIL=1; fi
+
 # The filter must not be able to hide a real problem: a file with a deliberate syntax error has
 # to fail. Without this the whole script degrades to "prints ok" the day the linter changes its
 # message format — which is the failure mode it exists to prevent.

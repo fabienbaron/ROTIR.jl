@@ -69,7 +69,8 @@ function _snapshot_figure(sh::ShellState, which::String, sz::Tuple{Int,Int})
     elseif which == "orbit"
         c = build_orbit_canvas(fig)
         te = d === nothing ? Float64[] : d.tepochs
-        show_orbit!(c, sh.orbit, te; nside_exp = sh.nside_exp[], T = sh.precision[])
+        show_orbit!(c, sh.orbit, te; nside_exp = sh.nside_exp[], T = sh.precision[],
+                    binary = _orbit_binary(sh))
         return fig
     elseif which == "posterior"
         f = current_fit(sh.session)

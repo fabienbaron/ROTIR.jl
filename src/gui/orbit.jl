@@ -172,6 +172,21 @@ function apply_orbit_ties(o::OrbitEntry)
 end
 
 """
+    _orbit_binary(sh) -> ModelEntry or nothing
+
+The Model tab's binary, when there is one: the PRIMARY entry, whose `companion` is the
+secondary. `nothing` when there is no model, or the model is a single star.
+
+One description of the system, shared between the two tabs. The Orbit tab says where the
+components are; the Model tab says what they are made of.
+"""
+function _orbit_binary(sh)
+    m = current_model(sh.session)
+    (m === nothing || m.companion === nothing) && return nothing
+    return m
+end
+
+"""
     orbit_bparams(o) -> NamedTuple
 
 The `binaryparameters` shape the geometry and the plotting take, from the fitted elements.
@@ -180,14 +195,38 @@ The `binaryparameters` shape the geometry and the plotting take, from the fitted
 the mass ratio — so it comes from the rendering block, where it is a stated assumption rather
 than something the fit produced.
 """
-function orbit_bparams(o::OrbitEntry)
+function orbit_bparams(o::OrbitEntry; binary = nothing)
     v = apply_orbit_ties(o)
-    s1 = starparameters(o.rpole1, o.tpole1, 0.0, 3, 0.2, 0.0, 0.25, 0.0,
-                        180.0 - v[:i], v[:Omega] - 180.0, 0.0, v[:P])
-    s2 = starparameters(o.rpole2, o.tpole2, 0.0, 3, 0.2, 0.0, 0.25, 0.0,
-                        180.0 - v[:i], v[:Omega] - 180.0, 0.0, v[:P])
+    # BOTH components are oriented by the orbit, not by themselves: `create_binary_geometry`
+    # takes the spin axis from the orbital inclination and node, so a per-component
+    # `inclination` in the Model tab would be overwritten here anyway. Everything else —
+    # radius, temperature, the limb-darkening law and its coefficients, β, the rotation period
+    # — comes from the component when there is one.
+    orient(sp) = (180.0 - v[:i], v[:Omega] - 180.0)
+    function comp(m, rpole_fallback, tpole_fallback)
+        m === nothing && return starparameters(rpole_fallback, tpole_fallback, 0.0, 3, 0.2,
+                                               0.0, 0.25, 0.0, 180.0 - v[:i],
+                                               v[:Omega] - 180.0, 0.0, v[:P])
+        p = m.params
+        g(k, d) = Float64(get(p, k, d))
+        # `rpole` for a Roche or rapid-rotator component, `radius` for a sphere: the schema
+        # gives them different names and a binary can legitimately hold either.
+        r = haskey(p, :rpole) ? g(:rpole, rpole_fallback) : g(:radius, rpole_fallback)
+        return starparameters(r, g(:tpole, tpole_fallback), g(:frac_escapevel, 0.0),
+                              round(Int, g(:ldtype, 3.0)), g(:ld1, 0.2), g(:ld2, 0.0),
+                              g(:beta, 0.25), g(:B_rot, 0.0),
+                              180.0 - v[:i], v[:Omega] - 180.0, 0.0,
+                              g(:rotation_period, v[:P]))
+    end
+    m1 = binary === nothing ? nothing : binary
+    m2 = binary === nothing ? nothing : binary.companion
+    s1 = comp(m1, o.rpole1, o.tpole1)
+    s2 = comp(m2, o.rpole2, o.tpole2)
+    # `q` follows the components when they are supplying everything else — the primary's Roche
+    # potential carries it — and otherwise stays the rendering assumption it has always been.
+    q = m1 === nothing ? o.q : Float64(get(m1.params, :q, o.q))
     return binaryparameters(s1, s2, 100.0, v[:i], v[:Omega], v[:omega], v[:P], v[:a],
-                            v[:e], v[:T0], o.q, [1.0, 1.0], v[:dP], v[:domega])
+                            v[:e], v[:T0], q, [1.0, 1.0], v[:dP], v[:domega])
 end
 
 # ── save and load ────────────────────────────────────────────────────────────────────────
@@ -343,8 +382,8 @@ pairs of Roche surfaces is a picture of the geometry, not of the astrometry, and
 looked at here is usually whether the elements put the secondary where the data say it is.
 """
 function show_orbit!(c::OrbitCanvas, o::OrbitEntry, tepochs::AbstractVector;
-                     nside_exp::Int = 3, T::DataType = Float32)
-    bp = orbit_bparams(o)
+                     nside_exp::Int = 3, T::DataType = Float32, binary = nothing)
+    bp = orbit_bparams(o; binary = binary)
     busy!(c)
     c.track[]   = _orbit_track_2d(bp)
     c.primary[] = [Makie.Point2f(0, 0)]
@@ -642,6 +681,14 @@ function shell_set_orbit_star_model(kind)
     sh = _sh(); o = sh.orbit
     k = Symbol(String(kind))
     k in (:analytic, :tessellated) || return "star model must be analytic or tessellated"
+    # The 3-D components ARE the Model tab's binary — its two parameter sets, its limb
+    # darkening, its β — rather than a second thin description that can disagree with it.
+    # Without one there is nothing to render, so this refuses rather than quietly falling back
+    # to a hardcoded pair of Roche spheres.
+    if k === :tessellated && _orbit_binary(sh) === nothing
+        return "define a binary on the Model tab first: add a model, tick binary, and its " *
+               "two components become the 3-D stars here"
+    end
     o.model = k
     # A 3-D component only exists on screen once it is drawn, so choosing it turns rendering
     # on; the switch back does not turn it off again, since by then it is the user's setting.
@@ -749,7 +796,7 @@ function refresh_orbit!(sh::ShellState)
     d = current_dataset(sh.session)
     tep = d === nothing ? Float64[] : d.mjd
     try
-        show_orbit!(sh.orbitcanvas, sh.orbit, tep;
+        show_orbit!(sh.orbitcanvas, sh.orbit, tep; binary = _orbit_binary(sh),
                     nside_exp = sh.nside_exp[], T = sh.precision[])
     catch err
         idle!(sh.orbitcanvas, "could not draw the orbit — check the elements")

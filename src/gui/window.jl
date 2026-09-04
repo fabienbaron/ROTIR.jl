@@ -36,6 +36,8 @@ function __init__()
                      shell_fit_methods, shell_fit, shell_last_fit,
                      shell_colormaps, shell_set_colormap, shell_reset_zoom,
                      shell_set_zoom_step, shell_version, orbit_dir,
+                     shell_binary, shell_set_binary, shell_params2,
+                     shell_set_param2, shell_companion_type,
                      shell_regularizer_kinds, shell_reconstruct, shell_images,
                      shell_imaging_context,
                      shell_job_poll, shell_job_stop, shell_job_running,
