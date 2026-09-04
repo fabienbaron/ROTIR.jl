@@ -729,6 +729,17 @@ end
 # `free`, `bounds` and `ties` with the surface parameters and need no second state machine.
 const POSITION_PARAMS = ((:pos_x, "x (W)", 1), (:pos_y, "y (N)", 2), (:pos_z, "z (obs)", 3))
 
+# How far a fit may move the secondary, in mas, unless the bounds are widened by hand.
+#
+# ±100 mas rather than ±1000: a long-baseline interferometer's field of view is tens of
+# milliarcseconds, and beyond it the phase term oscillates faster than the uv sampling can
+# follow — so a far-away companion contributes nothing and the fit is free to park it there.
+# MEASURED on iota Peg with ±1000: Nelder-Mead shrank the primary to 0.008 mas and put the
+# secondary at 958 mas, which fits 224 points better than the starting guess by making one
+# component disappear. A degenerate minimum reached legitimately, and a bound is the only
+# thing that rules it out.
+const POSITION_BOUND = (-100.0, 100.0)
+
 """
     shell_position_params() -> String
 
@@ -745,7 +756,7 @@ function shell_position_params()
     rows = String[]
     for (n, label, i) in POSITION_PARAMS
         v = c.offset[i]
-        lo, hi = get(c.bounds, n, (-1e3, 1e3))
+        lo, hi = get(c.bounds, n, POSITION_BOUND)
         tie = get(c.ties, n, "")
         state = !isempty(tie) ? "tied" : (inert ? "fixed" : (n in c.free ? "free" : "fixed"))
         doc = n === :pos_z ?
@@ -2169,6 +2180,103 @@ const PARAMETRIC_THETA = Dict(
     :position_angle => "PA", :beta => "beta", :ld1 => "ld1", :ld2 => "ld2",
     :tpole => "tpole")
 
+# ── fitting a binary ────────────────────────────────────────────────────────────────────
+#
+# A binary's parameter vector spans THREE places: the primary's free set, the secondary's, and
+# the secondary's position. They are kept as `(component, name)` pairs rather than flattened
+# into one dictionary because `radius` means a different number on each star — the primary and
+# the secondary of Spica differ by a factor of two — and a single namespace would silently tie
+# them together.
+#
+# Component 1 is the primary, 2 the secondary, 3 the position. Only the label differs; the
+# fitter sees a plain vector either way.
+_fit_component_of(n::Symbol) = n in (:pos_x, :pos_y, :pos_z) ? 3 : 2
+
+"The `(component, name)` pairs a fit will move, primary first."
+function binary_fit_names(m)
+    out = Tuple{Int,Symbol}[(1, n) for n in sort(collect(m.free))]
+    c = m.companion
+    c === nothing && return out
+    for n in sort(collect(c.free))
+        # A position is only a coordinate when a fixed offset is what places the secondary; if
+        # the orbit does, these numbers are not read and freeing them would add flat directions.
+        (_fit_component_of(n) == 3 && c.place !== :offset) && continue
+        push!(out, (_fit_component_of(n), n))
+    end
+    return out
+end
+
+"How a `(component, name)` pair reads in the results table."
+fit_label(comp::Int, n::Symbol) = comp == 2 ? "2:" * String(n) : String(n)
+
+"Current value, lower and upper bound of one `(component, name)` pair."
+function _fit_triple(m, (comp, n))
+    if comp == 1
+        return (m.params[n], m.bounds[n][1], m.bounds[n][2])
+    end
+    c = m.companion
+    comp == 2 && return (c.params[n], get(c.bounds, n, (-Inf, Inf))[1],
+                         get(c.bounds, n, (-Inf, Inf))[2])
+    i = findfirst(q -> q[1] === n, POSITION_PARAMS)
+    lo, hi = get(c.bounds, n, POSITION_BOUND)
+    return (c.offset[POSITION_PARAMS[i][3]], lo, hi)
+end
+
+"Write one trial value back into whichever component it belongs to."
+function _fit_put!(m, (comp, n), v)
+    if comp == 1
+        m.params[n] = v
+    elseif comp == 2
+        m.companion.params[n] = v
+    else
+        i = findfirst(q -> q[1] === n, POSITION_PARAMS)
+        o = collect(m.companion.offset); o[POSITION_PARAMS[i][3]] = v
+        m.companion.offset = (o[1], o[2], o[3])
+    end
+    return m
+end
+
+"""
+    _binary_objective(snap, tess, data, mjd, tepochs) -> (θ -> χ²)
+
+The criterion a binary fit minimises: the χ² of the PAIR, over whatever the parameter vector
+happens to span.
+
+Matrix-free, through the same `binary_observables` route the panel's χ² uses — which is what
+makes this feasible at all. `fit_orbit` refuses tessellated components partly because they were
+"orders of magnitude slower per likelihood", and that was true while every evaluation built an
+`nuv × npix` matrix per component through `setup_oi!`. It is 13 ms now.
+"""
+function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop)
+    return function (θ)
+        stop[] && return 1e30
+        for (k, nm) in enumerate(names); _fit_put!(snap, nm, θ[k]); end
+        p1 = star_params(snap); p2 = star_params(snap.companion)
+        (isempty(validate_star_params(p1)) && isempty(validate_star_params(p2))) || return 1e30
+        try
+            c = snap.companion
+            offs = if c.place === :offset
+                fill((c.offset[1], c.offset[2]), length(data))
+            else
+                bp = orbit_bparams(orbit; binary = snap)
+                [orbit_to_rotir_offset(bp, t + 2_400_000.5) for t in mjd]
+            end
+            s1 = create_star_multiepochs(tess, p1, tepochs; secondary = false)
+            s2 = create_star_multiepochs(tess, p2, tepochs; secondary = true)
+            x1 = parametric_temperature_map(p1, s1[1]; secondary = false)
+            x2 = parametric_temperature_map(p2, s2[1]; secondary = true)
+            tot = 0.0
+            for i in eachindex(data)
+                ph = binary_phase_shift(data[i].uv, offs[i][1], offs[i][2])
+                tot += binary_chi2_f(x1, s1[i], x2, s2[i], data[i], ph)
+            end
+            return isfinite(tot) ? tot : 1e30
+        catch
+            return 1e30
+        end
+    end
+end
+
 """
     shell_fit(method, maxeval) -> String
 
@@ -2185,8 +2293,12 @@ function shell_fit(method, maxeval)
     d === nothing && return "no dataset"
     m = current_model(sh.session)
     m === nothing && return "no model"
-    names = sort(collect(m.free))
-    isempty(names) && return "nothing is free — mark at least one parameter free"
+    isbin = m.companion !== nothing
+    bnames = isbin ? binary_fit_names(m) : Tuple{Int,Symbol}[]
+    names = isbin ? Symbol[n for (_, n) in bnames] : sort(collect(m.free))
+    isempty(names) && return isbin ?
+        "nothing is free — mark a parameter free on either component, or a position" :
+        "nothing is free — mark at least one parameter free"
     meth = Symbol(String(method))
     # Named before the membership test, so asking for it gets the REASON rather than
     # "unknown method" — it is a method ROTIR has and the GUI declines, not a typo.
@@ -2223,17 +2335,37 @@ function shell_fit(method, maxeval)
                               join(bad, ", ") * " (free: " * join(sort(collect(known)), ", ") * ")"
     end
 
-    θ0 = [m.params[n] for n in names]
-    lb = [m.bounds[n][1] for n in names]
-    ub = [m.bounds[n][2] for n in names]
+    # A BINARY is fitted by the derivative-free methods only. The gradient path differentiates
+    # the single-star parametric model, and NUTS and Pigeons both need `PARAMETRIC_THETA`,
+    # which maps one star's parameters onto that model's θ — there is no `binary_chi2_fg` and
+    # no binary θ. Nelder-Mead, BOBYQA and Nautilus need only the criterion, which exists.
+    if isbin && !(meth in (:neldermead, :bobyqa, :nautilus))
+        return "$(meth) cannot fit a binary: it needs a gradient or the parametric θ, and " *
+               "neither exists for two components. Use neldermead, bobyqa or nautilus"
+    end
+
+    θ0, lb, ub = if isbin
+        tr = [_fit_triple(m, nm) for nm in bnames]
+        (Float64[x[1] for x in tr], Float64[x[2] for x in tr], Float64[x[3] for x in tr])
+    else
+        ([m.params[n] for n in names], [m.bounds[n][1] for n in names],
+         [m.bounds[n][2] for n in names])
+    end
     any(θ0 .< lb) || any(θ0 .> ub) &&
         return "a starting value is outside its bounds"
 
     # Snapshot the model: the worker must not read a struct the GUI thread can edit under it.
-    # The companion is deliberately NOT carried: this fit path moves one star's parameters,
-    # and `fit_binary` does not exist yet. A binary's χ² is shown, not fitted.
+    # The COMPANION is copied too, deeply — a shallow copy would share the parameter dictionary
+    # the objective writes to on every trial point, which is exactly the struct this snapshot
+    # exists to keep away from the GUI thread.
+    csnap = m.companion === nothing ? nothing :
+        ModelEntry(m.companion.name, m.companion.surface_type, copy(m.companion.params),
+                   copy(m.companion.free), copy(m.companion.bounds), copy(m.companion.ties),
+                   m.companion.secondary, nothing, m.companion.place, m.companion.offset)
     snap = ModelEntry(m.name, m.surface_type, copy(m.params), copy(m.free), copy(m.bounds),
-                      copy(m.ties), m.secondary, nothing, m.place, m.offset)
+                      copy(m.ties), m.secondary, csnap, m.place, m.offset)
+    orbit_snap = deepcopy(sh.orbit)
+    mjd = d === nothing ? Float64[] : copy(d.mjd)
     data = d.data
     tepochs = copy(d.tepochs)
     nd = sum(dd.nv2 + dd.nt3amp + dd.nt3phi for dd in data)
@@ -2250,7 +2382,9 @@ function shell_fit(method, maxeval)
                  "HEALPix level $(nexp) ($(12 * (2^nexp)^2) tessels, $(prec))"; kind = :cmd)
     return start_job!(sh, :fit, function (stop)
         tess = tessellation_healpix(nexp; T = prec)
-        obj = function (θ)
+        obj = isbin ?
+            _binary_objective(snap, bnames, tess, data, mjd, tepochs, orbit_snap, stop) :
+            function (θ)
             stop[] && return 1e30
             for (k, n) in enumerate(names); snap.params[n] = θ[k]; end
             p = star_params(snap)
@@ -2273,13 +2407,30 @@ function shell_fit(method, maxeval)
         else
             _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
         end
-        for (k, n) in enumerate(names); snap.params[n] = best[k]; end
+        if isbin
+            for (k, nm) in enumerate(bnames); _fit_put!(snap, nm, best[k]); end
+        else
+            for (k, n) in enumerate(names); snap.params[n] = best[k]; end
+        end
         # The WHOLE result travels back, not a summary of it. `job_succeeded!` turns this into
         # a `FitEntry` on the GUI thread; nothing is reduced here, on the worker, where the
         # draws would otherwise go out of scope and be collected.
+        # LABELS for a binary, so "radius" and "2:radius" are told apart in the table and in
+        # the fit history — they are different numbers on different stars.
+        labels = isbin ? [Symbol(fit_label(c, n)) for (c, n) in bnames] : names
         return (; params = Dict(n => best[k] for (k, n) in enumerate(names)),
-                table = _fit_table(names, best, extra),
-                names = names, best = best, errs = extra, post = post,
+                # `binary` carries the (component, name) pairs so the GUI thread can put each
+                # value back on the star it came from; without it every result would land on
+                # the primary.
+                binary = isbin ? bnames : nothing,
+                table = _fit_table(labels, best, Dict(Symbol(fit_label(c, n)) => v
+                                                      for ((c, n), v) in
+                                                      zip(isbin ? bnames :
+                                                          [(1, x) for x in names],
+                                                          [get(extra, n, NaN) for n in names])
+                                                      if isfinite(v)),
+                                   ),
+                names = labels, best = best, errs = extra, post = post,
                 method = meth, model = snap.name, surface_type = snap.surface_type,
                 chi2 = chi2, ndata = nd,
                 status = Printf.@sprintf("fit done: χ²ᵣ = %.4f over %d points", chi2 / nd, nd))
@@ -2834,7 +2985,14 @@ function job_succeeded!(sh::ShellState, kind::Symbol, result)
         _record_fit!(sh, result)
         m = current_model(sh.session)
         if m !== nothing
-            for (k, v) in result.params; m.params[k] = v; end
+            bn = hasproperty(result, :binary) ? result.binary : nothing
+            if bn === nothing
+                for (k, v) in result.params; m.params[k] = v; end
+            else
+                # Each value back onto the component it belongs to. `result.params` is keyed by
+                # the bare name, which is ambiguous across two stars, so the pairs decide.
+                for (k, nm) in enumerate(bn); _fit_put!(m, nm, result.best[k]); end
+            end
             refresh_model_tab!(sh)
             refresh_data_tab!(sh)
         end
