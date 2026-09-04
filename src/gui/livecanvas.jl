@@ -243,6 +243,60 @@ end
 const ZOOM_MIN_SPAN = 0.05      # 20x in
 const ZOOM_MAX_SPAN = 4.0       # 4x out
 
+# How far ONE wheel detent zooms, which is a different question from how far zoom may go.
+#
+# Makie registers `ScrollZoom(0.1, 0.2)` on every Axis and applies `(1 - speed)^scroll`, so a
+# notch inwards is 1/(1 - 0.1) = 1.111x. Expressed here as the FACTOR rather than as Makie's
+# speed, because a factor is the thing a user can picture ("a quarter bigger per notch") and
+# the speed is not.
+const ZOOM_PER_DETENT = 1 / (1 - 0.1)
+
+"""
+The per-detent zoom factor the settings panel has set, or 0 for "leave Makie's own".
+
+A setting rather than a constant because it is the one number here that is a matter of taste
+and of hardware: a wheel with detents, a free-spinning wheel and a touchpad all deliver
+different amounts of scroll for the same intent, and no single value suits them.
+"""
+const ZOOM_STEP_USER = Ref(0.0)
+
+"The zoom factor per detent actually in force."
+zoom_per_detent() = ZOOM_STEP_USER[] > 0 ? ZOOM_STEP_USER[] : ZOOM_PER_DETENT
+
+"""
+    set_zoom_step!(x) -> Float64
+
+Set the zoom factor per wheel detent; zero restores Makie's default.
+
+Clamped to 1.02 .. 3.0. Below 1.02 the wheel does nothing perceptible, and above 3 a single
+notch crosses the whole zoom range — which, with [`ZOOM_MIN_SPAN`](@ref) and
+[`ZOOM_MAX_SPAN`](@ref) only a factor 80 apart, means one notch from either bound to the other.
+"""
+function set_zoom_step!(x::Real)
+    ZOOM_STEP_USER[] = (isfinite(x) && x > 1) ? clamp(Float64(x), 1.02, 3.0) : 0.0
+    return ZOOM_STEP_USER[]
+end
+
+"Makie's `ScrollZoom.speed` for a per-detent factor: `(1 - speed)^-1 == step`."
+_zoom_speed(step::Real) = 1 - 1 / step
+
+"""
+    apply_zoom_step!(ax) -> ax
+
+Re-register `:scrollzoom` on `ax` with the current step.
+
+Makie fixes the speed when the interaction is CONSTRUCTED — `ScrollZoom` is an immutable
+struct with a plain `Float32` field — so changing it means replacing the registration, not
+mutating it. Deregistering first because `register_interaction!` refuses a name already there.
+"""
+function apply_zoom_step!(ax)
+    haskey(Makie.interactions(ax), :scrollzoom) &&
+        Makie.deregister_interaction!(ax, :scrollzoom)
+    Makie.register_interaction!(ax, :scrollzoom,
+                                Makie.ScrollZoom(Float32(_zoom_speed(zoom_per_detent())), 0.2))
+    return ax
+end
+
 """
     reset_zoom!(canvas) -> canvas
 

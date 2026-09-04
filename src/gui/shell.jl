@@ -697,6 +697,43 @@ function shell_set_polyft_backend(kind)
     return "polyft backend: $(k)"
 end
 
+"""
+    shell_set_zoom_step(x) -> String
+
+How far one wheel detent zooms, as a factor. Zero restores Makie's own 1.11.
+
+Applied to the three sky axes, which are the ones that zoom: the Mollweide is a whole-surface
+projection with nothing to zoom into, and the χ² panel is a bar chart.
+"""
+function shell_set_zoom_step(x)
+    sh = _sh()
+    v = set_zoom_step!(Float64(x))
+    for c in (sh.sky, sh.msky, sh.imsky)
+        c === nothing || apply_zoom_step!(c.axis)
+    end
+    return v > 0 ? Printf.@sprintf("wheel zoom: %.2fx per detent", v) :
+                   "wheel zoom: default"
+end
+
+"""
+    shell_version() -> String
+
+Which code is actually running.
+
+The first thing to establish about any bug report, and the settings panel is where a user
+already comes to look at what the WINDOW is doing rather than at their data. `pkgversion` of
+the parent package, not of this extension — an extension reports the version of whatever
+built it, which for a dev checkout is not a number anybody can act on.
+"""
+function shell_version()
+    v = try
+        string(pkgversion(ROTIR))
+    catch
+        "unknown"
+    end
+    return "ROTIR v" * v * "  ·  Julia " * string(VERSION)
+end
+
 "The decorations the sky views can draw, in the order the ticks appear."
 # `:spin` is ONE tick driving both the axis and the arrow: they are two halves of the same
 # annotation — the line says where the pole is, the arrow says which way it turns — and either

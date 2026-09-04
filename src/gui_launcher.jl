@@ -380,6 +380,11 @@ function rotirgui(files::AbstractString...; samplers::Bool = true, session = not
 
     # Separately, and in this order: GLMakie's platform choice has to be made — and Qt made
     # to match it — before QML is loaded.
+    # The Qt Quick Controls style, before QML is imported. See `gui` in src/gui/window.jl for
+    # why macOS needs asking: its native style makes the tab bar a third too tall and runs a
+    # ComboBox's dropdown arrow over its own text.
+    Sys.isapple() && get!(ENV, "QT_QUICK_CONTROLS_STYLE", "Fusion")
+
     _load_or_explain([:GLMakie])
     _load_or_explain([:QMLMakie, :QML])
 

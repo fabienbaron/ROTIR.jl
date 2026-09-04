@@ -48,11 +48,20 @@ ApplicationWindow {
     // Turned by hand in the settings panel; 0 means "no override". It wins over both the
     // startup variable and the screen, because it is the most recent thing the user said.
     property real uiScaleUser: 0
-    property string uiFontFamily: ""
+    // NOTO SANS on every platform, rather than each one's own theme font. The window is laid
+    // out in `dp()` against metrics measured with it, and a different family at the same point
+    // size is a different width — which on macOS, whose theme font is wider, is what pushes
+    // text into the controls beside it. One family everywhere means one set of metrics to have
+    // got right. Qt falls back silently if it is not installed, so this is a preference rather
+    // than a requirement; "" in the picker still means "whatever the platform theme chose".
+    property string uiFontFamily: "Noto Sans"
     // What the plot layer was last TOLD, as opposed to what it draws: zero means "computed
     // from the screen". "Save defaults" stores THESE rather than the values in force, so a
     // scale worked out from this monitor's DPI is not pinned onto the next one.
     property real plotScaleUser: 0
+    // The per-detent wheel zoom factor. Defaults to what Makie already does — 1/(1 - 0.1) —
+    // so the wheel feels exactly as it did until somebody turns this.
+    property real zoomStepUser: 1.11
     // The model mesh level, owned here so the settings panel and the Model tab agree on it.
     property int nsideExp: 3
 
@@ -194,6 +203,10 @@ ApplicationWindow {
             else if (f[0] === "ui_font")     win.uiFontFamily  = f[1]
             else if (f[0] === "ui_font_pt")  win.baseFontPt    = parseFloat(f[1])
             else if (f[0] === "plot_scale")  win.plotScaleUser = parseFloat(f[1])
+            else if (f[0] === "zoom_step")   { var z = parseFloat(f[1])
+                                               if (z > 1) { win.zoomStepUser = z
+                                                            zoomSpin.value = Math.round(z * 100)
+                                                            Julia.shell_set_zoom_step(z) } }
             else if (f[0] === "precision")   precisionBox.currentIndex =
                                                  (f[1] === "Float64" ? 1 : 0)
         }
@@ -281,10 +294,11 @@ ApplicationWindow {
                 ComboBox {
                     id: fontBox
                     Layout.fillWidth: true
-                    // "" first: the platform theme's own font is the right default, and
-                    // naming a family that is not installed silently falls back to something
-                    // else rather than reporting anything.
-                    model: ["", "Sans Serif", "DejaVu Sans", "Noto Sans", "Liberation Sans",
+                    // Noto Sans is the default and comes first. "" is kept because it is
+                    // the only way back to the platform theme's own font, and because naming a
+                    // family that is not installed falls back silently rather than reporting
+                    // anything — so a user who has no Noto needs an explicit escape.
+                    model: ["Noto Sans", "", "Sans Serif", "DejaVu Sans", "Liberation Sans",
                             "Cantarell", "Ubuntu", "monospace"]
                     currentIndex: Math.max(0, model.indexOf(win.uiFontFamily))
                     displayText: currentText.length === 0 ? "system default" : currentText
@@ -313,6 +327,29 @@ ApplicationWindow {
                 }
                 Label {
                     text: "0 = from the screen"
+                    color: "#888"; font.pointSize: pt(baseFontPt - 2)
+                }
+
+                // ── wheel zoom ────────────────────────────────────────────────
+                // How far one notch goes — a matter of hardware as much as taste, since a
+                // detented wheel, a free-spinning one and a touchpad all report different
+                // amounts of scroll for the same intent.
+                Label { text: "Wheel zoom"; color: "#666" }
+                SpinBox {
+                    id: zoomSpin
+                    from: 102; to: 300; stepSize: 5
+                    value: Math.round(win.zoomStepUser * 100)
+                    editable: true
+                    Layout.fillWidth: true
+                    textFromValue: function (v) { return (v / 100).toFixed(2) + "\u00d7" }
+                    valueFromText: function (s) { return Math.round(parseFloat(s) * 100) }
+                    onValueModified: {
+                        win.zoomStepUser = value / 100
+                        win.status = Julia.shell_set_zoom_step(win.zoomStepUser)
+                    }
+                }
+                Label {
+                    text: "per detent"
                     color: "#888"; font.pointSize: pt(baseFontPt - 2)
                 }
 
@@ -370,12 +407,24 @@ ApplicationWindow {
                               "ui_font\t"    + win.uiFontFamily,
                               "ui_font_pt\t" + win.baseFontPt,
                               "plot_scale\t" + win.plotScaleUser,
+                              "zoom_step\t"  + win.zoomStepUser,
                               "precision\t"  + precisionBox.currentText ].join("\n"))
                         savedLabel.text = path.length > 0 ? "saved to " + path
                                                           : "could not save — see the console"
                     }
                 }
                 Button { text: "Close"; onClicked: settingsPanel.close() }
+            }
+
+            // Which code is actually running. The first thing to establish about any bug
+            // report, and the settings panel is where a user already comes to look at what the
+            // window is doing rather than at their data.
+            Label {
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignRight
+                text: Julia.shell_version()
+                color: "#888"
+                font.pointSize: pt(baseFontPt - 2)
             }
         }
     }
@@ -419,7 +468,14 @@ ApplicationWindow {
             // Settings first: it governs the whole window rather than the dataset.
             Button {
                 text: "\u2699"                    // GEAR
-                font.pointSize: pt(11)
+                // Sized well above the bar's text, as in the OITOOLS window. This is the only
+                // control in the bar that is a SYMBOL rather than a word, and at text size it
+                // read as punctuation beside "Open OIFITS…" instead of as a button.
+                font.pointSize: pt(baseFontPt + 11)
+                // The glyph is taller than the default content box, so give it room rather
+                // than letting the bar clip its top and bottom.
+                implicitWidth: dp(38)
+                implicitHeight: dp(38)
                 ToolTip.text: "appearance settings"
                 ToolTip.visible: hovered
                 onClicked: settingsPanel.opened ? settingsPanel.close() : settingsPanel.open()
@@ -527,7 +583,10 @@ ApplicationWindow {
                        onPickFile: function (mode) {
                            picker.purpose = mode
                            picker.canAdd = false
-                           picker.openAt(initialFolder)
+                           // Orbits have a folder of their own, seeded with the ones that
+                           // ship — so "Load orbit…" opens on β Lyr and Spica rather than on
+                           // whatever directory Julia was started from.
+                           picker.openAt(mode === "orbit" ? Julia.orbit_dir() : initialFolder)
                        } }
         }
 

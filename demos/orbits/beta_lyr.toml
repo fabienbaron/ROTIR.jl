@@ -1,0 +1,62 @@
+name = "beta Lyr"
+free = ["Omega", "T0", "a", "i"]
+
+[parameters]
+domega = 0.0
+f = 1.281682773304577
+e = 0.0
+dP = 5.997702144352943e-7
+Omega = 73.01517141414055
+T0 = 2.4542832214833032e6
+P = 12.9414
+c2_pa = -73.01517141414055
+a = 0.9241805814515858
+c1_diameter = 0.618642501349595
+c2_ratio = 0.4769316510865751
+omega = 90.0
+c2_diameter = 0.5
+c2_fwhm = 0.7408288505668419
+i = 91.62788629341878
+
+[rendering]
+tpole1 = 20000.0
+rpole1 = 0.2
+irradiation = false
+occultation = false
+rpole2 = 0.12
+tpole2 = 15000.0
+render = false
+q = 0.5
+roche = true
+
+[ties]
+c2_pa = "-Omega"
+
+[star_model]
+kind = "analytic"
+
+[components]
+c2 = "ellgauss"
+c1 = "uniform"
+
+[bounds]
+c2_ld1 = [0.0, 1.0]
+domega = [-0.05, 0.05]
+f = [0.0, 10.0]
+e = [0.0, 0.95]
+dP = [-0.0001, 0.0001]
+Omega = [0.0, 180.0]
+T0 = [-inf, +inf]
+c1_ld1 = [0.0, 1.0]
+P = [0.01, 100000.0]
+c1_fwhm = [0.01, 20.0]
+c2_pa = [-180.0, 180.0]
+a = [0.01, 50.0]
+c1_diameter = [0.01, 20.0]
+c2_ratio = [0.05, 1.0]
+omega = [0.0, 360.0]
+c1_ratio = [0.05, 1.0]
+c2_diameter = [0.01, 20.0]
+c1_pa = [-180.0, 180.0]
+c2_fwhm = [0.01, 20.0]
+i = [0.0, 180.0]

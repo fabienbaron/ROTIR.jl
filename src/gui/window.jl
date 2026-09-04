@@ -35,6 +35,7 @@ function __init__()
                      shell_set_bound, shell_set_tie, shell_validate_model,
                      shell_fit_methods, shell_fit, shell_last_fit,
                      shell_colormaps, shell_set_colormap, shell_reset_zoom,
+                     shell_set_zoom_step, shell_version, orbit_dir,
                      shell_regularizer_kinds, shell_reconstruct, shell_images,
                      shell_imaging_context,
                      shell_job_poll, shell_job_stop, shell_job_running,
@@ -120,6 +121,21 @@ function ROTIR.gui(session::Session = Session();
                                                       "Main.qml"),
                    autoquit_ms::Integer = 0)
     check_qt_conflict()
+    # THE CONTROL STYLE, on macOS only, and before the QML engine reads it.
+    #
+    # Qt Quick Controls picks a native style per platform: Fusion-like on Linux, the macOS
+    # style on a Mac. They are not interchangeable here — this window sizes everything through
+    # `dp()` against a style whose metrics were measured on Linux, and the macOS style differs
+    # in exactly the places that shows: a TabButton comes out about a third taller, and a
+    # ComboBox lays its content item out without reserving the indicator's width, so the
+    # dropdown arrow sits on top of the text ("fixed" in the free/fixed/tied selectors is the
+    # one people notice).
+    #
+    # Fusion is available on every platform Qt supports and is what the layout was built
+    # against, so asking for it explicitly is the fix for the whole class rather than for the
+    # two symptoms that have been reported. `get!`, so a user who sets the variable themselves
+    # keeps their choice.
+    Sys.isapple() && get!(ENV, "QT_QUICK_CONTROLS_STYLE", "Fusion")
     # A backstop for sessions started by hand rather than through bin/rotirgui.jl. GLMakie is
     # imported by now but has not built a context yet, and Mesa reads these at context
     # creation, so this is still early enough. A no-op when the launcher already ran it.

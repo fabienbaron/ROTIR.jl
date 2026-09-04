@@ -28,11 +28,23 @@ Shortcut destinations, `label\tpath` per line.
 
 The package's `demos/data` is listed first and by name, because it is where every dataset that
 ships with ROTIR lives and it is otherwise buried inside a depot path nobody would navigate to.
+The orbit folder is here for the same reason — it is under the platform's per-user config
+directory, which is not somewhere anyone would think to browse to by hand.
 """
 function picker_places()
     rows = String[]
     d = joinpath(pkgdir(ROTIR), "demos", "data")
     isdir(d) && push!(rows, "ROTIR data\t$(d)")
+    # Whether or not this picker is being opened FOR an orbit: a shortcut that appears and
+    # disappears depending on which button opened the dialog is harder to learn than one that
+    # is always in the same place. `orbit_dir` creates the folder, which is what makes the
+    # shortcut land somewhere rather than on a path that does not exist yet.
+    o = try
+        orbit_dir()
+    catch
+        ""
+    end
+    isempty(o) || !isdir(o) || push!(rows, "Orbits\t$(o)")
     push!(rows, "Home\t$(homedir())")
     push!(rows, "Working dir\t$(pwd())")
     forced = get(ENV, "ROTIRGUI_DATA_DIR", "")

@@ -832,10 +832,52 @@ end
 "The last orbit fit, as `name\tvalue\terror` rows."
 shell_orbit_result() = _sh().lastorbit
 
+"""
+    orbit_dir() -> String
+
+The folder orbits are loaded from and saved to, created on first use.
+
+Per USER rather than per project, beside the appearance settings and for the same reason: an
+orbit is a description of a SYSTEM, not of a dataset, and the β Lyr elements are the same ones
+whichever night's data is open. It also has to be writable, which a package directory under a
+system-wide depot is not.
+
+Seeded, the first time it is created, with the orbits that ship in `demos/orbits` — so the
+picker opens on something rather than on an empty folder. Only on creation: a file deleted
+from here stays deleted.
+"""
+function orbit_dir()
+    base = Sys.iswindows() ? get(ENV, "APPDATA", homedir()) :
+           get(ENV, "XDG_CONFIG_HOME", joinpath(homedir(), ".config"))
+    dir = joinpath(base, "rotir", "orbits")
+    isdir(dir) && return dir
+    try
+        mkpath(dir)
+        shipped = joinpath(pkgdir(ROTIR), "demos", "orbits")
+        if isdir(shipped)
+            for f in readdir(shipped)
+                endswith(f, ".toml") || continue
+                cp(joinpath(shipped, f), joinpath(dir, f); force = false)
+            end
+        end
+    catch err
+        # A read-only home is not a reason to fail to open a picker.
+        @warn "could not create the orbit folder" dir exception = err
+        return pwd()
+    end
+    return dir
+end
+
+"Put a bare filename in [`orbit_dir`](@ref); leave anything with a directory alone."
+_in_orbit_dir(p::AbstractString) = isempty(dirname(p)) ? joinpath(orbit_dir(), p) : p
+
 function shell_save_orbit(path)
     sh = _sh()
     p = String(path); startswith(p, "file://") && (p = p[8:end])
     isempty(splitext(p)[2]) && (p *= ".toml")
+    # A bare name from the Save button lands in the orbit folder rather than in whatever
+    # directory Julia happens to have been started from.
+    p = _in_orbit_dir(p)
     try
         p = unique_path(p)
         save_orbit(sh.orbit, p)

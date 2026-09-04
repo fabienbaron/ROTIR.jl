@@ -200,26 +200,35 @@ Pane {
 
             Label { text: "Epochs"; font.bold: true; font.pointSize: root.fontPt }
 
-            // A header row of its own rather than a real table header: this is five fixed
+            // A header row of its own rather than a real table header: this is six fixed
             // columns, and a TableView with a HorizontalHeaderView costs far more QML than it
             // buys at that size.
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: dp(6)
-                Label { text: "#";     Layout.preferredWidth: dp(24); font.pointSize: root.fontPt - 1; color: "#7f8c98" }
-                Label { text: "MJD";   Layout.fillWidth: true;        font.pointSize: root.fontPt - 1; color: "#7f8c98" }
-                Label { text: "t (d)"; Layout.preferredWidth: dp(52); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
-                Label { text: "V²";    Layout.preferredWidth: dp(54); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
-                Label { text: "T3amp"; Layout.preferredWidth: dp(54); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
-                Label { text: "T3phi"; Layout.preferredWidth: dp(54); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
-            }
-
+            //
+            // INSIDE the Frame, and above the ListView, because that is the only way it takes
+            // the same inset the rows take. Outside it, the header started at the panel edge
+            // while every row started at the Frame's padding plus the ItemDelegate's — a
+            // couple of dozen pixels of style-dependent offset that no width in this file
+            // could have compensated for, since neither number is fixed here.
             Frame {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: dp(2)
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: dp(6)
+                        Label { text: "#";     Layout.preferredWidth: dp(24); font.pointSize: root.fontPt - 1; color: "#7f8c98" }
+                        Label { text: "MJD";   Layout.fillWidth: true;        font.pointSize: root.fontPt - 1; color: "#7f8c98" }
+                        Label { text: "t (d)"; Layout.preferredWidth: dp(52); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
+                        Label { text: "V²";    Layout.preferredWidth: dp(54); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
+                        Label { text: "T3amp"; Layout.preferredWidth: dp(54); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
+                        Label { text: "T3phi"; Layout.preferredWidth: dp(54); font.pointSize: root.fontPt - 1; color: "#7f8c98"; horizontalAlignment: Text.AlignRight }
+                    }
                 ListView {
                     id: epochList
-                    anchors.fill: parent
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                     clip: true
                     model: epochModel
                     ScrollBar.vertical: ScrollBar {}
@@ -236,6 +245,10 @@ Pane {
                     }
                     delegate: ItemDelegate {
                         width: epochList.width
+                        // Zero horizontal padding: the header above has none either, and the
+                        // default inset is what put the columns out of line with it.
+                        leftPadding: 0
+                        rightPadding: 0
                         highlighted: ListView.isCurrentItem
                         onClicked: epochList.currentIndex = index
                         contentItem: RowLayout {
@@ -262,6 +275,7 @@ Pane {
                             }
                         }
                     }
+                }
                 }
             }
 

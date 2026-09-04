@@ -247,10 +247,17 @@ SHOT 11_imaging_tab
 # regulariser list, so every row here is ~50px lower than it was before it existed.
 # Re-read after the kernel selector was added below the mesh row, which pushed everything
 # under it down by one row.
-CL "$(FX 23)" "$(FY 226)" 1           # tick sobel2
-CL "$(FX 23)" "$(FY 414)" 1           # tick radflat  (Monnier's)
+#
+# RE-READ AGAIN off 12_regularisers.png (1360x920) after the settings gear was enlarged to
+# match the OITOOLS one: a dp(38) button is taller than the context bar used to be, so the
+# whole window below it moved down about 20px. That is a third of a row here, which was
+# enough to tick `sobel` instead of `sobel2` and `bias` instead of `radflat`, and to miss
+# Reconstruct entirely — the two failures that caught it. The rows are 30px apart, so these
+# are aimed at row centres rather than at edges.
+CL "$(FX 23)" "$(FY 247)" 1           # tick sobel2
+CL "$(FX 23)" "$(FY 442)" 1           # tick radflat  (Monnier's)
 SHOT 12_regularisers
-CL "$(FX 38)" "$(FY 677)" 30          # Reconstruct, then let it run
+CL "$(FX 38)" "$(FY 699)" 30          # Reconstruct, then let it run
 SHOT 13_reconstructed
 
 # ── the settings panel: one more popup, one more GL surface ──────────────────

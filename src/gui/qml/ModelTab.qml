@@ -182,8 +182,16 @@ Pane {
                 }
                 Button {
                     text: "+ model"
+                    // Only while there is nothing to replace. A model REPLACES rather than
+                    // appends — there is exactly one, so that nothing but the visible model
+                    // can decide what the χ² column is about — and a button that silently
+                    // discards the model you have been editing is not one to leave live.
+                    // Clearing it with "− model" is the way to change surface type.
+                    enabled: modelListModel.count === 0
                     font.pointSize: root.fontPt
-                    ToolTip.text: "replace the current model with a new one of this type"
+                    ToolTip.text: modelListModel.count === 0
+                        ? "build a model of this type"
+                        : "there is already a model — clear it with − model first"
                     ToolTip.visible: hovered
                     onClicked: {
                         if (typeBox.currentIndex < 0) return
