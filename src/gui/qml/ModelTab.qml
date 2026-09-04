@@ -65,6 +65,8 @@ Pane {
     // The last fit's parameters: name, value, and the uncertainty when the method produced
     // one. Filled from `shell_last_fit`, which returns one `name⇥value⇥error` line each.
     ListModel { id: resultModel }
+    ListModel { id: posModel }
+
     property bool isBinary: false
     ListModel { id: modelListModel }
     ListModel { id: typeModel }
@@ -160,6 +162,21 @@ Pane {
                                      pinert: g.length > 12 && g[12] === "1" })
             }
         }
+        var prows = root.isBinary ? Julia.shell_position_params() : ""
+        posModel.clear()
+        if (prows.length > 0) {
+            var pls = prows.split("\n")
+            for (var q = 0; q < pls.length; ++q) {
+                var e = pls[q].split("\t")
+                if (e.length < 12) continue
+                posModel.append({ pname: e[0], plabel: e[1], punit: e[2], pvalue: e[3],
+                                  pstate: e[4], plo: e[5], phi: e[6], ptie: e[7],
+                                  pgroup: e[8], pkind: e[9], pchoices: e[10], pdoc: e[11],
+                                  pinert: e.length > 12 && e[12] === "1", pcomp: 3 })
+            }
+        }
+        var pl = Julia.shell_binary_placement()
+        if (pl.length > 0) placeBox.currentIndex = pl.split("\t")[0] === "offset" ? 1 : 0
         warnLabel.text = Julia.shell_validate_model()
         var res = Julia.shell_last_fit()
         resultModel.clear()
@@ -174,6 +191,201 @@ Pane {
         }
         var ep = Julia.shell_epochs()
         root.epochCount = ep.length > 0 ? ep.split("\n").length : 0
+    }
+
+
+    // WHICH COMPONENT a row belongs to, resolved once here rather than in the delegate.
+    // `comp` is 1 for the primary, 2 for the secondary and 3 for the position parameters; the
+    // delegate reads it off its own ListView, so one row definition serves all three tables
+    // and a control added to it appears in every one.
+    function setParam(comp, n, v) {
+        return comp === 3 ? Julia.shell_set_position_param(n, v)
+             : comp === 2 ? Julia.shell_set_param2(n, v)
+                          : Julia.shell_set_param(n, v)
+    }
+    function setState(comp, n, s) {
+        return comp === 3 ? Julia.shell_set_position_state(n, s)
+             : comp === 2 ? Julia.shell_set_param_state2(n, s)
+                          : Julia.shell_set_param_state(n, s)
+    }
+    function setBound(comp, n, lo, hi) {
+        return comp === 3 ? Julia.shell_set_position_bound(n, lo, hi)
+             : comp === 2 ? Julia.shell_set_bound2(n, lo, hi)
+                          : Julia.shell_set_bound(n, lo, hi)
+    }
+    function setTie(comp, n, e) {
+        return comp === 2 || comp === 3 ? Julia.shell_set_tie2(n, e) : Julia.shell_set_tie(n, e)
+    }
+
+    // The secondary's placement, pushed to Julia which owns it. Only the MODE is set here:
+    // the offsets themselves are parameters in the positions table, with their own states and
+    // bounds, so they travel the same path as every other parameter.
+    function applyPlacement() {
+        root.statusChanged(Julia.shell_set_binary_placement(
+            placeBox.currentIndex === 1 ? "offset" : "orbit"))
+        root.refresh(); root.redraw()
+    }
+
+    // ONE row definition for all three parameter tables — primary, secondary and
+    // positions. Which one it is drawing comes from its ListView's `comp`, so the three
+    // forms cannot drift apart and a control added here appears in all of them.
+    Component {
+        id: paramRow
+        RowLayout {
+                        width: ListView.view.width
+                        spacing: dp(4)
+
+                        Label {
+                            Layout.preferredWidth: dp(118)
+                            text: plabel + (punit.length > 0 ? " (" + punit + ")" : "")
+                            elide: Text.ElideRight
+                            font.pointSize: root.fontPt
+                            // Greyed rather than hidden: hiding them would make the form jump
+                            // by up to three rows every time the law is changed, and the point
+                            // is to SHOW which coefficients this law uses.
+                            opacity: pinert ? 0.45 : 1
+                            ToolTip.text: pinert ? "not used by the current LD law" : pdoc
+                            ToolTip.visible: ma.containsMouse
+                            MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true }
+                        }
+
+                        // A choice field (`ldtype`) renders as a combo, everything else as a
+                        // number. The schema says which; QML does not decide.
+                        Loader {
+                            Layout.preferredWidth: dp(120)
+                            sourceComponent: pkind === "choice" ? choiceField : numberField
+                        }
+
+                        Component {
+                            id: numberField
+                            TextField {
+                                text: pvalue
+                                font.pointSize: root.fontPt
+                                selectByMouse: true
+                                enabled: pstate !== "tied" && !pinert
+                                // Show the START of the value, not the end. A TextField keeps
+                                // its cursor at the end of newly assigned text, so anything
+                                // wider than the box scrolled and displayed only the last
+                                // digits — a radius read as "...518514104". Values are
+                                // formatted short now, but a JD or an exponent can still
+                                // overflow, and the leading digits are the ones that matter.
+                                onTextChanged: if (!activeFocus) cursorPosition = 0
+                                onEditingFinished: {
+                                    var msg = root.setParam(pcomp, pname, text)
+                                    if (msg.length > 0) root.statusChanged(msg)
+                                    root.refresh(); root.redraw()
+                                }
+                            }
+                        }
+                        Component {
+                            id: choiceField
+                            ComboBox {
+                                model: pchoices.length > 0 ? pchoices.split("|") : []
+                                font.pointSize: root.fontPt
+                                currentIndex: {
+                                    var opts = pchoices.split("|")
+                                    for (var i = 0; i < opts.length; ++i)
+                                        if (opts[i].split("=")[0] === String(Math.round(parseFloat(pvalue))))
+                                            return i
+                                    return -1
+                                }
+                                displayText: currentIndex >= 0
+                                    ? model[currentIndex].split("=").slice(1).join("=") : ""
+                                delegate: ItemDelegate {
+                                    width: parent.width
+                                    text: modelData.split("=").slice(1).join("=")
+                                    font.pointSize: root.fontPt
+                                }
+                                onActivated: {
+                                    root.setParam(pcomp, pname, model[currentIndex].split("=")[0])
+                                    root.refresh(); root.redraw()
+                                }
+                            }
+                        }
+
+                        // free / fixed / tied — but NOT on a discrete field. `ldtype`
+                        // picks which limb-darkening law is applied, and there is no sense in
+                        // which an optimiser could walk 1→2→3→4: it would sample fractional
+                        // laws that do not exist. Nothing follows it on that row, so hiding it
+                        // costs no alignment. `shell_set_param_state` refuses it as well.
+                        ComboBox {
+                            visible: pkind !== "choice"
+                            // A coefficient the law does not read cannot be freed: it would be
+                            // a direction the χ² is flat along. Julia refuses it too.
+                            enabled: !pinert
+                            Layout.preferredWidth: visible ? dp(74) : 0
+                            model: ["fixed", "free", "tied"]
+                            font.pointSize: root.fontPt - 1
+                            currentIndex: pstate === "free" ? 1 : pstate === "tied" ? 2 : 0
+                            onActivated: {
+                                var msg = root.setState(pcomp, pname, model[currentIndex])
+                                if (msg.length > 0) root.statusChanged(msg)
+                                root.refresh()
+                            }
+                        }
+
+                        // The tie expression, shown only when the parameter is TIED, and the
+                        // bounds, shown only when it is FREE. Hidden rather than disabled: a
+                        // greyed-out box on every row triples the width of a form that is
+                        // already twenty rows long, and only one of the three states ever
+                        // needs an extra control.
+                        TextField {
+                            Layout.fillWidth: true
+                            visible: pstate === "tied"
+                            text: ptie
+                            placeholderText: "expression, e.g. P or 180 - i"
+                            font.pointSize: root.fontPt - 1
+                            selectByMouse: true
+                            onEditingFinished: {
+                                root.statusChanged(root.setTie(pcomp, pname, text))
+                                root.refresh(); root.redraw()
+                            }
+                        }
+                        TextField {
+                            id: loField
+                            visible: pstate === "free"
+                            Layout.preferredWidth: dp(58)
+                            text: plo
+                            font.pointSize: root.fontPt - 2
+                            selectByMouse: true
+                            ToolTip.text: "lower bound"
+                            ToolTip.visible: hovered
+                            onEditingFinished:
+                                root.statusChanged(root.setBound(pcomp, pname, text, hiField.text))
+                        }
+                        TextField {
+                            id: hiField
+                            visible: pstate === "free"
+                            Layout.preferredWidth: dp(58)
+                            text: phi
+                            font.pointSize: root.fontPt - 2
+                            selectByMouse: true
+                            ToolTip.text: "upper bound"
+                            ToolTip.visible: hovered
+                            onEditingFinished:
+                                root.statusChanged(root.setBound(pcomp, pname, loField.text, text))
+                        }
+                        // An AT-BOUND indicator: a free parameter sitting on its bound is not
+                        // a fit result, it is a fit that was stopped, and the number alone
+                        // gives no sign of that.
+                        Label {
+                            visible: pstate === "free" &&
+                                     (Math.abs(parseFloat(pvalue) - parseFloat(plo)) <
+                                      1e-6 * Math.max(1, Math.abs(parseFloat(plo))) ||
+                                      Math.abs(parseFloat(pvalue) - parseFloat(phi)) <
+                                      1e-6 * Math.max(1, Math.abs(parseFloat(phi))))
+                            text: "⚠"
+                            color: "#c0392b"
+                            font.pointSize: root.fontPt
+                            ToolTip.text: "at a bound — widen it or the fit is being held here"
+                            // A HoverHandler, not `hovered`: that property belongs to Control,
+                            // and a plain Label referencing it raises a ReferenceError on
+                            // every re-evaluation of the binding.
+                            ToolTip.visible: boundHover.hovered
+                            HoverHandler { id: boundHover }
+                        }
+                        Item { Layout.fillWidth: true; visible: pstate !== "tied" }
+                    }
     }
 
     RowLayout {
@@ -244,7 +456,11 @@ Pane {
                 // not independent: one orbit, one frame, one χ² over the pair.
                 CheckBox {
                     id: binaryBox
-                    text: "binary"
+                    // "companion", not "binary": the DROPDOWN builds a binary from scratch,
+                    // and this adds or removes a second component on the model already there —
+                    // which is how a single star that has been set up becomes a binary without
+                    // losing its parameters.
+                    text: "secondary"
                     enabled: modelListModel.count > 0
                     checked: root.isBinary
                     font.pointSize: root.fontPt
@@ -356,6 +572,13 @@ Pane {
                 }
             }
 
+            Label {
+                visible: root.isBinary
+                text: "Primary"
+                font.bold: true
+                font.pointSize: root.fontPt
+                color: "#7f8c98"
+            }
             Frame {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -378,175 +601,19 @@ Pane {
                         color: "#7f8c98"
                         topPadding: dp(6)
                     }
-                    delegate: RowLayout {
-                        width: paramList.width
-                        spacing: dp(4)
-
-                        Label {
-                            Layout.preferredWidth: dp(118)
-                            text: plabel + (punit.length > 0 ? " (" + punit + ")" : "")
-                            elide: Text.ElideRight
-                            font.pointSize: root.fontPt
-                            // Greyed rather than hidden: hiding them would make the form jump
-                            // by up to three rows every time the law is changed, and the point
-                            // is to SHOW which coefficients this law uses.
-                            opacity: pinert ? 0.45 : 1
-                            ToolTip.text: pinert ? "not used by the current LD law" : pdoc
-                            ToolTip.visible: ma.containsMouse
-                            MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true }
-                        }
-
-                        // A choice field (`ldtype`) renders as a combo, everything else as a
-                        // number. The schema says which; QML does not decide.
-                        Loader {
-                            Layout.preferredWidth: dp(120)
-                            sourceComponent: pkind === "choice" ? choiceField : numberField
-                        }
-
-                        Component {
-                            id: numberField
-                            TextField {
-                                text: pvalue
-                                font.pointSize: root.fontPt
-                                selectByMouse: true
-                                enabled: pstate !== "tied" && !pinert
-                                // Show the START of the value, not the end. A TextField keeps
-                                // its cursor at the end of newly assigned text, so anything
-                                // wider than the box scrolled and displayed only the last
-                                // digits — a radius read as "...518514104". Values are
-                                // formatted short now, but a JD or an exponent can still
-                                // overflow, and the leading digits are the ones that matter.
-                                onTextChanged: if (!activeFocus) cursorPosition = 0
-                                onEditingFinished: {
-                                    var msg = Julia.shell_set_param(pname, text)
-                                    if (msg.length > 0) root.statusChanged(msg)
-                                    root.refresh(); root.redraw()
-                                }
-                            }
-                        }
-                        Component {
-                            id: choiceField
-                            ComboBox {
-                                model: pchoices.length > 0 ? pchoices.split("|") : []
-                                font.pointSize: root.fontPt
-                                currentIndex: {
-                                    var opts = pchoices.split("|")
-                                    for (var i = 0; i < opts.length; ++i)
-                                        if (opts[i].split("=")[0] === String(Math.round(parseFloat(pvalue))))
-                                            return i
-                                    return -1
-                                }
-                                displayText: currentIndex >= 0
-                                    ? model[currentIndex].split("=").slice(1).join("=") : ""
-                                delegate: ItemDelegate {
-                                    width: parent.width
-                                    text: modelData.split("=").slice(1).join("=")
-                                    font.pointSize: root.fontPt
-                                }
-                                onActivated: {
-                                    Julia.shell_set_param(pname, model[currentIndex].split("=")[0])
-                                    root.refresh(); root.redraw()
-                                }
-                            }
-                        }
-
-                        // free / fixed / tied — but NOT on a discrete field. `ldtype`
-                        // picks which limb-darkening law is applied, and there is no sense in
-                        // which an optimiser could walk 1→2→3→4: it would sample fractional
-                        // laws that do not exist. Nothing follows it on that row, so hiding it
-                        // costs no alignment. `shell_set_param_state` refuses it as well.
-                        ComboBox {
-                            visible: pkind !== "choice"
-                            // A coefficient the law does not read cannot be freed: it would be
-                            // a direction the χ² is flat along. Julia refuses it too.
-                            enabled: !pinert
-                            Layout.preferredWidth: visible ? dp(74) : 0
-                            model: ["fixed", "free", "tied"]
-                            font.pointSize: root.fontPt - 1
-                            currentIndex: pstate === "free" ? 1 : pstate === "tied" ? 2 : 0
-                            onActivated: {
-                                var msg = Julia.shell_set_param_state(pname, model[currentIndex])
-                                if (msg.length > 0) root.statusChanged(msg)
-                                root.refresh()
-                            }
-                        }
-
-                        // The tie expression, shown only when the parameter is TIED, and the
-                        // bounds, shown only when it is FREE. Hidden rather than disabled: a
-                        // greyed-out box on every row triples the width of a form that is
-                        // already twenty rows long, and only one of the three states ever
-                        // needs an extra control.
-                        TextField {
-                            Layout.fillWidth: true
-                            visible: pstate === "tied"
-                            text: ptie
-                            placeholderText: "expression, e.g. P or 180 - i"
-                            font.pointSize: root.fontPt - 1
-                            selectByMouse: true
-                            onEditingFinished: {
-                                root.statusChanged(Julia.shell_set_tie(pname, text))
-                                root.refresh(); root.redraw()
-                            }
-                        }
-                        TextField {
-                            id: loField
-                            visible: pstate === "free"
-                            Layout.preferredWidth: dp(58)
-                            text: plo
-                            font.pointSize: root.fontPt - 2
-                            selectByMouse: true
-                            ToolTip.text: "lower bound"
-                            ToolTip.visible: hovered
-                            onEditingFinished:
-                                root.statusChanged(Julia.shell_set_bound(pname, text, hiField.text))
-                        }
-                        TextField {
-                            id: hiField
-                            visible: pstate === "free"
-                            Layout.preferredWidth: dp(58)
-                            text: phi
-                            font.pointSize: root.fontPt - 2
-                            selectByMouse: true
-                            ToolTip.text: "upper bound"
-                            ToolTip.visible: hovered
-                            onEditingFinished:
-                                root.statusChanged(Julia.shell_set_bound(pname, loField.text, text))
-                        }
-                        // An AT-BOUND indicator: a free parameter sitting on its bound is not
-                        // a fit result, it is a fit that was stopped, and the number alone
-                        // gives no sign of that.
-                        Label {
-                            visible: pstate === "free" &&
-                                     (Math.abs(parseFloat(pvalue) - parseFloat(plo)) <
-                                      1e-6 * Math.max(1, Math.abs(parseFloat(plo))) ||
-                                      Math.abs(parseFloat(pvalue) - parseFloat(phi)) <
-                                      1e-6 * Math.max(1, Math.abs(parseFloat(phi))))
-                            text: "⚠"
-                            color: "#c0392b"
-                            font.pointSize: root.fontPt
-                            ToolTip.text: "at a bound — widen it or the fit is being held here"
-                            // A HoverHandler, not `hovered`: that property belongs to Control,
-                            // and a plain Label referencing it raises a ReferenceError on
-                            // every re-evaluation of the binding.
-                            ToolTip.visible: boundHover.hovered
-                            HoverHandler { id: boundHover }
-                        }
-                        Item { Layout.fillWidth: true; visible: pstate !== "tied" }
-                    }
+                    delegate: paramRow
                 }
             }
 
-            // ── the companion, for a binary ──────────────────────────────────
+            // ── the secondary ───────────────────────────────────────────────
             //
-            // VALUES ONLY, deliberately. The primary's form offers free/fixed/tied and bounds
-            // because an optimiser can move those; nothing fits a binary yet — `fit_orbit`
-            // refuses a tessellated one and the Model tab's fit snapshot drops the companion —
-            // so the same controls here would be three widgets per row that do nothing. When
-            // a binary fit exists they belong here, driven by the same `_params_table` rows
-            // this already reads.
+            // The SAME form as the primary, from the same `paramRow`. A secondary is a
+            // component in its own right — its own surface type, its own free set, its own
+            // bounds — not a set of numbers hanging off the primary, and a reduced form here
+            // would have said otherwise.
             Label {
                 visible: root.isBinary
-                text: "Companion"
+                text: "Secondary"
                 font.bold: true
                 font.pointSize: root.fontPt
                 color: "#7f8c98"
@@ -554,55 +621,82 @@ Pane {
             Frame {
                 visible: root.isBinary
                 Layout.fillWidth: true
-                Layout.preferredHeight: dp(150)
+                Layout.preferredHeight: dp(170)
+                ListView {
+                    id: param2List
+                    anchors.fill: parent
+                    clip: true
+                    model: param2Model
+                    section.property: "pgroup"
+                    section.delegate: Label {
+                        width: param2List.width
+                        text: section
+                        font.bold: true
+                        font.pointSize: root.fontPt - 1
+                        color: "#7f8c98"
+                        topPadding: dp(6)
+                    }
+                    ScrollBar.vertical: ScrollBar {}
+                    delegate: paramRow
+                }
+            }
+
+            // ── positions ───────────────────────────────────────────────────
+            //
+            // A frame of its own, because WHERE a component is and WHAT it is made of are
+            // different questions — the same separation the Orbit tab is laid out around.
+            // The primary defines the origin; only the secondary has a position to give.
+            Label {
+                visible: root.isBinary
+                text: "Positions"
+                font.bold: true
+                font.pointSize: root.fontPt
+                color: "#7f8c98"
+            }
+            Frame {
+                visible: root.isBinary
+                Layout.fillWidth: true
+                Layout.preferredHeight: dp(118)
                 ColumnLayout {
                     anchors.fill: parent
                     spacing: dp(2)
-                    Label {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: "shares the orbit defined on the Orbit tab"
-                        color: "#7f8c98"
-                        font.pointSize: root.fontPt - 2
+                        spacing: dp(6)
+                        Label { text: "secondary by"; color: "#7f8c98"
+                                font.pointSize: root.fontPt - 1 }
+                        ComboBox {
+                            id: placeBox
+                            Layout.preferredWidth: dp(150)
+                            model: ["the orbit", "offset"]
+                            font.pointSize: root.fontPt - 1
+                            ToolTip.text: "the orbit gives a different separation at every " +
+                                          "epoch and needs elements the data can constrain; " +
+                                          "a fixed offset is one displacement throughout, " +
+                                          "which is what a snapshot supports"
+                            ToolTip.visible: hovered
+                            onActivated: root.applyPlacement()
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "primary at (0, 0, 0) — the origin"
+                            color: "#aab4bd"
+                            elide: Text.ElideRight
+                            font.pointSize: root.fontPt - 1
+                            ToolTip.text: "fixed: an interferometer measures the separation " +
+                                          "between the components, not where the pair sits"
+                            ToolTip.visible: ph.hovered
+                            HoverHandler { id: ph }
+                        }
                     }
                     ListView {
-                        id: param2List
+                        id: posList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
-                        model: param2Model
+                        model: posModel
                         ScrollBar.vertical: ScrollBar {}
-                        delegate: ItemDelegate {
-                            width: param2List.width
-                            leftPadding: 0
-                            rightPadding: 0
-                            contentItem: RowLayout {
-                                spacing: dp(4)
-                                Label {
-                                    Layout.preferredWidth: dp(118)
-                                    text: plabel + (punit.length > 0 ? " (" + punit + ")" : "")
-                                    elide: Text.ElideRight
-                                    font.pointSize: root.fontPt
-                                    ToolTip.text: pdoc
-                                    ToolTip.visible: cma.containsMouse && pdoc.length > 0
-                                    MouseArea { id: cma; anchors.fill: parent
-                                                hoverEnabled: true }
-                                }
-                                TextField {
-                                    Layout.preferredWidth: dp(120)
-                                    text: pvalue
-                                    enabled: !pinert
-                                    font.pointSize: root.fontPt
-                                    selectByMouse: true
-                                    onTextChanged: if (!activeFocus) cursorPosition = 0
-                                    onEditingFinished: {
-                                        var msg = Julia.shell_set_param2(pname, text)
-                                        if (msg.length > 0) root.statusChanged(msg)
-                                        root.refresh(); root.redraw()
-                                    }
-                                }
-                                Item { Layout.fillWidth: true }
-                            }
-                        }
+                        delegate: paramRow
                     }
                 }
             }

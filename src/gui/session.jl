@@ -70,6 +70,22 @@ mutable struct ModelEntry
     # `Any` rather than `Union{Nothing,ModelEntry}`: the struct cannot name itself in its own
     # definition. Everything that reads it checks for `nothing` first.
     companion::Any
+    # WHERE this component sits, when it is a companion. Meaningless on a primary, which is
+    # always at the origin.
+    #
+    #   `:orbit`  — the Orbit tab's elements place it, per epoch. Right when the data span
+    #               enough of the orbit to constrain one.
+    #   `:offset` — a fixed (West, North, toward-observer) displacement in mas, the same at
+    #               every epoch. Right for a SNAPSHOT: iota Peg on four telescopes is one
+    #               bracket of data, where an orbit is seven parameters constrained by a
+    #               separation and a position angle. Two spheres and an (x, y) is the whole
+    #               model that data supports.
+    #
+    # `z` is not an interferometric observable — the phase shift depends only on the sky
+    # projection — but it decides which component is in front, so it matters to the 3-D view
+    # and to occultation.
+    place::Symbol
+    offset::NTuple{3,Float64}
 end
 
 """
@@ -298,7 +314,7 @@ function add_model!(session::Session, surface_type;
         ps.name => (ps.lo, ps.hi) for ps in surface_params(spec.code))
     nm = isempty(name) ? "$(spec.name)_$(length(session.models) + 1)" : String(name)
     m = ModelEntry(nm, spec.code, params, Set{Symbol}(), bounds, Dict{Symbol,String}(),
-                   secondary, nothing)
+                   secondary, nothing, :orbit, (0.0, 0.0, 0.0))
     push!(session.models, m)
     session.current_model = length(session.models)
     return m

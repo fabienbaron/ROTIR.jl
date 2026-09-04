@@ -756,18 +756,37 @@ end
 Both components at their full 3-D separation, plus the relative orbit track.
 """
 function show_binary3d!(c::StarCanvas, star1, v1, star2, v2, bparams, tepoch;
-                        colorrange = nothing)
+                       colorrange = nothing)
+    x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, tepoch)
+    return show_binary3d!(c, star1, v1, star2, v2,
+                          (-(y2 - y1), x2 - x1, -(z2 - z1));   # (West, North, toward observer)
+                          colorrange = colorrange,
+                          track = relative_orbit_track(bparams))
+end
+
+"""
+    show_binary3d!(canvas, star1, v1, star2, v2, offset; colorrange, track) -> canvas
+
+Both components at an explicit `(West, North, toward-observer)` separation in mas.
+
+The method above computes that separation from orbital elements; this one is handed it. The
+Model tab needs both, because a binary there is placed EITHER by the Orbit tab's elements or by
+a fixed offset — and for a snapshot the offset is the whole model, with no orbit to derive
+anything from. `track` is the relative orbit to draw, and empty when there is no orbit: a
+closed ellipse through a pair placed by hand would be a claim the data do not make.
+"""
+function show_binary3d!(c::StarCanvas, star1, v1, star2, v2, offset::NTuple{3,<:Real};
+                        colorrange = nothing, track = Makie.Point3f[])
     busy!(c)
     lo = colorrange === nothing ? min(minimum(v1), minimum(v2)) : colorrange[1]
     hi = colorrange === nothing ? max(maximum(v1), maximum(v2)) : colorrange[2]
     hi - lo < 1 && (hi = lo + max(abs(hi) * 0.01, 1.0))
-    x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, tepoch)
-    off = (-(y2 - y1), x2 - x1, -(z2 - z1))       # (West, North, toward observer)
+    off = (Float64(offset[1]), Float64(offset[2]), Float64(offset[3]))
     m1, c1 = star_mesh(star1; values = v1)
     m2, c2 = star_mesh(star2; offset = off, values = v2)
     c.mesh[]    = m1; c.colors[]  = map_colors(c1, c.colormap[], (lo, hi))
     c.mesh2[]   = m2; c.colors2[] = map_colors(c2, c.colormap[], (lo, hi))
-    c.orbit[]   = relative_orbit_track(bparams)
+    c.orbit[]   = track
     c.cbarlimits[] = (Float32(lo), Float32(hi))
     sep = sqrt(off[1]^2 + off[2]^2 + off[3]^2)
     _recenter_cam!(c, max(sep, _body_radius(star1) + _body_radius(star2)))

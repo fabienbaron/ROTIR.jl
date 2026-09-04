@@ -381,11 +381,24 @@ end
     shell_surface_types() -> String
 
 `code\tname\tlabel\tdoc` for every implemented surface type, from the schema — so the selector
-cannot offer a type `compute_radii` does not branch on.
+cannot offer a type `compute_radii` does not branch on — plus BINARY.
+
+Binary is not a surface type and has no schema entry: it is two components, each with a surface
+type of its own. It belongs in this list all the same, because this list answers "what am I
+building" and a binary is one of the answers. `BINARY_CODE` is negative so it cannot collide
+with a real `surface_type`, and `shell_add_model` recognises it.
 """
-shell_surface_types() = join(("$(c)\t$(SURFACE_TYPES[c].name)\t$(SURFACE_TYPES[c].label)\t" *
-                              replace(SURFACE_TYPES[c].doc, "\n" => " ")
-                              for c in SURFACE_TYPE_ORDER), "\n")
+const BINARY_CODE = -1
+
+shell_surface_types() =
+    join(vcat(["$(c)\t$(SURFACE_TYPES[c].name)\t$(SURFACE_TYPES[c].label)\t" *
+               replace(SURFACE_TYPES[c].doc, "\n" => " ")
+               for c in SURFACE_TYPE_ORDER],
+              ["$(BINARY_CODE)\tbinary\tBinary (two components)\t" *
+               "two Roche components sharing one orbit, which is taken from the Orbit tab. " *
+               "Each component keeps its own surface type, radius, temperature and limb " *
+               "darkening; change either with the selectors that appear. The χ² is that of " *
+               "the PAIR against the data"]), "\n")
 
 """
     shell_add_model(surface_type) -> String
@@ -400,7 +413,20 @@ function shell_add_model(surface_type)
     empty!(sh.session.models)
     sh.session.current_model = 0
     sh.chi2key[] = nothing
-    m = add_model!(sh.session, Int(surface_type))
+    st = Int(surface_type)
+    # BINARY: a Roche primary and a Roche companion. Roche because that surface type exists
+    # precisely for a star in a binary — its shape follows the instantaneous separation — and
+    # because a binary of two spheres is the case where the orbit is all that matters, which
+    # the Orbit tab already fits analytically and faster.
+    if st == BINARY_CODE
+        m = add_model!(sh.session, 3)
+        shell_set_binary("1", 3)
+        console!(sh, "model $(m.name): binary, two roche components")
+        sh.status = "model $(m.name) (binary)"
+        refresh_model_tab!(sh)
+        return sh.status
+    end
+    m = add_model!(sh.session, st)
     log!(sh.session, "$(m.name) = " * _namedtuple_literal(star_params(m));
          note = "model $(m.name)", binding = m.name)
     console!(sh, "model $(m.name): surface_type $(m.surface_type) at schema defaults")
@@ -511,6 +537,19 @@ function _params_table(m)
     return join(rows, "\n")
 end
 
+# Where a new secondary starts, in `(West, North, toward-observer)` mas.
+#
+# NOT the origin: two components at the same place are one picture of one star, the χ² of a
+# single object with twice the flux, and nothing on screen to say the second exists. A visible
+# separation is the state you can then move, and 10 mas is wide for a resolved binary — which
+# is the point, since it is easier to bring two stars together than to discover one hiding
+# inside the other.
+#
+# `:offset` rather than `:orbit` to begin with, for the same reason: it is self-contained. An
+# orbit needs elements set up on another tab before it places anything, and a binary that
+# draws nothing until you visit a second tab looks broken.
+const DEFAULT_COMPANION_OFFSET = (10.0, 10.0, 0.0)
+
 """
     shell_binary() -> String
 
@@ -552,7 +591,7 @@ function shell_set_binary(on, surface_type = 3)
                 Set{Symbol}(),
                 Dict{Symbol,Tuple{Float64,Float64}}(ps.name => (ps.lo, ps.hi)
                                                     for ps in surface_params(st)),
-                Dict{Symbol,String}(), true, nothing)
+                Dict{Symbol,String}(), true, nothing, :offset, DEFAULT_COMPANION_OFFSET)
             console!(sh, "binary: added a $(spec.name) companion")
         end
     else
@@ -567,6 +606,53 @@ end
 # The companion's form is the SAME table as the primary's, read from the companion instead —
 # so the QML that draws one row draws either, and a column added to one appears in both.
 _companion(sh) = (m = current_model(sh.session); m === nothing ? nothing : m.companion)
+
+"""
+    shell_binary_placement() -> String
+
+`mode\tx\ty\tz` — how the secondary is placed, and the offset if it is a fixed one.
+Empty when the model is not a binary.
+"""
+function shell_binary_placement()
+    c = _companion(_sh())
+    c === nothing && return ""
+    return join((c.place, _fmt_param(c.offset[1]), _fmt_param(c.offset[2]),
+                 _fmt_param(c.offset[3])), "\t")
+end
+
+"""
+    shell_set_binary_placement(mode, x, y, z) -> String
+
+Place the secondary by the ORBIT or at a fixed offset in mas.
+
+`:orbit` takes the elements from the Orbit tab and gives a different separation at every epoch.
+`:offset` is one displacement throughout — what a snapshot supports, where there is no orbital
+motion in the data to constrain elements with. The offset is `(West, North, toward-observer)`;
+`z` does not enter the interferometric phase, which sees only the sky projection, but it
+decides which component is in front for the 3-D view and for occultation.
+"""
+function shell_set_binary_placement(mode)
+    sh = _sh()
+    c = _companion(sh)
+    c === nothing && return "not a binary"
+    md = Symbol(String(mode))
+    md in (:orbit, :offset) || return "placement must be orbit or offset"
+    # THE MODE ONLY. The offset itself belongs to the position parameters and is written by
+    # `shell_set_position_param`; this used to take x, y and z as well, and since the panel
+    # stopped passing them once they became parameters, their defaults of "0" were silently
+    # overwriting the separation. Switching to the orbit and back therefore moved the secondary
+    # onto the primary, where a binary looks exactly like one star.
+    #
+    # Keeping it here is also wrong in principle: a placement is a choice between two sources,
+    # and switching away from one must not destroy the other's numbers — you have to be able to
+    # compare them.
+    c.place = md
+    sh.chi2key[] = nothing
+    refresh_both!(sh)
+    return md === :offset ?
+        Printf.@sprintf("secondary at (%.4g, %.4g) mas", c.offset[1], c.offset[2]) :
+        "secondary placed by the orbit"
+end
 
 """
     shell_params2() -> String
@@ -592,6 +678,114 @@ function shell_set_param2(name, value)
     refresh_both!(sh)
     return ""
 end
+
+"""
+    shell_set_param_state2(name, state) -> String
+    shell_set_bound2(name, lo, hi) -> String
+    shell_set_tie2(name, expr) -> String
+
+The companion's state, bounds and ties — [`shell_set_param_state`](@ref) and friends, on the
+secondary.
+
+The secondary is a component in its own right, not a set of numbers attached to the primary: it
+has its own surface type, its own free set and its own bounds, because the two stars of a
+binary are rarely the same kind of thing. So it gets the same four setters and the same form.
+"""
+function shell_set_param_state2(name, state)
+    sh = _sh(); c = _companion(sh)
+    c === nothing && return "not a binary"
+    return _set_state!(sh, c, Symbol(String(name)), String(state))
+end
+
+function shell_set_bound2(name, lo, hi)
+    c = _companion(_sh())
+    c === nothing && return "not a binary"
+    l = tryparse(Float64, String(lo)); h = tryparse(Float64, String(hi))
+    (l === nothing || h === nothing) && return "bounds must be numbers"
+    l < h || return "lower bound must be below upper"
+    c.bounds[Symbol(String(name))] = (l, h)
+    return ""
+end
+
+function shell_set_tie2(name, expr)
+    sh = _sh(); c = _companion(sh)
+    c === nothing && return "not a binary"
+    n = Symbol(String(name)); e = strip(String(expr))
+    isempty(e) ? delete!(c.ties, n) : (c.ties[n] = String(e))
+    sh.chi2key[] = nothing
+    refresh_both!(sh)
+    return ""
+end
+
+# ── the secondary's POSITION, as parameters rather than as three text fields ─────────────
+#
+# Free/fixed/tied and bounds, like every other parameter, because that is what they are: for a
+# snapshot binary the separation IS the model, and `x` and `y` are the two numbers a fit would
+# move. They are kept apart from the surface parameters — their own frame, their own table —
+# because they describe where a component is rather than what it is made of, and mixing the two
+# is the same frame confusion the Orbit tab is laid out to avoid.
+#
+# Stored on the companion under names that cannot collide with a schema field, so they share
+# `free`, `bounds` and `ties` with the surface parameters and need no second state machine.
+const POSITION_PARAMS = ((:pos_x, "x (W)", 1), (:pos_y, "y (N)", 2), (:pos_z, "z (obs)", 3))
+
+"""
+    shell_position_params() -> String
+
+The secondary's position, in the same 13 columns [`shell_params`](@ref) uses — so the form
+draws it with the same delegate, and a column added there appears here too.
+
+Empty when the model is not a binary. Rows are marked INERT when the orbit places the
+secondary, since then these numbers are not what decides where it is.
+"""
+function shell_position_params()
+    c = _companion(_sh())
+    c === nothing && return ""
+    inert = c.place !== :offset
+    rows = String[]
+    for (n, label, i) in POSITION_PARAMS
+        v = c.offset[i]
+        lo, hi = get(c.bounds, n, (-1e3, 1e3))
+        tie = get(c.ties, n, "")
+        state = !isempty(tie) ? "tied" : (inert ? "fixed" : (n in c.free ? "free" : "fixed"))
+        doc = n === :pos_z ?
+              "toward the observer. Not an interferometric observable — the phase sees only " *
+              "the sky projection — but it decides which component is in front" :
+              "offset from the primary, which is the origin"
+        push!(rows, join((n, label, "mas", _fmt_param(v), state, _fmt_param(lo),
+                          _fmt_param(hi), tie, "position", "number", "", doc,
+                          inert ? "1" : "0"), "\t"))
+    end
+    return join(rows, "\n")
+end
+
+"Set one position component, in mas."
+function shell_set_position_param(name, value)
+    sh = _sh(); c = _companion(sh)
+    c === nothing && return "not a binary"
+    v = tryparse(Float64, String(value))
+    v === nothing && return "not a number: $(value)"
+    n = Symbol(String(name))
+    i = findfirst(q -> q[1] === n, POSITION_PARAMS)
+    i === nothing && return "unknown position parameter $(name)"
+    o = collect(c.offset); o[POSITION_PARAMS[i][3]] = v
+    c.offset = (o[1], o[2], o[3])
+    sh.chi2key[] = nothing
+    refresh_both!(sh)
+    return ""
+end
+
+"Free, fix or tie one position component."
+function shell_set_position_state(name, state)
+    sh = _sh(); c = _companion(sh)
+    c === nothing && return "not a binary"
+    c.place === :offset ||
+        return "the orbit places the secondary; switch to a fixed offset to free these"
+    return _set_state!(sh, c, Symbol(String(name)), String(state))
+end
+
+"Bounds for one position component."
+shell_set_position_bound(name, lo, hi) = shell_set_bound2(name, lo, hi)
 
 """
     shell_companion_type(surface_type) -> String
@@ -658,7 +852,16 @@ function shell_set_param_state(name, state)
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
-    n = Symbol(String(name)); s = String(state)
+    return _set_state!(sh, m, Symbol(String(name)), String(state))
+end
+
+"""
+    _set_state!(sh, m, n, s) -> String
+
+Free, fix or tie one parameter of ONE component. Shared by the primary, the secondary and the
+position parameters, so all three obey the same refusals rather than three copies of them.
+"""
+function _set_state!(sh::ShellState, m, n::Symbol, s::AbstractString)
     # A DISCRETE field has no free/fixed/tied to make: `ldtype` selects which limb-darkening
     # law `compute_ldmap` applies, and an optimiser cannot walk 1→2→3→4 as a continuous
     # coordinate — every backend would sample fractional laws that do not exist. The panel
@@ -1073,10 +1276,14 @@ function build_epoch_star(sh::ShellState)
         star2 = create_star(tess, p2, t; secondary = true)
         tmap2 = parametric_temperature_map(p2, star2; secondary = true)
         off = try
-            d === nothing ? (0.0, 0.0) :
-                orbit_to_rotir_offset(orbit_bparams(sh.orbit; binary = m),
-                                      d.mjd[clamp(sh.session.current_epoch, 1,
-                                                  length(d.mjd))] + 2_400_000.5)
+            if c.place === :offset
+                (c.offset[1], c.offset[2])
+            elseif d === nothing
+                (0.0, 0.0)
+            else
+                i = clamp(sh.session.current_epoch, 1, length(d.mjd))
+                only(companion_offsets(sh, m, d.mjd[i:i]))
+            end
         catch
             (0.0, 0.0)
         end
@@ -1141,7 +1348,31 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
         show_binary_map!(sh.msky, star, visv, star2, v2, off;
                          star_params = star_params(m), _decor(sh)...)
     end
-    show_star3d!(sh.star, star, allv)
+    if bin2 === nothing
+        show_star3d!(sh.star, star, allv)
+    else
+        # BOTH components in 3-D too, at the same separation the sky view draws — the z term
+        # included, which the sky view drops. That is the whole reason to look at the pair in
+        # three dimensions: an eclipse reads as one star in front of the other only once the
+        # line-of-sight offset is there and the camera is tilted off the observer's axis.
+        star2, tmap2, off = bin2
+        allv2 = surface_values(sh, tmap2, star2; visible_only = false)
+        c = m.companion
+        zoff = c === nothing ? 0.0 : (c.place === :offset ? c.offset[3] : 0.0)
+        # The relative orbit track only when an orbit is what places them. Drawing a closed
+        # ellipse through a pair positioned by hand would be a claim the data do not make.
+        track = if c !== nothing && c.place === :orbit
+            try
+                relative_orbit_track(orbit_bparams(sh.orbit; binary = m))
+            catch
+                Makie.Point3f[]
+            end
+        else
+            Makie.Point3f[]
+        end
+        show_binary3d!(sh.star, star, allv, star2, allv2,
+                       (Float64(off[1]), Float64(off[2]), zoff); track = track)
+    end
     show_mollweide!(sh.moll, allv, star)
     return sh
 end
@@ -1185,6 +1416,31 @@ function refresh_data_tab!(sh::ShellState; got = build_epoch_star(sh))
 end
 
 """
+    companion_offsets(sh, m, mjd) -> Vector{Tuple{Float64,Float64}}
+
+Where the secondary sits, in `(West, North)` mas, at each of `mjd`.
+
+The two placements answer the same question with different amounts of model. `:orbit` asks the
+Orbit tab, which gives a different separation at every epoch and needs elements the data have
+to constrain. `:offset` is one displacement, the same throughout — the honest model for a
+snapshot, where there is no orbital motion to see and seven elements would be fitted to a
+separation and a position angle.
+
+Returned per epoch either way, so nothing downstream has to know which is in force.
+"""
+function companion_offsets(sh::ShellState, m, mjd::AbstractVector)
+    c = m.companion
+    c === nothing && return fill((0.0, 0.0), length(mjd))
+    if c.place === :offset
+        return fill((c.offset[1], c.offset[2]), length(mjd))
+    end
+    bp = orbit_bparams(sh.orbit; binary = m)
+    # The elements are in JD and datasets carry MJD; getting that wrong puts the companion in
+    # the wrong place with no error anywhere.
+    return [orbit_to_rotir_offset(bp, t + 2_400_000.5) for t in mjd]
+end
+
+"""
     _binary_model_state(sh, d, m, c, p, p2, key) -> NamedTuple or nothing
 
 The binary half of [`model_state`](@ref): both components, their separation at each epoch, and
@@ -1203,16 +1459,13 @@ second copy that can disagree with it.
 function _binary_model_state(sh::ShellState, d, m, c, p, p2, key)
     try
         tess = model_tessellation(sh)
-        bp   = orbit_bparams(sh.orbit; binary = m)
-        # The elements are in JD and the datasets carry MJD, which is the one unit slip that
-        # would put the companion in the wrong place with no error anywhere.
-        tjd = d.mjd .+ 2_400_000.5
+        offs = companion_offsets(sh, m, d.mjd)
         stars1 = create_star_multiepochs(tess, p,  d.tepochs; secondary = false)
         stars2 = create_star_multiepochs(tess, p2, d.tepochs; secondary = true)
         x1 = parametric_temperature_map(p,  stars1[1]; secondary = false)
         x2 = parametric_temperature_map(p2, stars2[1]; secondary = true)
         chi2 = map(eachindex(d.data)) do i
-            ox, oy = orbit_to_rotir_offset(bp, tjd[i])
+            ox, oy = offs[i]
             ph = binary_phase_shift(d.data[i].uv, ox, oy)
             v2m, t3am, t3pm = binary_observables(x1, stars1[i], x2, stars2[i], d.data[i], ph)
             dat = d.data[i]
@@ -1225,7 +1478,6 @@ function _binary_model_state(sh::ShellState, d, m, c, p, p2, key)
              v2r = cv2 / max(dat.nv2, 1), t3ampr = ca / max(dat.nt3amp, 1),
              t3phir = cp / max(dat.nt3phi, 1), totalr = (cv2 + ca + cp) / max(n, 1))
         end
-        offs = [orbit_to_rotir_offset(bp, tjd[i]) for i in eachindex(d.data)]
         out = (stars = stars1, x = x1, chi2 = chi2,
                stars2 = stars2, x2 = x2, offsets = offs)
         sh.chi2key[] = key; sh.chi2cache[] = out
@@ -1271,8 +1523,10 @@ function model_state(sh::ShellState)
     # The ORBIT is part of the key for a binary: the separation at each epoch comes from the
     # Orbit tab, so editing an element there changes this χ² and must invalidate the cache.
     key = (objectid(d), length(d.data), m.secondary, p, p2,
-           c === nothing ? nothing : apply_orbit_ties(sh.orbit),
-           c === nothing ? nothing : sh.orbit.q,
+           c === nothing ? nothing : c.place,
+           c === nothing ? nothing : c.offset,
+           c === nothing || c.place !== :orbit ? nothing : apply_orbit_ties(sh.orbit),
+           c === nothing || c.place !== :orbit ? nothing : sh.orbit.q,
            sh.nside_exp[], sh.precision[], sh.tessel[])
     sh.chi2key[] === key && return sh.chi2cache[]
     c === nothing || return _binary_model_state(sh, d, m, c, p, p2, key)
@@ -1979,7 +2233,7 @@ function shell_fit(method, maxeval)
     # The companion is deliberately NOT carried: this fit path moves one star's parameters,
     # and `fit_binary` does not exist yet. A binary's χ² is shown, not fitted.
     snap = ModelEntry(m.name, m.surface_type, copy(m.params), copy(m.free), copy(m.bounds),
-                      copy(m.ties), m.secondary, nothing)
+                      copy(m.ties), m.secondary, nothing, m.place, m.offset)
     data = d.data
     tepochs = copy(d.tepochs)
     nd = sum(dd.nv2 + dd.nt3amp + dd.nt3phi for dd in data)

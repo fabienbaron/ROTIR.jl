@@ -386,7 +386,7 @@ Popup {
                 enabled: root.selected.length > 0 || root.checked.length > 0
                 font.pointSize: root.fontPt - 1
                 ToolTip.text: "take the file whole instead of cutting it on gaps in its V² " +
-                              "timestamps — one night interrupted by cloud is still one epoch"
+                              "timestamps"
                 ToolTip.visible: hovered
                 onClicked: { root.accepted(root.chosen(), "single"); root.close() }
             }

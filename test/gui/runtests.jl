@@ -169,10 +169,42 @@ end
 
 @testset "the surface schema drives the form" begin
     sh = fresh_shell()
-    # Every implemented surface type is offered, and nothing else.
+    # Every implemented surface type is offered, plus BINARY — which is not a surface type
+    # and has no schema entry, because it is two components each with a type of its own. Its
+    # code is negative so it cannot collide with a real `surface_type`.
     st = rows(G.shell_surface_types())
-    @test length(st) == length(SURFACE_TYPE_ORDER)
-    @test Set(parse(Int, cols(r)[1]) for r in st) == Set(SURFACE_TYPE_ORDER)
+    @test length(st) == length(SURFACE_TYPE_ORDER) + 1
+    @test Set(parse(Int, cols(r)[1]) for r in st) ==
+          union(Set(SURFACE_TYPE_ORDER), Set([G.BINARY_CODE]))
+    @test G.BINARY_CODE < 0
+    @test !(G.BINARY_CODE in SURFACE_TYPE_ORDER)
+    bin_row = only(filter(r -> parse(Int, cols(r)[1]) == G.BINARY_CODE, st))
+    @test cols(bin_row)[2] == "binary"
+    # Choosing it builds BOTH components in one step, so a binary is one action rather than
+    # "add a model, then remember to tick something".
+    G.shell_add_model(G.BINARY_CODE)
+    let m = G.current_model(sh.session)
+        @test m.companion !== nothing
+        @test m.surface_type == 3 && m.companion.surface_type == 3   # Roche both
+        @test G.shell_binary() == "1"
+        # The secondary starts somewhere VISIBLE and self-contained: two components at the
+        # origin are one picture of one star, and an orbit needs another tab set up first.
+        @test m.companion.place === :offset
+        @test m.companion.offset == G.DEFAULT_COMPANION_OFFSET
+        # Its position is a set of PARAMETERS, in the same 13 columns as every other form.
+        pr = rows(G.shell_position_params())
+        @test length(pr) == 3
+        @test all(length(cols(x)) == 13 for x in pr)
+        @test [cols(x)[1] for x in pr] == ["pos_x", "pos_y", "pos_z"]
+        @test all(cols(x)[13] == "0" for x in pr)          # live under a fixed offset
+        @test G.shell_set_position_state("pos_x", "free") == ""
+        @test :pos_x in m.companion.free
+        # Under the orbit they are inert, and freeing one is refused rather than ignored.
+        G.shell_set_binary_placement("orbit")
+        @test all(cols(x)[13] == "1" for x in rows(G.shell_position_params()))
+        @test occursin("orbit places", G.shell_set_position_state("pos_y", "free"))
+    end
+    G.shell_clear_model()
 
     for code in SURFACE_TYPE_ORDER
         G.shell_add_model(code)
@@ -624,6 +656,50 @@ end
     ns = [parse(Int, match(r"^(\d+) evaluations", r).captures[1]) for r in reports]
     @test issorted(ns)
     @test occursin("χ²ᵣ", sh.status)        # and it still finishes normally
+end
+
+@testset "a binary keeps its separation across placements" begin
+    # Switching to the orbit and back must not move the secondary. It did: the placement
+    # setter also took x, y and z, and once those became parameters in their own table the
+    # panel stopped passing them — so every call wrote the argument DEFAULTS of zero, put the
+    # secondary exactly on the primary, and a binary drew as one star.
+    #
+    # It produced a plausible picture rather than an error, and only on the way BACK, since
+    # switching to the orbit ignores the offset. That is why the round trip is the test rather
+    # than a single direction.
+    sh = fresh_shell()
+    G.shell_add_model(0)
+    G.shell_set_binary("1", 0)
+    m = G.current_model(sh.session)
+    npoly() = (G.refresh_both!(sh); length(sh.msky.polys[]))
+
+    solo = let                       # one star, for the count a binary must exceed
+        G.shell_set_binary("0")
+        n = npoly()
+        G.shell_set_binary("1", 0)
+        n
+    end
+    @test npoly() > solo             # both components drawn from the start
+
+    G.shell_set_position_param("pos_x", "3.0")
+    G.shell_set_position_param("pos_y", "1.5")
+    @test G.current_model(sh.session).companion.offset == (3.0, 1.5, 0.0)
+    both = npoly()
+    @test both > solo
+
+    G.shell_set_binary_placement("orbit")
+    # The offset SURVIVES being switched away from — a placement is a choice between two
+    # sources, and picking one must not destroy the other's numbers.
+    @test G.current_model(sh.session).companion.offset == (3.0, 1.5, 0.0)
+    @test npoly() == both
+
+    G.shell_set_binary_placement("offset")
+    @test G.current_model(sh.session).companion.offset == (3.0, 1.5, 0.0)
+    @test npoly() == both
+    # And the offset actually places it: the drawn separation is the one that was set.
+    got = G.build_epoch_star(sh)
+    @test length(got) >= 5
+    @test got[5][1] ≈ 3.0 && got[5][2] ≈ 1.5
 end
 
 @testset "the Imaging views honour the view options" begin
