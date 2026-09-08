@@ -25,6 +25,16 @@ Rectangle {
     // somebody is reading an error further up is the single most annoying thing a log pane can
     // do, and a long optimiser trace makes it happen five times a second.
     property bool follow: true
+    // COLLAPSED, the pane is its header row and nothing else. The window is short and the
+    // Model tab is the tallest thing in it — a binary has three parameter frames — so the
+    // console is the one panel a user can give up without losing state: the text is still
+    // here, and ticking it back shows the same lines.
+    //
+    // Collapsed BY DEFAULT. The panels above it are what the window is for, and the log is a
+    // place to look when something has gone wrong rather than something to watch — the status
+    // line in the context bar already carries whatever a running job last said. Nothing is
+    // lost by starting it shut: the lines accumulate either way.
+    property bool expanded: false
 
     onTextChanged: if (follow) Qt.callLater(function () { view.positionViewAtEnd() })
 
@@ -36,14 +46,19 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
-            Label {
+            CheckBox {
                 text: "console"
-                color: "#666"
+                checked: root.expanded
                 font.pointSize: root.fontPt
                 Layout.fillWidth: true
+                ToolTip.text: "untick to collapse the console and give the panels above it " +
+                              "the space — nothing is lost, the lines are still here"
+                ToolTip.visible: hovered
+                onToggled: root.expanded = checked
             }
             CheckBox {
                 text: "follow"
+                visible: root.expanded
                 checked: root.follow
                 font.pointSize: root.fontPt
                 onToggled: { root.follow = checked; if (checked) view.positionViewAtEnd() }
@@ -52,6 +67,7 @@ Rectangle {
 
         ListView {
             id: view
+            visible: root.expanded
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true

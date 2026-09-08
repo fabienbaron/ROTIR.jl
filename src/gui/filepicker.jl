@@ -33,8 +33,8 @@ directory, which is not somewhere anyone would think to browse to by hand.
 """
 function picker_places()
     rows = String[]
-    d = joinpath(pkgdir(ROTIR), "demos", "data")
-    isdir(d) && push!(rows, "ROTIR data\t$(d)")
+    d = ROTIR.resource("demos", "data")
+    d === nothing || push!(rows, "ROTIR data\t$(d)")
     # Whether or not this picker is being opened FOR an orbit: a shortcut that appears and
     # disappears depending on which button opened the dialog is harder to learn than one that
     # is always in the same place. `orbit_dir` creates the folder, which is what makes the

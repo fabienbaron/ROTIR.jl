@@ -325,11 +325,13 @@ const ZOOM_MAX_SPAN = 4.0       # 4x out
 
 # How far ONE wheel detent zooms, which is a different question from how far zoom may go.
 #
-# Makie registers `ScrollZoom(0.1, 0.2)` on every Axis and applies `(1 - speed)^scroll`, so a
-# notch inwards is 1/(1 - 0.1) = 1.111x. Expressed here as the FACTOR rather than as Makie's
-# speed, because a factor is the thing a user can picture ("a quarter bigger per notch") and
-# the speed is not.
-const ZOOM_PER_DETENT = 1 / (1 - 0.1)
+# Expressed as the FACTOR rather than as Makie's speed, because a factor is the thing a user
+# can picture ("a quarter bigger per notch") and the speed is not. Makie registers
+# `ScrollZoom(0.1, 0.2)` on every Axis and applies `(1 - speed)^scroll`, which would be
+# 1/(1 - 0.1) = 1.111x — and that was this value until it was aligned with OITOOLS, whose
+# window is used beside this one on the same wheel. A quarter per notch is the shipped answer
+# in both; the settings panel is there for a device that suits a different one.
+const ZOOM_PER_DETENT = 1.25
 
 """
 The per-detent zoom factor the settings panel has set, or 0 for "leave Makie's own".

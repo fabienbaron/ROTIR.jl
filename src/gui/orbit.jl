@@ -904,8 +904,8 @@ function orbit_dir()
     isdir(dir) && return dir
     try
         mkpath(dir)
-        shipped = joinpath(pkgdir(ROTIR), "demos", "orbits")
-        if isdir(shipped)
+        shipped = ROTIR.resource("demos", "orbits")
+        if shipped !== nothing
             for f in readdir(shipped)
                 endswith(f, ".toml") || continue
                 cp(joinpath(shipped, f), joinpath(dir, f); force = false)

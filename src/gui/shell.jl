@@ -1305,6 +1305,32 @@ function build_epoch_star(sh::ShellState)
 end
 
 """
+    check_mesh!(sh, mesh, colors, what) -> Bool
+
+Report a mesh whose colour vector does not match it, before the renderer chokes on it.
+
+QMLMakie's render callback is `catch; Core.println("exception in render")` — no binding, so
+the exception is discarded and a broken plot says only that something went wrong, on a thread
+whose stdout is the launching terminal. Every render failure found in this GUI has had to be
+reconstructed by elimination for that reason.
+
+This checks the one invariant that is cheap to test and known to kill the render: a mesh needs
+exactly one colour per vertex. A zero-length colour vector fails to build a render object at
+all ("Failed to resolve gl_renderobject"), and a short one is worse — it fails at draw time,
+after the plot exists. `update_state_before_display!` does NOT catch either: it was tried here
+and returned cleanly on a deliberately mismatched pair, which is why this checks the invariant
+directly rather than running the renderer's preparation step.
+"""
+function check_mesh!(sh::ShellState, mesh, colors, what::AbstractString)
+    mesh isa Makie.GeometryBasics.Mesh || return true
+    n = length(Makie.GeometryBasics.coordinates(mesh))
+    m = length(colors)
+    n == m && return true
+    console!(sh, "$(what) will not render: $(n) vertices but $(m) colours")
+    return false
+end
+
+"""
     refresh_model_tab!(sh)
 
 Redraw the 3-D preview and the Mollweide from the current model. GUI thread only.
@@ -1384,6 +1410,10 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
                        (Float64(off[1]), Float64(off[2]), zoff); track = track)
     end
     show_mollweide!(sh.moll, allv, star)
+    # Say which panel is wrong and how, rather than leaving "exception in render" as the only
+    # evidence. Cheap: two length comparisons against work already done.
+    check_mesh!(sh, sh.moll.mesh[], sh.moll.colors[], "the Mollweide")
+    check_mesh!(sh, sh.star.mesh[], sh.star.colors[], "the 3-D view")
     return sh
 end
 
@@ -2372,8 +2402,10 @@ function shell_fit(method, maxeval)
 
     # A BINARY is fitted by the derivative-free methods only. The gradient path differentiates
     # the single-star parametric model, and NUTS and Pigeons both need `PARAMETRIC_THETA`,
-    # which maps one star's parameters onto that model's θ — there is no `binary_chi2_fg` and
-    # no binary θ. Nelder-Mead, BOBYQA and Nautilus need only the criterion, which exists.
+    # which maps one star's parameters onto that model's θ — and there is no binary θ.
+    # `binary_chi2_fg` is not that gradient: it differentiates the two SURFACE MAPS, which is
+    # what imaging varies, not the shape and orientation parameters this panel fits.
+    # Nelder-Mead, BOBYQA and Nautilus need only the criterion, which exists.
     if isbin && !(meth in (:neldermead, :bobyqa, :nautilus))
         return "$(meth) cannot fit a binary: it needs a gradient or the parametric θ, and " *
                "neither exists for two components. Use neldermead, bobyqa or nautilus"
@@ -2935,6 +2967,15 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
     d === nothing && return "no dataset"
     m = current_model(sh.session)
     m === nothing && return "no model — the reconstruction needs a geometry to sit on"
+    # A BINARY is refused rather than reconstructed as its primary. Everything below builds one
+    # `stars` vector from `star_params(m)`, which is the primary's parameters — so with a
+    # companion in the model this fitted ONE surface against data containing two, and reported
+    # a χ² for it. That is not a worse map, it is a meaningless one, and nothing on screen said
+    # so. `binary_reconstruct_oi` is the two-component route and is reachable from the REPL;
+    # the panel is not wired to it yet.
+    m.companion === nothing ||
+        return "the Imaging tab reconstructs one component: untick secondary on the Model " *
+               "tab, or use binary_reconstruct_oi from the REPL, which images both"
     specs = parse_regularizers(String(regspec))
     # Level 2 (192 tessels) is coarse for science but it is the level a fit converges on
     # in seconds, which is what makes it the right place to check a setup before committing
@@ -3325,6 +3366,45 @@ function shell_save_settings(payload)
 end
 
 """
+    shell_settings_path() -> String
+
+Where the appearance config is kept, whether or not anything has been saved there.
+
+The panel shows it on a line of its own, always present and saying what it is: empty until a
+button was pressed, it grew the panel the first time anything was saved, and a bare truncated
+path beside the buttons reads as a stray fragment rather than as an answer.
+"""
+shell_settings_path() = gui_settings_file()
+
+"""
+    shell_reset_settings() -> String
+
+Delete the saved appearance defaults, and say where they were.
+
+The panel's reset has to remove the FILE and not merely the values on screen: settings are
+applied at startup, so a window restored to its built-in look while the file still says
+otherwise would come back tweaked at the next launch — which is precisely the confusion the
+button exists to end.
+
+Returns the path removed, or `""` when there was nothing saved, which is also the answer when
+the settings have never been touched.
+"""
+function shell_reset_settings()
+    sh = SHELL[]
+    path = gui_settings_file()
+    isfile(path) || return ""
+    try
+        rm(path)
+        sh === nothing || console!(sh, "removed saved appearance defaults: " * path)
+        return path
+    catch err
+        sh === nothing || console!(sh, "could not remove settings: " * sprint(showerror, err);
+                                   kind = :err)
+        return ""
+    end
+end
+
+"""
     shell_load_settings() -> String
 
 The saved defaults as `key\tvalue` lines; empty when there are none.
@@ -3363,10 +3443,56 @@ end
 """
     shell_plot_scale() -> String
 
-`user_override\tin_force` — the panel shows the first and displays the second beside it, so
-"auto" and "1.19" are distinguishable.
+`in_force\tplot_scale_user\tmarker_size_user\tzoom_step`, tab separated.
+
+The panel shows the FIRST in its box and stores the others: `plot_scale_user` may be 0 for
+"computed from the screen", and a box reading 0 would say nothing about what the plots are
+actually doing. Four fields rather than two because the panel fills the marker and zoom boxes
+from the same call, and asking three times would let them disagree.
 """
-shell_plot_scale() = Printf.@sprintf("%.3f\t%.3f", PLOT_SCALE_USER[], live_plot_scale())
+shell_plot_scale() = join((live_plot_scale(), PLOT_SCALE_USER[], marker_size_user(),
+                           zoom_per_detent()), '\t')
+
+"""
+    marker_size_user() -> Float64
+
+The data-point size the panel last set, or 0 for "each plot's own default".
+
+Held by OITOOLS rather than here: the Data tab's plot IS `build_obs_canvas`, which comes from
+`OITOOLSGUIExt`, so the number that governs it is that package's `MARKER_SIZE_USER`. A second
+copy here would be the one this panel showed and the other the one the plot obeyed.
+"""
+function marker_size_user()
+    O = _oitools_gui()
+    O === nothing && return 0.0
+    return try
+        Float64(O.MARKER_SIZE_USER[])
+    catch err
+        @debug "OITOOLS has no MARKER_SIZE_USER; the marker box will read auto" err
+        0.0
+    end
+end
+
+"""
+    shell_set_marker_size(x) -> String
+
+Set the data-point size in the Data tab's plot. Zero restores each plot's own default.
+
+Forwarded to OITOOLS, which owns that canvas — see [`marker_size_user`](@ref).
+"""
+function shell_set_marker_size(x)
+    v = something(tryparse(Float64, String(x)), 0.0)
+    O = _oitools_gui()
+    O === nothing && return "no plot to size: the OITOOLS GUI extension is not loaded"
+    got = try
+        Float64(O.set_marker_size!(v))
+    catch err
+        return "could not set the marker size: " * sprint(showerror, err)
+    end
+    sh = SHELL[]
+    sh === nothing || refresh_data_tab!(sh)
+    return got == 0 ? "marker size: each plot's own" : Printf.@sprintf("marker size: %.0f px", got)
+end
 
 # ── export ──────────────────────────────────────────────────────────────────────────────
 

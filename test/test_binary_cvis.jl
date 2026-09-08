@@ -12,9 +12,9 @@
 # `observables` does for a single star.
 #
 # THE DENSE ROUTE IS KEPT, and this file is why it is worth keeping: it is the reference the
-# fast one is checked against. It is also what a binary IMAGING criterion would use, since
-# imaging fixes the geometry and reuses one matrix over hundreds of iterations — there is no
-# `binary_chi2_fg` today, so that is a future use rather than a current one.
+# fast one is checked against. It is also what the binary IMAGING criterion runs on, since
+# imaging fixes the geometry and reuses one matrix over hundreds of iterations — see
+# `binary_chi2_fg` and `test_binary_imaging.jl`, which needs `star.polyft` transposed.
 
 using Test
 using ROTIR

@@ -10,6 +10,9 @@ LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
 OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
+# app/build.jl only, and it is run with --project=bin for exactly this reason: the
+# application must NOT depend on PackageCompiler or it would be compiled into the bundle.
+PackageCompiler = "9b87118b-4619-50d2-8e1e-99f35a4d4d9d"
 Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
 QML = "2db162a6-7e43-52c3-8d84-290c1c42d82a"
 QMLMakie = "08f9cac3-3b11-4f1c-9d88-d0e81c500f64"

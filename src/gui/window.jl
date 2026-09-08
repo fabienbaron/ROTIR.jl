@@ -6,6 +6,9 @@
 function __init__()
     # Callbacks must be registered before any QML file that calls them is loaded.
     QML.@qmlfunction(shell_ready, shell_console, shell_status, shell_ui_scale,
+                     shell_settings_path, shell_reset_settings, shell_set_marker_size,
+                     shell_ui_font_files, shell_controls_styles,
+                     shell_default_controls_style,
                      shell_refresh,
                      shell_open, shell_open_many, shell_datasets, shell_epochs,
                      shell_remove_epoch, shell_close_dataset,
@@ -71,8 +74,8 @@ function _initial_folder(session::Session)
     end
     forced = get(ENV, "ROTIRGUI_DATA_DIR", "")
     isempty(forced) || (isdir(forced) && return "file://" * abspath(forced))
-    p = joinpath(pkgdir(ROTIR), "demos", "data")
-    isdir(p) && return "file://" * p
+    p = ROTIR.resource("demos", "data")
+    p === nothing || return "file://" * p
     return "file://" * pwd()
 end
 
@@ -107,6 +110,108 @@ function _initial_tab()
     return i - 1        # QML indexes from zero
 end
 
+"Qt Quick Controls styles the bundled Qt carries, in the order the settings panel lists them."
+const CONTROLS_STYLES = ("Basic", "Fusion", "Universal", "Material", "Imagine", "FluentWinUI3")
+
+# What the window ships with. Fusion rather than Basic — Basic is Qt's own default on Linux and
+# draws its checkboxes and spin boxes noticeably larger than the rest of the window is scaled
+# for, and the macOS style lays a ComboBox out without reserving its indicator's width, so the
+# dropdown arrow lands on top of the text. Named once here, since the settings panel offers a
+# reset to it.
+const DEFAULT_CONTROLS_STYLE = "Fusion"
+
+"""
+    shell_controls_styles() -> String
+
+The style in force, then every style that can be chosen, one per line.
+
+QML asks rather than carrying its own copy of the list: a second list would be free to drift
+from `CONTROLS_STYLES`, and offering a style the bundled Qt does not have would fail silently
+at the next launch rather than at the click.
+"""
+shell_controls_styles() =
+    join((get(ENV, "QT_QUICK_CONTROLS_STYLE", DEFAULT_CONTROLS_STYLE), CONTROLS_STYLES...), '\n')
+
+"""
+    shell_default_controls_style() -> String
+
+The style the window ships with, for the settings panel's reset.
+
+Asked for rather than repeated in QML: the reset has to restore what an unconfigured install
+would run, and a literal in the panel would go on claiming the old answer after this changed.
+"""
+shell_default_controls_style() = DEFAULT_CONTROLS_STYLE
+
+"A `file://` URL for a local path, which is what a QML `FontLoader.source` takes."
+file_url(path::AbstractString) = "file://" * abspath(path)
+
+"""
+    shell_ui_font_files() -> String
+
+The font files the window hands to Qt itself, one `file://` URL per line, regular then bold.
+
+**Qt resolves a family name through the SYSTEM font database, which is not where our fonts
+live.** Naming "Noto Sans" works only where the machine happens to have it installed — stock
+Windows has none — so an unconfigured window looked different on every platform, and the
+`dp()` metrics this layout was measured against only hold for one of them.
+
+These two faces ride in the MakieAssets artifact, which is already bundled for the plots, so a
+`FontLoader` on them costs nothing to ship and gives the same UI font everywhere.
+
+Empty when the assets are not where Makie says they are, in which case QML falls back to the
+platform's own font rather than to a family name that would not resolve.
+"""
+function shell_ui_font_files()
+    urls = String[]
+    for f in ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf")
+        path = try
+            Makie.assetpath("fonts", f)
+        catch err
+            @debug "Makie assets are not where they were expected" err file = f
+            ""
+        end
+        isempty(path) || !isfile(path) || push!(urls, file_url(path))
+    end
+    return join(urls, '\n')
+end
+
+"""
+    apply_controls_style!() -> String
+
+Choose the Qt Quick Controls style, from the settings file if one was saved.
+
+**The style is geometry as well as colour.** Basic is Qt's own default on Linux and draws its
+checkboxes and spin boxes larger than the rest of the window is scaled for; Fusion draws the
+same controls appreciably smaller and more like a desktop toolkit, which is why it is
+`DEFAULT_CONTROLS_STYLE`; Material and Universal are touch-sized and follow their own theming
+rather than the palette; FluentWinUI3 is Windows 11's, which tracks the SYSTEM light/dark
+setting and would undo the fixed light palette Main.qml pins.
+
+Read from `gui_settings_file()` rather than from a constant so the settings panel can offer it.
+
+`\$QT_QUICK_CONTROLS_STYLE` still wins: an environment that has already chosen is never
+overridden, which keeps the escape hatch for a machine where a style misbehaves.
+
+It can be set here at all — unlike the WINDOWING platform, which cannot — because the style is
+read when the first Controls component is instantiated, at `loadqml`, not when
+`QGuiApplication` is constructed. That is still ahead of us even in a compiled application.
+Changing it therefore takes effect on the next launch, not the current one.
+"""
+function apply_controls_style!()
+    haskey(ENV, "QT_QUICK_CONTROLS_STYLE") && return ENV["QT_QUICK_CONTROLS_STYLE"]
+    want = DEFAULT_CONTROLS_STYLE
+    try
+        path = gui_settings_file()
+        if isfile(path)
+            saved = get(TOML.parsefile(path), "controls_style", "")
+            saved isa AbstractString && saved in CONTROLS_STYLES && (want = saved)
+        end
+    catch err
+        @debug "could not read the saved controls style; using the default" err DEFAULT_CONTROLS_STYLE
+    end
+    return ENV["QT_QUICK_CONTROLS_STYLE"] = want
+end
+
 """
     gui(session = Session(); qmlfile, autoquit_ms = 0) -> Session
 
@@ -124,11 +229,13 @@ Observable assignment is allowed.
 gets to exercise the layout without a human closing it.
 """
 function ROTIR.gui(session::Session = Session();
-                   qmlfile::AbstractString = joinpath(pkgdir(ROTIR), "src", "gui", "qml",
-                                                      "Main.qml"),
+                   qmlfile::AbstractString = something(
+                       ROTIR.resource("src", "gui", "qml", "Main.qml"),
+                       joinpath(something(pkgdir(ROTIR), pwd()), "src", "gui", "qml",
+                                "Main.qml")),
                    autoquit_ms::Integer = 0)
     check_qt_conflict()
-    # THE CONTROL STYLE, on macOS only, and before the QML engine reads it.
+    # THE CONTROL STYLE, before the QML engine reads it.
     #
     # Qt Quick Controls picks a native style per platform: Fusion-like on Linux, the macOS
     # style on a Mac. They are not interchangeable here — this window sizes everything through
@@ -140,9 +247,12 @@ function ROTIR.gui(session::Session = Session();
     #
     # Fusion is available on every platform Qt supports and is what the layout was built
     # against, so asking for it explicitly is the fix for the whole class rather than for the
-    # two symptoms that have been reported. `get!`, so a user who sets the variable themselves
-    # keeps their choice.
-    Sys.isapple() && get!(ENV, "QT_QUICK_CONTROLS_STYLE", "Fusion")
+    # two symptoms that have been reported. Applied on EVERY platform, not only macOS: Basic
+    # is Qt's default on Linux and draws its checkboxes and spin boxes larger than the rest of
+    # the window is scaled for, so the window was already being drawn against a style it did
+    # not ask for there either. `apply_controls_style!` honours a saved choice and never
+    # overrides `$QT_QUICK_CONTROLS_STYLE`.
+    apply_controls_style!()
     # A backstop for sessions started by hand rather than through bin/rotirgui.jl. GLMakie is
     # imported by now but has not built a context yet, and Mesa reads these at context
     # creation, so this is still early enough. A no-op when the launcher already ran it.

@@ -401,543 +401,573 @@ Pane {
         spacing: dp(8)
 
         // ── left: the generated parameter form ───────────────────────────────
-        ColumnLayout {
-            // fillWidth is FALSE explicitly: a nested layout defaults it to true,
-            // and this column would then take the whole row and squeeze the canvas
-            // beside it to zero width — which reads as a plot that failed to draw.
+        // SCROLLED as a whole. A binary asks for two full parameter forms, the positions,
+        // the fit launcher, the results and the fit history in one column, and that is more
+        // than the window's height — to which a ColumnLayout answers by squeezing whatever
+        // has fillHeight down to NOTHING, so both component forms vanished while the fixed-
+        // height tables below them kept every pixel. The column takes at least the viewport's
+        // height, so a single star still fills it, and scrolls past it when it needs to.
+        ScrollView {
+            id: leftPane
+            // fillWidth is FALSE explicitly: a nested layout defaults it to true, and this
+            // pane would then take the whole row and squeeze the canvas beside it to zero
+            // width — which reads as a plot that failed to draw.
             Layout.fillWidth: false
             Layout.preferredWidth: dp(520)
             Layout.minimumWidth: dp(520)
             Layout.maximumWidth: dp(520)
             Layout.fillHeight: true
-            spacing: dp(4)
+            clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            // AlwaysOn: a binary's form runs past the bottom of the panel, and a panel that
+            // simply stops part way through a frame reads as a broken layout rather than as
+            // one that scrolls. Honoured by Fusion, which is the style on macOS; the Basic
+            // style on Linux still fades the bar out when nothing is flicking it, and shows
+            // it on the way past.
+            ScrollBar.vertical.policy: ScrollBar.AlwaysOn
 
-            // ONE model at a time, so this is a label rather than a selector. A session with
-            // several was offering a choice nobody was making, while the unselected one still
-            // decided what the χ² column and the reconstruction were about.
-            Label {
-                Layout.fillWidth: true
-                elide: Text.ElideRight
-                font.pointSize: root.fontPt
-                color: modelListModel.count > 0 ? "#333" : "#7f8c98"
-                text: modelListModel.count === 0 ? "no model — pick a surface type below"
-                    : "model: " + modelListModel.get(0).mname + "  (type " +
-                      modelListModel.get(0).mtype + ", " + modelListModel.get(0).mfree + " free)"
-            }
+            ColumnLayout {
+                width: leftPane.availableWidth
+                height: Math.max(implicitHeight, leftPane.availableHeight)
+                spacing: dp(4)
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: dp(6)
-                ComboBox {
-                    id: typeBox
-                    Layout.fillWidth: true
-                    model: typeModel
-                    textRole: "label"
-                    font.pointSize: root.fontPt
-                    ToolTip.text: currentIndex >= 0 ? typeModel.get(currentIndex).doc : ""
-                    ToolTip.visible: hovered && ToolTip.text.length > 0
-                }
-                Button {
-                    text: "+ model"
-                    // Only while there is nothing to replace. A model REPLACES rather than
-                    // appends — there is exactly one, so that nothing but the visible model
-                    // can decide what the χ² column is about — and a button that silently
-                    // discards the model you have been editing is not one to leave live.
-                    // Clearing it with "− model" is the way to change surface type.
-                    enabled: modelListModel.count === 0
-                    font.pointSize: root.fontPt
-                    ToolTip.text: modelListModel.count === 0
-                        ? "build a model of this type"
-                        : "there is already a model — clear it with − model first"
-                    ToolTip.visible: hovered
-                    onClicked: {
-                        if (typeBox.currentIndex < 0) return
-                        root.statusChanged(
-                            Julia.shell_add_model(parseInt(typeModel.get(typeBox.currentIndex).code)))
-                        root.refresh()
-                        root.redraw()
-                    }
-                }
-                // BINARY. A companion is a second full component — its own surface type and
-                // its own parameters — sharing the orbit defined on the Orbit tab. It is a
-                // property of the model rather than a second model, because the two stars are
-                // not independent: one orbit, one frame, one χ² over the pair.
-                CheckBox {
-                    id: binaryBox
-                    // "companion", not "binary": the DROPDOWN builds a binary from scratch,
-                    // and this adds or removes a second component on the model already there —
-                    // which is how a single star that has been set up becomes a binary without
-                    // losing its parameters.
-                    text: "secondary"
-                    enabled: modelListModel.count > 0
-                    checked: root.isBinary
-                    font.pointSize: root.fontPt
-                    ToolTip.text: "add a companion; the orbit comes from the Orbit tab"
-                    ToolTip.visible: hovered
-                    onToggled: {
-                        root.statusChanged(Julia.shell_set_binary(checked ? "1" : "0",
-                                                                  compTypeBox.currentIndex >= 0
-                                                                  ? parseInt(typeModel.get(
-                                                                      compTypeBox.currentIndex).code)
-                                                                  : 3))
-                        root.refresh(); root.redraw()
-                    }
-                }
-                ComboBox {
-                    id: compTypeBox
-                    visible: root.isBinary
-                    Layout.preferredWidth: dp(120)
-                    model: typeModel
-                    textRole: "label"
-                    font.pointSize: root.fontPt - 1
-                    ToolTip.text: "the companion's surface type"
-                    ToolTip.visible: hovered
-                    onActivated: {
-                        root.statusChanged(Julia.shell_companion_type(
-                            parseInt(typeModel.get(currentIndex).code)))
-                        root.refresh(); root.redraw()
-                    }
-                }
-                Button {
-                    text: "− model"
-                    enabled: modelListModel.count > 0
-                    font.pointSize: root.fontPt
-                    ToolTip.text: "clear it: the surface views go idle and the epoch table " +
-                                  "falls back to point counts"
-                    ToolTip.visible: hovered
-                    onClicked: {
-                        root.statusChanged(Julia.shell_clear_model())
-                        root.refresh()
-                        root.redraw()
-                    }
-                }
-            }
-
-            // The mesh the model is evaluated on. It belongs here rather than in the settings
-            // panel because it decides what is being FITTED — a level-3 sphere and a level-5
-            // one are different models — not how anything is drawn.
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: dp(6)
-                Label { text: "mesh"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
-                ComboBox {
-                    id: tesselBox
-                    Layout.preferredWidth: dp(150)
-                    model: ["HEALPix", "long-lat"]
-                    font.pointSize: root.fontPt - 1
-                    // long-lat is offered so the choice is visible, and disabled because it is
-                    // not wired: `create_star` builds it, but every regulariser and every
-                    // shape gradient is written against the HEALPix neighbour structure.
-                    delegate: ItemDelegate {
-                        width: tesselBox.width
-                        text: modelData
-                        enabled: index === 0
-                        font.pointSize: root.fontPt - 1
-                    }
-                    onActivated: {
-                        if (currentIndex !== 0) { currentIndex = 0; return }
-                        root.pushTessellation()
-                    }
-                }
-                Label { text: "n"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
-                SpinBox {
-                    id: nsideBox
-                    // 3 is the default and the practical minimum; 6 the maximum, past which
-                    // the polygon FT dominates everything the GUI does.
-                    from: 2; to: 6; value: 3
-                    font.pointSize: root.fontPt - 1
-                    ToolTip.text: "nside = 2^n; npix = 12·nside²"
-                    ToolTip.visible: hovered
-                    onValueModified: root.pushTessellation()
-                }
+                // ONE model at a time, so this is a label rather than a selector. A session with
+                // several was offering a choice nobody was making, while the unselected one still
+                // decided what the χ² column and the reconstruction were about.
                 Label {
-                    text: "= " + (12 * Math.pow(Math.pow(2, nsideBox.value), 2)) + " tessels"
-                    color: "#7f8c98"
-                    font.pointSize: root.fontPt - 1
-                }
-                Item { Layout.fillWidth: true }
-            }
-
-            // Which forward kernel evaluates the polygon Fourier transform. A COMPUTE choice,
-            // not a display one, so it sits with the mesh: those two together are what a χ²
-            // costs. Both backends give the exact transform and are asserted against each
-            // other in the suite; the vectorised one is 17-19x faster and is the default.
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: dp(6)
-                Label { text: "kernel"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
-                ComboBox {
-                    id: backendBox
                     Layout.fillWidth: true
-                    model: backendModel
-                    textRole: "blabel"
-                    font.pointSize: root.fontPt - 1
-                    ToolTip.text: currentIndex >= 0 && backendModel.count > 0
-                                  ? backendModel.get(currentIndex).bdoc : ""
-                    ToolTip.visible: hovered
-                    onActivated: root.statusChanged(Julia.shell_set_polyft_backend(
-                        backendModel.get(currentIndex).bkey))
+                    elide: Text.ElideRight
+                    font.pointSize: root.fontPt
+                    color: modelListModel.count > 0 ? "#333" : "#7f8c98"
+                    text: modelListModel.count === 0 ? "no model — pick a surface type below"
+                        : "model: " + modelListModel.get(0).mname + "  (type " +
+                          modelListModel.get(0).mtype + ", " + modelListModel.get(0).mfree + " free)"
                 }
-            }
 
-            Label {
-                visible: root.isBinary
-                text: "Primary"
-                font.bold: true
-                font.pointSize: root.fontPt
-                color: "#7f8c98"
-            }
-            Frame {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                ListView {
-                    id: paramList
-                    anchors.fill: parent
-                    clip: true
-                    model: paramModel
-                    spacing: dp(2)
-                    ScrollBar.vertical: ScrollBar {}
-                    // Grouped by section header. `pgroup` comes from the schema, so the order
-                    // of the sections is the order the schema lists the fields in — geometry,
-                    // then thermal, then limb darkening, then orientation, then orbit.
-                    section.property: "pgroup"
-                    section.delegate: Label {
-                        width: paramList.width
-                        text: section
-                        font.bold: true
-                        font.pointSize: root.fontPt - 1
-                        color: "#7f8c98"
-                        topPadding: dp(6)
-                    }
-                    delegate: paramRow
-                }
-            }
-
-            // ── the secondary ───────────────────────────────────────────────
-            //
-            // The SAME form as the primary, from the same `paramRow`. A secondary is a
-            // component in its own right — its own surface type, its own free set, its own
-            // bounds — not a set of numbers hanging off the primary, and a reduced form here
-            // would have said otherwise.
-            Label {
-                visible: root.isBinary
-                text: "Secondary"
-                font.bold: true
-                font.pointSize: root.fontPt
-                color: "#7f8c98"
-            }
-            Frame {
-                visible: root.isBinary
-                Layout.fillWidth: true
-                Layout.preferredHeight: dp(170)
-                ListView {
-                    id: param2List
-                    anchors.fill: parent
-                    clip: true
-                    model: param2Model
-                    section.property: "pgroup"
-                    section.delegate: Label {
-                        width: param2List.width
-                        text: section
-                        font.bold: true
-                        font.pointSize: root.fontPt - 1
-                        color: "#7f8c98"
-                        topPadding: dp(6)
-                    }
-                    ScrollBar.vertical: ScrollBar {}
-                    delegate: paramRow
-                }
-            }
-
-            // ── positions ───────────────────────────────────────────────────
-            //
-            // A frame of its own, because WHERE a component is and WHAT it is made of are
-            // different questions — the same separation the Orbit tab is laid out around.
-            // The primary defines the origin; only the secondary has a position to give.
-            Label {
-                visible: root.isBinary
-                text: "Positions"
-                font.bold: true
-                font.pointSize: root.fontPt
-                color: "#7f8c98"
-            }
-            Frame {
-                visible: root.isBinary
-                Layout.fillWidth: true
-                Layout.preferredHeight: dp(118)
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: dp(2)
-                    RowLayout {
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: dp(6)
+                    ComboBox {
+                        id: typeBox
                         Layout.fillWidth: true
-                        spacing: dp(6)
-                        Label { text: "secondary by"; color: "#7f8c98"
-                                font.pointSize: root.fontPt - 1 }
-                        ComboBox {
-                            id: placeBox
-                            Layout.preferredWidth: dp(150)
-                            model: ["the orbit", "offset"]
-                            font.pointSize: root.fontPt - 1
-                            ToolTip.text: "the orbit gives a different separation at every " +
-                                          "epoch and needs elements the data can constrain; " +
-                                          "a fixed offset is one displacement throughout, " +
-                                          "which is what a snapshot supports"
-                            ToolTip.visible: hovered
-                            onActivated: root.applyPlacement()
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: "primary at (0, 0, 0) — the origin"
-                            color: "#aab4bd"
-                            elide: Text.ElideRight
-                            font.pointSize: root.fontPt - 1
-                            ToolTip.text: "fixed: an interferometer measures the separation " +
-                                          "between the components, not where the pair sits"
-                            ToolTip.visible: ph.hovered
-                            HoverHandler { id: ph }
+                        model: typeModel
+                        textRole: "label"
+                        font.pointSize: root.fontPt
+                        ToolTip.text: currentIndex >= 0 ? typeModel.get(currentIndex).doc : ""
+                        ToolTip.visible: hovered && ToolTip.text.length > 0
+                    }
+                    Button {
+                        text: "+ model"
+                        // Only while there is nothing to replace. A model REPLACES rather than
+                        // appends — there is exactly one, so that nothing but the visible model
+                        // can decide what the χ² column is about — and a button that silently
+                        // discards the model you have been editing is not one to leave live.
+                        // Clearing it with "− model" is the way to change surface type.
+                        enabled: modelListModel.count === 0
+                        font.pointSize: root.fontPt
+                        ToolTip.text: modelListModel.count === 0
+                            ? "build a model of this type"
+                            : "there is already a model — clear it with − model first"
+                        ToolTip.visible: hovered
+                        onClicked: {
+                            if (typeBox.currentIndex < 0) return
+                            root.statusChanged(
+                                Julia.shell_add_model(parseInt(typeModel.get(typeBox.currentIndex).code)))
+                            root.refresh()
+                            root.redraw()
                         }
                     }
+                    // BINARY. A companion is a second full component — its own surface type and
+                    // its own parameters — sharing the orbit defined on the Orbit tab. It is a
+                    // property of the model rather than a second model, because the two stars are
+                    // not independent: one orbit, one frame, one χ² over the pair.
+                    CheckBox {
+                        id: binaryBox
+                        // "companion", not "binary": the DROPDOWN builds a binary from scratch,
+                        // and this adds or removes a second component on the model already there —
+                        // which is how a single star that has been set up becomes a binary without
+                        // losing its parameters.
+                        text: "secondary"
+                        enabled: modelListModel.count > 0
+                        checked: root.isBinary
+                        font.pointSize: root.fontPt
+                        ToolTip.text: "add a companion; the orbit comes from the Orbit tab"
+                        ToolTip.visible: hovered
+                        onToggled: {
+                            root.statusChanged(Julia.shell_set_binary(checked ? "1" : "0",
+                                                                      compTypeBox.currentIndex >= 0
+                                                                      ? parseInt(typeModel.get(
+                                                                          compTypeBox.currentIndex).code)
+                                                                      : 3))
+                            root.refresh(); root.redraw()
+                        }
+                    }
+                    ComboBox {
+                        id: compTypeBox
+                        visible: root.isBinary
+                        Layout.preferredWidth: dp(120)
+                        model: typeModel
+                        textRole: "label"
+                        font.pointSize: root.fontPt - 1
+                        ToolTip.text: "the companion's surface type"
+                        ToolTip.visible: hovered
+                        onActivated: {
+                            root.statusChanged(Julia.shell_companion_type(
+                                parseInt(typeModel.get(currentIndex).code)))
+                            root.refresh(); root.redraw()
+                        }
+                    }
+                    Button {
+                        text: "− model"
+                        enabled: modelListModel.count > 0
+                        font.pointSize: root.fontPt
+                        ToolTip.text: "clear it: the surface views go idle and the epoch table " +
+                                      "falls back to point counts"
+                        ToolTip.visible: hovered
+                        onClicked: {
+                            root.statusChanged(Julia.shell_clear_model())
+                            root.refresh()
+                            root.redraw()
+                        }
+                    }
+                }
+
+                // The mesh the model is evaluated on. It belongs here rather than in the settings
+                // panel because it decides what is being FITTED — a level-3 sphere and a level-5
+                // one are different models — not how anything is drawn.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: dp(6)
+                    Label { text: "mesh"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
+                    ComboBox {
+                        id: tesselBox
+                        Layout.preferredWidth: dp(150)
+                        model: ["HEALPix", "long-lat"]
+                        font.pointSize: root.fontPt - 1
+                        // long-lat is offered so the choice is visible, and disabled because it is
+                        // not wired: `create_star` builds it, but every regulariser and every
+                        // shape gradient is written against the HEALPix neighbour structure.
+                        delegate: ItemDelegate {
+                            width: tesselBox.width
+                            text: modelData
+                            enabled: index === 0
+                            font.pointSize: root.fontPt - 1
+                        }
+                        onActivated: {
+                            if (currentIndex !== 0) { currentIndex = 0; return }
+                            root.pushTessellation()
+                        }
+                    }
+                    Label { text: "n"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
+                    SpinBox {
+                        id: nsideBox
+                        // 3 is the default and the practical minimum; 6 the maximum, past which
+                        // the polygon FT dominates everything the GUI does.
+                        from: 2; to: 6; value: 3
+                        font.pointSize: root.fontPt - 1
+                        ToolTip.text: "nside = 2^n; npix = 12·nside²"
+                        ToolTip.visible: hovered
+                        onValueModified: root.pushTessellation()
+                    }
+                    Label {
+                        text: "= " + (12 * Math.pow(Math.pow(2, nsideBox.value), 2)) + " tessels"
+                        color: "#7f8c98"
+                        font.pointSize: root.fontPt - 1
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
+                // Which forward kernel evaluates the polygon Fourier transform. A COMPUTE choice,
+                // not a display one, so it sits with the mesh: those two together are what a χ²
+                // costs. Both backends give the exact transform and are asserted against each
+                // other in the suite; the vectorised one is 17-19x faster and is the default.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: dp(6)
+                    Label { text: "kernel"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
+                    ComboBox {
+                        id: backendBox
+                        Layout.fillWidth: true
+                        model: backendModel
+                        textRole: "blabel"
+                        font.pointSize: root.fontPt - 1
+                        ToolTip.text: currentIndex >= 0 && backendModel.count > 0
+                                      ? backendModel.get(currentIndex).bdoc : ""
+                        ToolTip.visible: hovered
+                        onActivated: root.statusChanged(Julia.shell_set_polyft_backend(
+                            backendModel.get(currentIndex).bkey))
+                    }
+                }
+
+                Label {
+                    visible: root.isBinary
+                    text: "Primary"
+                    font.bold: true
+                    font.pointSize: root.fontPt
+                    color: "#7f8c98"
+                }
+                // Both component frames size to their CONTENT, so every parameter of both is
+                // on the page and the column scrolls ONCE for the pair. Fixed heights with an
+                // inner scroll area each put the wheel wherever the pointer happened to be,
+                // and left one half of a binary hiding rows the other was showing.
+                Frame {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: paramList.contentHeight + topPadding + bottomPadding
                     ListView {
-                        id: posList
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        id: paramList
+                        anchors.fill: parent
+                        interactive: false
                         clip: true
-                        model: posModel
-                        ScrollBar.vertical: ScrollBar {}
+                        model: paramModel
+                        spacing: dp(2)
+                        // Grouped by section header. `pgroup` comes from the schema, so the order
+                        // of the sections is the order the schema lists the fields in — geometry,
+                        // then thermal, then limb darkening, then orientation, then orbit.
+                        section.property: "pgroup"
+                        section.delegate: Label {
+                            width: paramList.width
+                            text: section
+                            font.bold: true
+                            font.pointSize: root.fontPt - 1
+                            color: "#7f8c98"
+                            topPadding: dp(6)
+                        }
                         delegate: paramRow
                     }
                 }
-            }
 
-            Label {
-                id: warnLabel
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                color: "#c0392b"
-                font.pointSize: root.fontPt - 1
-                visible: text.length > 0
-            }
-
-            // ── the fit launcher ─────────────────────────────────────────────
-            // Two rows, not one: the method labels are sentences ("VMLMB + Zygote gradient
-            // (fast; rapid rotator only)"), and four controls across this column squeezed the
-            // combo to a width that showed none of it.
-            ComboBox {
-                id: methodBox
-                Layout.fillWidth: true
-                model: methodModel
-                textRole: "label"
-                font.pointSize: root.fontPt
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: dp(6)
-                Label { text: "evaluations"; font.pointSize: root.fontPt - 1; color: "#7f8c98" }
-                SpinBox {
-                    id: evalBox
-                    Layout.preferredWidth: dp(120)
-                    from: 10; to: 200000; stepSize: 100; value: 2000
-                    editable: true
-                    font.pointSize: root.fontPt - 1
-                    ToolTip.text: "objective evaluations (gradient path: /50 -> iterations)"
-                    ToolTip.visible: hovered
-                }
-                Item { Layout.fillWidth: true }
-                Button {
-                    text: "Fit"
-                    // Nothing free is nothing to fit. The count comes from Julia because for
-                    // a binary the free parameters are spread over three tables and a position
-                    // only counts when a fixed offset places the secondary — counting rows
-                    // here would be a second answer that could disagree.
-                    enabled: !root.jobRunning && root.freeCount > 0
+                // ── the secondary ───────────────────────────────────────────────
+                //
+                // The SAME form as the primary, from the same `paramRow`. A secondary is a
+                // component in its own right — its own surface type, its own free set, its own
+                // bounds — not a set of numbers hanging off the primary, and a reduced form here
+                // would have said otherwise.
+                Label {
+                    visible: root.isBinary
+                    text: "Secondary"
+                    font.bold: true
                     font.pointSize: root.fontPt
-                    ToolTip.text: root.freeCount > 0
-                        ? "fit the " + root.freeCount + " free parameter" +
-                          (root.freeCount === 1 ? "" : "s")
-                        : "nothing is free — set a parameter to \"free\" first"
-                    ToolTip.visible: hovered
-                    onClicked: {
-                        if (methodBox.currentIndex < 0) return
-                        root.statusChanged(Julia.shell_fit(
-                            methodModel.get(methodBox.currentIndex).key, evalBox.value))
-                    }
+                    color: "#7f8c98"
                 }
-                Button {
-                    text: "Stop"
-                    enabled: root.jobRunning
-                    font.pointSize: root.fontPt
-                    onClicked: root.statusChanged(Julia.shell_job_stop())
-                }
-            }
-
-            // The same running readout the Imaging tab has. A sampler can run for minutes and
-            // a spinner alone does not say whether it is getting anywhere; the elapsed time is
-            // what tells you a fit is worth waiting for or worth stopping.
-            Label {
-                Layout.fillWidth: true
-                visible: root.jobRunning
-                text: root.jobProgress.length > 0
-                      ? "running — " + root.jobProgress + "   (" +
-                        root.jobElapsed.toFixed(0) + " s)"
-                      : "running — " + root.jobElapsed.toFixed(0) + " s"
-                color: "#7f8c98"
-                font.pointSize: root.fontPt - 1
-                elide: Text.ElideRight
-            }
-
-            // The last fit's numbers. A TABLE rather than the monospace blob this was: the
-            // shell already returns `name⇥value⇥error` per line, so the three columns existed
-            // all along and were being flattened into one string whose alignment depended on
-            // the font. The error column is empty for a local search — Nelder-Mead makes no
-            // uncertainty claim, and an empty cell says that where a 0 would have claimed
-            // precision it does not have.
-            Label { text: "Results"; font.bold: true; font.pointSize: root.fontPt }
-            Frame {
-                Layout.fillWidth: true
-                Layout.preferredHeight: dp(110)
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: dp(2)
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.rightMargin: resScroll.visible ? resScroll.width : 0
-                        spacing: dp(4)
-                        Label { Layout.preferredWidth: dp(118); text: "parameter"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
-                        Label { Layout.preferredWidth: dp(96); text: "value"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                horizontalAlignment: Text.AlignRight }
-                        Label { Layout.fillWidth: true; text: "± uncertainty"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                horizontalAlignment: Text.AlignRight }
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        visible: resultModel.count === 0
-                        text: "no fit yet"
-                        color: "#7f8c98"
-                        font.pointSize: root.fontPt - 1
-                    }
+                Frame {
+                    visible: root.isBinary
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: param2List.contentHeight + topPadding + bottomPadding
                     ListView {
-                        id: resultList
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
+                        id: param2List
+                        anchors.fill: parent
+                        interactive: false
                         clip: true
-                        model: resultModel
-                        ScrollBar.vertical: ScrollBar { id: resScroll }
-                        delegate: ItemDelegate {
-                            width: resultList.width
-                            leftPadding: 0
-                            rightPadding: 0
-                            contentItem: RowLayout {
-                                spacing: dp(4)
-                                Label { Layout.preferredWidth: dp(118); text: rname
-                                        elide: Text.ElideRight
-                                        font.pointSize: root.fontPt - 1 }
-                                Label { Layout.preferredWidth: dp(96); text: rvalue
-                                        font.family: "monospace"
-                                        font.pointSize: root.fontPt - 1
-                                        horizontalAlignment: Text.AlignRight }
-                                Label { Layout.fillWidth: true
-                                        text: rerr.length > 0 ? "\u00b1 " + rerr : "—"
-                                        color: rerr.length > 0 ? "#5a6772" : "#aab4bd"
-                                        font.family: "monospace"
-                                        font.pointSize: root.fontPt - 1
-                                        horizontalAlignment: Text.AlignRight }
+                        model: param2Model
+                        spacing: dp(2)
+                        section.property: "pgroup"
+                        section.delegate: Label {
+                            width: param2List.width
+                            text: section
+                            font.bold: true
+                            font.pointSize: root.fontPt - 1
+                            color: "#7f8c98"
+                            topPadding: dp(6)
+                        }
+                        delegate: paramRow
+                    }
+                }
+
+                // ── positions ───────────────────────────────────────────────────
+                //
+                // A frame of its own, because WHERE a component is and WHAT it is made of are
+                // different questions — the same separation the Orbit tab is laid out around.
+                // The primary defines the origin; only the secondary has a position to give.
+                Label {
+                    visible: root.isBinary
+                    text: "Positions"
+                    font.bold: true
+                    font.pointSize: root.fontPt
+                    color: "#7f8c98"
+                }
+                Frame {
+                    visible: root.isBinary
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: dp(118)
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: dp(2)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: dp(6)
+                            Label { text: "secondary by"; color: "#7f8c98"
+                                    font.pointSize: root.fontPt - 1 }
+                            ComboBox {
+                                id: placeBox
+                                Layout.preferredWidth: dp(150)
+                                model: ["the orbit", "offset"]
+                                font.pointSize: root.fontPt - 1
+                                ToolTip.text: "the orbit gives a different separation at every " +
+                                              "epoch and needs elements the data can constrain; " +
+                                              "a fixed offset is one displacement throughout, " +
+                                              "which is what a snapshot supports"
+                                ToolTip.visible: hovered
+                                onActivated: root.applyPlacement()
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: "primary at (0, 0, 0) — the origin"
+                                color: "#aab4bd"
+                                elide: Text.ElideRight
+                                font.pointSize: root.fontPt - 1
+                                ToolTip.text: "fixed: an interferometer measures the separation " +
+                                              "between the components, not where the pair sits"
+                                ToolTip.visible: ph.hovered
+                                HoverHandler { id: ph }
+                            }
+                        }
+                        ListView {
+                            id: posList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: posModel
+                            ScrollBar.vertical: ScrollBar {}
+                            delegate: paramRow
+                        }
+                    }
+                }
+
+                Label {
+                    id: warnLabel
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: "#c0392b"
+                    font.pointSize: root.fontPt - 1
+                    visible: text.length > 0
+                }
+
+                // ── the fit launcher ─────────────────────────────────────────────
+                // Two rows, not one: the method labels are sentences ("VMLMB + Zygote gradient
+                // (fast; rapid rotator only)"), and four controls across this column squeezed the
+                // combo to a width that showed none of it.
+                ComboBox {
+                    id: methodBox
+                    Layout.fillWidth: true
+                    model: methodModel
+                    textRole: "label"
+                    font.pointSize: root.fontPt
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: dp(6)
+                    Label { text: "evaluations"; font.pointSize: root.fontPt - 1; color: "#7f8c98" }
+                    SpinBox {
+                        id: evalBox
+                        Layout.preferredWidth: dp(120)
+                        from: 10; to: 200000; stepSize: 100; value: 2000
+                        editable: true
+                        font.pointSize: root.fontPt - 1
+                        ToolTip.text: "objective evaluations (gradient path: /50 -> iterations)"
+                        ToolTip.visible: hovered
+                    }
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        text: "Fit"
+                        // Nothing free is nothing to fit. The count comes from Julia because for
+                        // a binary the free parameters are spread over three tables and a position
+                        // only counts when a fixed offset places the secondary — counting rows
+                        // here would be a second answer that could disagree.
+                        enabled: !root.jobRunning && root.freeCount > 0
+                        font.pointSize: root.fontPt
+                        ToolTip.text: root.freeCount > 0
+                            ? "fit the " + root.freeCount + " free parameter" +
+                              (root.freeCount === 1 ? "" : "s")
+                            : "nothing is free — set a parameter to \"free\" first"
+                        ToolTip.visible: hovered
+                        onClicked: {
+                            if (methodBox.currentIndex < 0) return
+                            root.statusChanged(Julia.shell_fit(
+                                methodModel.get(methodBox.currentIndex).key, evalBox.value))
+                        }
+                    }
+                    Button {
+                        text: "Stop"
+                        enabled: root.jobRunning
+                        font.pointSize: root.fontPt
+                        onClicked: root.statusChanged(Julia.shell_job_stop())
+                    }
+                }
+
+                // The same running readout the Imaging tab has. A sampler can run for minutes and
+                // a spinner alone does not say whether it is getting anywhere; the elapsed time is
+                // what tells you a fit is worth waiting for or worth stopping.
+                Label {
+                    Layout.fillWidth: true
+                    visible: root.jobRunning
+                    text: root.jobProgress.length > 0
+                          ? "running — " + root.jobProgress + "   (" +
+                            root.jobElapsed.toFixed(0) + " s)"
+                          : "running — " + root.jobElapsed.toFixed(0) + " s"
+                    color: "#7f8c98"
+                    font.pointSize: root.fontPt - 1
+                    elide: Text.ElideRight
+                }
+
+                // The last fit's numbers. A TABLE rather than the monospace blob this was: the
+                // shell already returns `name⇥value⇥error` per line, so the three columns existed
+                // all along and were being flattened into one string whose alignment depended on
+                // the font. The error column is empty for a local search — Nelder-Mead makes no
+                // uncertainty claim, and an empty cell says that where a 0 would have claimed
+                // precision it does not have.
+                Label { text: "Results"; font.bold: true; font.pointSize: root.fontPt }
+                Frame {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: dp(110)
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: dp(2)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.rightMargin: resScroll.visible ? resScroll.width : 0
+                            spacing: dp(4)
+                            Label { Layout.preferredWidth: dp(118); text: "parameter"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
+                            Label { Layout.preferredWidth: dp(96); text: "value"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
+                                    horizontalAlignment: Text.AlignRight }
+                            Label { Layout.fillWidth: true; text: "± uncertainty"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
+                                    horizontalAlignment: Text.AlignRight }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: resultModel.count === 0
+                            text: "no fit yet"
+                            color: "#7f8c98"
+                            font.pointSize: root.fontPt - 1
+                        }
+                        ListView {
+                            id: resultList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: resultModel
+                            ScrollBar.vertical: ScrollBar { id: resScroll }
+                            delegate: ItemDelegate {
+                                width: resultList.width
+                                leftPadding: 0
+                                rightPadding: 0
+                                contentItem: RowLayout {
+                                    spacing: dp(4)
+                                    Label { Layout.preferredWidth: dp(118); text: rname
+                                            elide: Text.ElideRight
+                                            font.pointSize: root.fontPt - 1 }
+                                    Label { Layout.preferredWidth: dp(96); text: rvalue
+                                            font.family: "monospace"
+                                            font.pointSize: root.fontPt - 1
+                                            horizontalAlignment: Text.AlignRight }
+                                    Label { Layout.fillWidth: true
+                                            text: rerr.length > 0 ? "\u00b1 " + rerr : "—"
+                                            color: rerr.length > 0 ? "#5a6772" : "#aab4bd"
+                                            font.family: "monospace"
+                                            font.pointSize: root.fontPt - 1
+                                            horizontalAlignment: Text.AlignRight }
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // ── every fit so far, and the evidence that compares them ────────
-            //
-            // Δχ² CANNOT compare a sphere with a rapid rotator: more parameters always fit
-            // better, and χ²ᵣ ≫ 1 here anyway. log(Z) can, because the prior volume a model
-            // spends is already in it — and every nested sampler and Pigeons was computing it
-            // all along while the panel showed two numbers per parameter and dropped the rest.
-            //
-            // Fits ACCUMULATE where models do not: fit a sphere, switch surface type, fit
-            // again, and the two rows are the comparison.
-            Label { text: "Fits history"; font.bold: true; font.pointSize: root.fontPt }
-            // The header sits INSIDE the frame, above the list, and the rows carry no padding
-            // of their own. With the header outside it, the two were offset by the Frame's
-            // padding plus the ItemDelegate's — a couple of dozen pixels of style-dependent
-            // inset that no width here could have compensated for, since neither number is
-            // fixed by this file.
-            Frame {
-                Layout.fillWidth: true
-                Layout.preferredHeight: dp(118)
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: dp(2)
-                    RowLayout {
-                        Layout.fillWidth: true
-                        // The rows lose their right edge to the vertical scrollbar and the
-                        // header does not, so the last column drifted by exactly its width.
-                        // Reserved here rather than subtracted from a column, because the bar
-                        // only appears once the list overflows.
-                        Layout.rightMargin: fitScroll.visible ? fitScroll.width : 0
-                        spacing: dp(4)
-                        Label { Layout.preferredWidth: dp(96); text: "method"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
-                        Label { Layout.preferredWidth: dp(34); text: "type"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
-                        Label { Layout.preferredWidth: dp(62); text: "χ²ᵣ"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                horizontalAlignment: Text.AlignRight }
-                        Label { Layout.fillWidth: true; text: "log(Z)"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                horizontalAlignment: Text.AlignRight }
-                        Label { Layout.preferredWidth: dp(76); text: "draws/evals"
-                                color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                horizontalAlignment: Text.AlignRight }
-                    }
-                    ListView {
-                        id: fitList
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
-                        model: fitModel
-                        ScrollBar.vertical: ScrollBar { id: fitScroll }
-                    onCurrentIndexChanged: {
-                        if (currentIndex >= 0) {
-                            root.statusChanged(Julia.shell_select_fit(currentIndex + 1))
-                            root.refreshFits()
-                            postArea.update()
-                        }
-                    }
-                        delegate: ItemDelegate {
-                        width: fitList.width
-                        // Zero horizontal padding: the header above has none either, and the
-                        // default inset is what put the columns out of line with it.
-                        leftPadding: 0
-                        rightPadding: 0
-                        highlighted: ListView.isCurrentItem
-                        onClicked: fitList.currentIndex = index
-                        ToolTip.text: fdiag.length > 0 ? fname + " — " + fdiag : fname
-                        ToolTip.visible: hovered && fname.length > 0
-                        contentItem: RowLayout {
+                // ── every fit so far, and the evidence that compares them ────────
+                //
+                // Δχ² CANNOT compare a sphere with a rapid rotator: more parameters always fit
+                // better, and χ²ᵣ ≫ 1 here anyway. log(Z) can, because the prior volume a model
+                // spends is already in it — and every nested sampler and Pigeons was computing it
+                // all along while the panel showed two numbers per parameter and dropped the rest.
+                //
+                // Fits ACCUMULATE where models do not: fit a sphere, switch surface type, fit
+                // again, and the two rows are the comparison.
+                Label { text: "Fits history"; font.bold: true; font.pointSize: root.fontPt }
+                // The header sits INSIDE the frame, above the list, and the rows carry no padding
+                // of their own. With the header outside it, the two were offset by the Frame's
+                // padding plus the ItemDelegate's — a couple of dozen pixels of style-dependent
+                // inset that no width here could have compensated for, since neither number is
+                // fixed by this file.
+                Frame {
+                    Layout.fillWidth: true
+                    // The LAST frame takes whatever slack the column has — which is where a
+                    // sphere's spare room goes, and where a binary's has run out. It can grow
+                    // but never shrink: the column is at least as tall as its contents, so
+                    // nothing above it is squeezed to make room for it.
+                    Layout.fillHeight: true
+                    Layout.preferredHeight: dp(118)
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: dp(2)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            // The rows lose their right edge to the vertical scrollbar and the
+                            // header does not, so the last column drifted by exactly its width.
+                            // Reserved here rather than subtracted from a column, because the bar
+                            // only appears once the list overflows.
+                            Layout.rightMargin: fitScroll.visible ? fitScroll.width : 0
                             spacing: dp(4)
-                            Label { Layout.preferredWidth: dp(96); text: fmethod
-                                    font.pointSize: root.fontPt - 1; elide: Text.ElideRight }
-                            Label { Layout.preferredWidth: dp(34); text: ftype
-                                    font.pointSize: root.fontPt - 1 }
-                            Label { Layout.preferredWidth: dp(62); text: fchi2r
-                                    font.pointSize: root.fontPt - 1
+                            Label { Layout.preferredWidth: dp(96); text: "method"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
+                            Label { Layout.preferredWidth: dp(34); text: "type"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
+                            Label { Layout.preferredWidth: dp(62); text: "χ²ᵣ"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
                                     horizontalAlignment: Text.AlignRight }
-                            Label { Layout.fillWidth: true
-                                    // The error beside it, because a log(Z) difference smaller
-                                    // than the error is not a preference for either model.
-                                    text: flogz === "—" ? "—" : flogz + " ± " + flogzerr
-                                    font.pointSize: root.fontPt - 1
+                            Label { Layout.fillWidth: true; text: "log(Z)"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
                                     horizontalAlignment: Text.AlignRight }
-                            Label { Layout.preferredWidth: dp(76); text: fns
-                                    color: fns === "0" ? "#a0a6ac" : "#333"
-                                    font.pointSize: root.fontPt - 1
+                            Label { Layout.preferredWidth: dp(76); text: "draws/evals"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
                                     horizontalAlignment: Text.AlignRight }
                         }
-                    }
+                        ListView {
+                            id: fitList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: fitModel
+                            ScrollBar.vertical: ScrollBar { id: fitScroll }
+                        onCurrentIndexChanged: {
+                            if (currentIndex >= 0) {
+                                root.statusChanged(Julia.shell_select_fit(currentIndex + 1))
+                                root.refreshFits()
+                                postArea.update()
+                            }
+                        }
+                            delegate: ItemDelegate {
+                            width: fitList.width
+                            // Zero horizontal padding: the header above has none either, and the
+                            // default inset is what put the columns out of line with it.
+                            leftPadding: 0
+                            rightPadding: 0
+                            highlighted: ListView.isCurrentItem
+                            onClicked: fitList.currentIndex = index
+                            ToolTip.text: fdiag.length > 0 ? fname + " — " + fdiag : fname
+                            ToolTip.visible: hovered && fname.length > 0
+                            contentItem: RowLayout {
+                                spacing: dp(4)
+                                Label { Layout.preferredWidth: dp(96); text: fmethod
+                                        font.pointSize: root.fontPt - 1; elide: Text.ElideRight }
+                                Label { Layout.preferredWidth: dp(34); text: ftype
+                                        font.pointSize: root.fontPt - 1 }
+                                Label { Layout.preferredWidth: dp(62); text: fchi2r
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                                Label { Layout.fillWidth: true
+                                        // The error beside it, because a log(Z) difference smaller
+                                        // than the error is not a preference for either model.
+                                        text: flogz === "—" ? "—" : flogz + " ± " + flogzerr
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: dp(76); text: fns
+                                        color: fns === "0" ? "#a0a6ac" : "#333"
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                            }
+                        }
+                        }
                     }
                 }
             }

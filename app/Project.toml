@@ -1,0 +1,65 @@
+# The application package.
+#
+# `PackageCompiler.create_app` needs a PACKAGE — a name, a uuid and an entry point — and `bin/`
+# is deliberately not one (it has no name/uuid: it is an environment, not a package). This is
+# `bin/` restated as a package so that `create_app` has something to build, with the same GUI
+# stack pinned the same way.
+#
+#     xvfb-run -a julia --project=bin app/build.jl        # build the bundle (tens of minutes)
+#     xvfb-run -a julia --project=app -e 'using ROTIRApp; ROTIRApp.run_app(; autoquit_ms=8000)'
+#
+# NOT a member of the root [workspace]. A workspace shares one manifest across its members,
+# which is right for docs and bin — they are developed together — and wrong here: an
+# application wants its own pinned, reproducible resolve, and `create_app` instantiates the
+# project it is given.
+#
+# PackageCompiler is deliberately absent. It is needed by `app/build.jl`, not by the
+# application, and a dependency here would be compiled into the bundle; `bin/` carries it,
+# which is why the build is run with `--project=bin`.
+
+name = "ROTIRApp"
+uuid = "a751a28a-dfa2-407b-90d8-0f45fb84a2ec"
+version = "0.1.0"
+authors = ["Fabien Baron <fbaron@gsu.edu>"]
+
+[deps]
+GLFW_jll = "0656b61e-2033-5cc2-a64a-77c0f6c09b89"
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
+QML = "2db162a6-7e43-52c3-8d84-290c1c42d82a"
+QMLMakie = "08f9cac3-3b11-4f1c-9d88-d0e81c500f64"
+ROTIR = "1effc416-1cd3-435e-ba3b-8cf647137d25"
+
+# The optional engines are ORDINARY dependencies here, not suggestions. An application cannot
+# offer to install anything — its depot is read-only and its user never installed Julia — so an
+# engine that is not bundled is one that is permanently greyed out in the fit-method list. All
+# of these are pure Julia and cost only load time.
+#
+# Each one buys a specific entry in the GUI, via the matching extension:
+#   Nautilus                      -> "Nested sampling"          (ROTIRNautilusExt)
+#   Zygote                        -> the gradient fit           (ROTIRZygoteExt)
+#   AdvancedHMC + LogDensityProblems -> "NUTS"                  (ROTIRHMCExt)
+#   Pigeons + Distributions + ADTypes -> "Tempering"            (ROTIRPigeonsExt)
+#   LoopVectorization             -> the `:turbo` polygon-FT kernel (ROTIRLoopVectorizationExt)
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
+Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
+Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
+Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
+
+# PythonCall and PythonPlot are deliberately absent: they would pull a ~1.6 GB Conda
+# environment and map a SECOND Qt into the process, which is the conflict `check_qt_conflict`
+# exists to diagnose. The application therefore ships without UltraNest (Nautilus covers nested
+# sampling) and without the matplotlib figures (everything on screen is Makie).
+
+[sources]
+Nautilus = {url = "https://github.com/fabienbaron/Nautilus.jl.git"}
+OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
+ROTIR = {path = ".."}
+
+[compat]
+julia = "1.12"

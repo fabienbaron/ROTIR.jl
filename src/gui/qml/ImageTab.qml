@@ -352,14 +352,6 @@ Pane {
                 }
             }
 
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                color: "#7f8c98"
-                font.pointSize: root.fontPt - 1
-                text: "The reconstruction sits on the current model's geometry — set the shape " +
-                      "on the Model tab first. The engine's trace appears in the console as it runs."
-            }
         }
 
         ColumnLayout {

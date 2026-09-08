@@ -141,6 +141,45 @@ destroy real structure: [Radial Regularizers](radial_regularizers.md).
 | `binary_observables(x1, star1, x2, star2, data, phase_shift)` | Returns `(v2, t3amp, t3phi)` for a binary model |
 | `binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose)` | Binary chi-squared (value only) |
 
+## Binary imaging
+
+Both surfaces of a binary, reconstructed at a separation the orbit (or a fitted offset)
+already fixes. The unknown is the two maps **concatenated**, `[x1; x2]`, split at
+`stars1[1].npix`; `split_binary_map` takes them apart again.
+
+| Function | Description |
+|----------|-------------|
+| `binary_chi2_fg(x1, g1, star1, x2, g2, star2, data, phase_shift)` | One epoch's chi-squared and the gradient w.r.t. **both** maps |
+| `binary_crit_allepochs_fg(x, g, stars1, stars2, data, phase_shifts; regularizers1, regularizers2, epochs_weights)` | The criterion a binary reconstruction minimises |
+| `binary_reconstruct_oi(x_start, data, stars1, stars2, phase_shifts; maxiter, regularizers1, regularizers2, callback)` | VMLMB over both maps |
+| `split_binary_map(x, stars1)` | Views of the two halves |
+
+```julia
+stars1 = create_star_multiepochs(tess, p1, tepochs; secondary = false)
+stars2 = create_star_multiepochs(tess, p2, tepochs; secondary = true)
+setup_oi!(data, stars1); setup_oi!(data, stars2)      # both: the dense route is what runs
+# The separation is fixed through the run — it comes from the orbit, it is not fitted here.
+shifts = [binary_phase_shift(data[i].uv, offs[i]...) for i in eachindex(data)]
+x0 = vcat(parametric_temperature_map(p1, stars1[1]),
+          parametric_temperature_map(p2, stars2[1]; secondary = true))
+x  = binary_reconstruct_oi(x0, data, stars1, stars2, shifts;
+                           regularizers1 = regs1, regularizers2 = regs2, maxiter = 200)
+map1, map2 = split_binary_map(x, stars1)
+```
+
+Two regularizer lists, and neither defaults to the other: an entry carries a structure built
+from *its* star (`radflat_bins` bins that component's radii, `orthold_direction` is that
+component's degenerate direction), so the primary's list applied to the secondary regularizes
+it against the wrong shape. A subset in element 4 indexes its own component's map, not the
+concatenated vector.
+
+`intensity_model = :planck` is not available on this path: it makes the map a temperature and
+the brightness a nonlinear function of it, while this derivative is the linear one — the same
+restriction `spheroid_chi2_fg` carries.
+
+The GUI's Imaging tab does not drive this yet; it reconstructs a single component and refuses
+a model with a companion rather than silently imaging the primary alone.
+
 ## Parametric fitting
 
 | Function | Description |

@@ -80,6 +80,10 @@ end
     # skips itself and the backend it is meant to pin goes untested.
     include(joinpath(TESTDIR, "test_binary_cvis.jl"))
 
+    # The binary IMAGING gradient: finite differences on both components, and the reduction
+    # to `spheroid_chi2_fg` when the secondary is dark.
+    include(joinpath(TESTDIR, "test_binary_imaging.jl"))
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions

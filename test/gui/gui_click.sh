@@ -221,9 +221,12 @@ CL "$(FX 218)" "$(FY 252)" 2          # "Radius x" state combo -> popup
 KEY Down 1                            # fixed -> free
 KEY Return 2
 SHOT 06b_param_freed
-CL "$(FX 294)" "$(FY 504)" 4          # Fit: enabled only when something is free
+# RE-READ after the parameter form stopped being a fixed-height scrolling box: it is now as
+# tall as its content, so the whole of an ellipsoid's thirteen parameters is on the page and
+# everything below the form has moved DOWN — Fit from y=504 to y=767 in window fractions.
+CL "$(FX 294)" "$(FY 767)" 4          # Fit: enabled only when something is free
 SHOT 06c_fit_started
-CL "$(FX 357)" "$(FY 529)" 3          # Stop, so the rest of the run is not racing a job
+CL "$(FX 357)" "$(FY 767)" 3          # Stop, so the rest of the run is not racing a job
 
 CL "$(FX 491)" "$(FY 89)" 3           # Mollweide
 SHOT 07_view_mollweide

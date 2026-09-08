@@ -364,10 +364,59 @@ end
         G.parse_regularizers("radflat:100:6"), 3, bare, x0, p)
 end
 
+# Shipped resources through `ROTIR.resource`, not `pkgdir`.
+#
+# This is what makes an application bundle possible: `create_app` copies no package source, so
+# `pkgdir(ROTIR)` inside a bundle names a directory on the machine that BUILT it. Every lookup
+# that reaches a shipped file has to go through `resource`, and the failure mode of a
+# reintroduced `pkgdir` is silent on this machine — the checkout is still there — and only
+# shows up in a bundle. `$ROTIR_RESOURCE_DIR` is what lets the whole mechanism be driven
+# without building one.
+@testset "shipped resources relocate" begin
+    @test ROTIR.resource("no", "such", "thing") === nothing
+    @test ROTIR.resource_dir() !== nothing              # a checkout is a valid root
+
+    stage = mktempdir()
+    mkpath(joinpath(stage, "src", "gui"))
+    mkpath(joinpath(stage, "demos"))
+    cp(joinpath(pkgdir(ROTIR), "src", "gui", "qml"), joinpath(stage, "src", "gui", "qml"))
+    mkpath(joinpath(stage, "demos", "data"))
+    mkpath(joinpath(stage, "demos", "orbits"))
+
+    withenv("ROTIR_RESOURCE_DIR" => stage) do
+        @test ROTIR.resource_dir() == stage
+        # The forced root WINS over the checkout, or a bundle could be shadowed by whatever
+        # happened to be sitting at pkgdir.
+        for parts in (("src", "gui", "qml", "Main.qml"), ("demos", "data"), ("demos", "orbits"))
+            p = ROTIR.resource(parts...)
+            @test p !== nothing
+            @test startswith(something(p, ""), stage)
+        end
+        # ...and the call sites follow it. These are the four that a bundle breaks.
+        @test occursin(stage, G._initial_folder(G.Session()))
+        @test any(r -> occursin(stage, r), rows(G.picker_places()))
+    end
+
+    # Outside the block the checkout answers again, so nothing leaked into global state.
+    @test !startswith(something(ROTIR.resource("demos", "data"), ""), stage)
+end
+
 @testset "reconstruction" begin
     sh = fresh_shell()
     G.shell_open(LAM[1], "0")
     @test occursin("no model", G.shell_reconstruct(3, "sobel2:10:0", 5))
+    # A BINARY is refused, not reconstructed as its primary. This panel builds one `stars`
+    # vector from the primary's parameters, so with a companion in the model it fitted one
+    # surface against data containing two and reported a χ² for it — a meaningless map that
+    # nothing on screen distinguished from a good one.
+    G.shell_add_model(0)
+    G.shell_set_binary("1", 0)
+    let msg = G.shell_reconstruct(3, "sobel2:10:0", 5)
+        @test occursin("one component", msg)
+        @test occursin("binary_reconstruct_oi", msg)
+    end
+    @test sh.job === nothing          # refused BEFORE a worker was started
+    G.shell_clear_model()
     G.shell_add_model(2)
     G.shell_set_param("rpole", "1.37131")
     G.shell_set_param("tpole", "4800.0")

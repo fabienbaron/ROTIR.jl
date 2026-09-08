@@ -299,16 +299,6 @@ Pane {
                                        : "V² / T3amp / T3phi columns: point counts (no model yet)"
             }
 
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                font.pointSize: root.fontPt - 1
-                color: "#7f8c98"
-                text: epochModel.count === 0
-                      ? "No dataset. Open an OIFITS — one file is split on gaps in its V² " +
-                        "timestamps; several files become several epochs of one dataset."
-                      : "t is days since the first epoch, which is what the rotation phase uses."
-            }
         }
 
         // ── right: one view at a time ────────────────────────────────────────

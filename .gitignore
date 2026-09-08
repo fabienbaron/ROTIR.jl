@@ -54,3 +54,7 @@ Manifest.toml
 *.log
 *.out
 *.synctex.gz
+
+# The application bundle built by app/build.jl: the sysimage, Julia's libraries, every artifact
+# it depends on and the staged resources — a gigabyte or so of generated output.
+build/

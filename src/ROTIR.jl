@@ -22,6 +22,9 @@ import FITSIO: read_header
 import Dates
 import TOML          # read [sources] back in src/gui_launcher.jl
 
+# Resource lookup, before anything that reads a shipped file: an application bundle has no
+# package directory, so `pkgdir` cannot be the answer. See src/resources.jl.
+include("resources.jl");
 include("oistars.jl");
 include("surface_schema.jl");
 include("surface_map_io.jl");
@@ -268,6 +271,7 @@ export binary_orbit_rel, binary_orbit_abs, binary_RV, binary_proj_plane
 
 # OI chi2 and reconstruction
 export setup_oi!, setup_polygon_ft, setup_polyflux_single, setup_polyft_single, setup_polyft_single_alt
+export resource, resource_dir
 export observables, cvis_to_obs, cvis_chi2, OI_DEFAULT_WEIGHTS, chi2s, chi2_breakdown, mod360
 export spheroid_chi2_f, spheroid_chi2_fg
 # NOTE four names were exported here without ever being defined —
@@ -287,6 +291,7 @@ export cvis_to_v2, poly_to_cvis, poly_to_flux, cvis_to_t3
 
 # Binary forward model
 export binary_phase_shift, binary_cvis, binary_observables, binary_chi2_f, orbit_to_rotir_offset
+export binary_chi2_fg, binary_crit_allepochs_fg, binary_reconstruct_oi, split_binary_map
 
 # Soft visibility
 export sigmoid, dsigmoid, soft_visibility
