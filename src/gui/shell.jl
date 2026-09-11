@@ -687,7 +687,7 @@ function shell_set_binary(on, surface_type = 3)
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
-    if String(on) == "1"
+    if _qmlstr(on) == "1"
         if m.companion === nothing
             st = round(Int, Float64(surface_type))
             st in SURFACE_TYPE_ORDER || return "unknown surface type $(st)"
@@ -748,7 +748,8 @@ function shell_set_binary_placement(mode)
     sh = _sh()
     c = _companion(sh)
     c === nothing && return "not a binary"
-    md = Symbol(String(mode))
+    md = _qmlname(mode)
+    md === nothing && return "placement must be orbit or offset"
     md in (:orbit, :offset) || return "placement must be orbit or offset"
     # THE MODE ONLY. The offset itself belongs to the position parameters and is written by
     # `shell_set_position_param`; this used to take x, y and z as well, and since the panel
@@ -789,11 +790,13 @@ function shell_set_param2(name, value)
     sh = _sh()
     c = _companion(sh)
     c === nothing && return "not a binary"
-    Symbol(String(name)) in _derived_names(current_model(sh.session)) && return ORBIT_ORIENTS
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    n in _derived_names(current_model(sh.session)) && return ORBIT_ORIENTS
     v = _qmlreal(value, NaN)
     isnan(v) && return "not a number: $(value)"
-    c.params[Symbol(String(name))] = v
-    Symbol(String(name)) === :ldtype && _reset_unused_ld!(c)
+    c.params[n] = v
+    n === :ldtype && _reset_unused_ld!(c)
     sh.chi2key[] = nothing
     refresh_both!(sh)
     return ""
@@ -814,9 +817,10 @@ binary are rarely the same kind of thing. So it gets the same four setters and t
 function shell_set_param_state2(name, state)
     sh = _sh(); c = _companion(sh)
     c === nothing && return "not a binary"
-    n = Symbol(String(name))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
     n in _derived_names(current_model(sh.session)) && return ORBIT_ORIENTS
-    return _set_state!(sh, c, n, String(state))
+    return _set_state!(sh, c, n, _qmlstr(state))
 end
 
 function shell_set_bound2(name, lo, hi)
@@ -825,14 +829,18 @@ function shell_set_bound2(name, lo, hi)
     l = _qmlreal(lo, NaN); h = _qmlreal(hi, NaN)
     (isnan(l) || isnan(h)) && return "bounds must be numbers"
     l < h || return "lower bound must be below upper"
-    c.bounds[Symbol(String(name))] = (l, h)
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    c.bounds[n] = (l, h)
     return ""
 end
 
 function shell_set_tie2(name, expr)
     sh = _sh(); c = _companion(sh)
     c === nothing && return "not a binary"
-    n = Symbol(String(name)); e = strip(String(expr))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    e = strip(_qmlstr(expr))
     isempty(e) ? delete!(c.ties, n) : (c.ties[n] = String(e))
     sh.chi2key[] = nothing
     refresh_both!(sh)
@@ -898,7 +906,8 @@ function shell_set_position_param(name, value)
     c === nothing && return "not a binary"
     v = _qmlreal(value, NaN)
     isnan(v) && return "not a number: $(value)"
-    n = Symbol(String(name))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
     i = findfirst(q -> q[1] === n, POSITION_PARAMS)
     i === nothing && return "unknown position parameter $(name)"
     o = collect(c.offset); o[POSITION_PARAMS[i][3]] = v
@@ -914,7 +923,9 @@ function shell_set_position_state(name, state)
     c === nothing && return "not a binary"
     c.place === :offset ||
         return "the orbit places the secondary; switch to a fixed offset to free these"
-    return _set_state!(sh, c, Symbol(String(name)), String(state))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    return _set_state!(sh, c, n, _qmlstr(state))
 end
 
 "Bounds for one position component."
@@ -1136,8 +1147,9 @@ function shell_set_binary_orbit_param(name, value)
     sh = _sh()
     m = current_model(sh.session)
     (m === nothing || m.companion === nothing) && return "not a binary"
-    n = Symbol(String(name))
-    n in ORBIT_PARAM_NAMES || return "unknown orbital parameter $(name)"
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    n in ORBIT_PARAM_NAMES || return "unknown orbital parameter $(n)"
     haskey(ORBIT_ELEMENT_OF, n) && m.companion.place === :orbit && return ORBIT_TAB_OWNS
     v = _qmlreal(value, NaN)
     isnan(v) && return "not a number: $(value)"
@@ -1167,20 +1179,22 @@ function shell_set_binary_orbit_state(name, state)
     sh = _sh()
     m = current_model(sh.session)
     (m === nothing || m.companion === nothing) && return "not a binary"
-    n = Symbol(String(name))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
     own = _orbit_owner(m, n)
-    own === nothing && return "unknown orbital parameter $(name)"
+    own === nothing && return "unknown orbital parameter $(n)"
     haskey(ORBIT_ELEMENT_OF, n) && m.companion.place === :orbit && return ORBIT_TAB_OWNS
-    return _set_state!(sh, own, n, String(state))
+    return _set_state!(sh, own, n, _qmlstr(state))
 end
 
 "Bounds for one shared orbital parameter."
 function shell_set_binary_orbit_bound(name, lo, hi)
     m = current_model(_sh().session)
     (m === nothing || m.companion === nothing) && return "not a binary"
-    n = Symbol(String(name))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
     own = _orbit_owner(m, n)
-    own === nothing && return "unknown orbital parameter $(name)"
+    own === nothing && return "unknown orbital parameter $(n)"
     l = _qmlreal(lo, NaN); h = _qmlreal(hi, NaN)
     (isnan(l) || isnan(h)) && return "bounds must be numbers"
     l < h || return "lower bound must be below upper"
@@ -1193,11 +1207,12 @@ function shell_set_binary_orbit_tie(name, expr)
     sh = _sh()
     m = current_model(sh.session)
     (m === nothing || m.companion === nothing) && return "not a binary"
-    n = Symbol(String(name))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
     own = _orbit_owner(m, n)
-    own === nothing && return "unknown orbital parameter $(name)"
+    own === nothing && return "unknown orbital parameter $(n)"
     haskey(ORBIT_ELEMENT_OF, n) && m.companion.place === :orbit && return ORBIT_TAB_OWNS
-    e = strip(String(expr))
+    e = strip(_qmlstr(expr))
     isempty(e) ? delete!(own.ties, n) : (own.ties[n] = String(e))
     sh.chi2key[] = nothing
     refresh_both!(sh)
@@ -1267,8 +1282,18 @@ _qmlreal(x, default::Real) =
     _qmlstr(x, default = "") -> String
 
 Text arriving from QML, or `default` when QML sent nothing. See [`_qmlreal`](@ref).
+
+TOTAL, on every shape QML sends, because the alternative is a frozen window. `String(x)` alone
+has no method for `Int32`, `Float64` or `Nothing` — a `CheckBox` bound through a numeric
+property, a `Slider`, and a recycled delegate respectively — and each of those is a
+`MethodError` that escapes `QML.julia_call`. A number becomes its decimal text, which no flag
+comparison will match, so the caller REFUSES instead of freezing.
 """
-_qmlstr(x, default::AbstractString = "") = x === nothing ? String(default) : String(x)
+_qmlstr(x, default::AbstractString = "") =
+    x === nothing         ? String(default) :
+    x isa AbstractString  ? String(x) :
+    x isa Real            ? string(x) :
+    String(x)                     # QML's own string type, which has a `String` constructor
 
 """
     _qmlname(x) -> Symbol or nothing
@@ -1285,7 +1310,10 @@ The QML side captures the row's identity at construction so this should not aris
 callback that cannot be reached from a dead row is worth guaranteeing on this side too: every
 entry point that takes a name from QML goes through here and REFUSES rather than throws.
 """
-_qmlname(x) = x === nothing ? nothing : Symbol(String(x))
+_qmlname(x) = x === nothing ? nothing : Symbol(_qmlstr(x))
+
+"The refusal every name-taking entry point returns when QML had no name to give."
+const NO_QML_NAME = "no parameter named by the form (the row went away before the edit landed)"
 
 """
     shell_set_param(name, value) -> String
@@ -1298,7 +1326,7 @@ function shell_set_param(name, value)
     m = current_model(sh.session)
     m === nothing && return "no model"
     n = _qmlname(name)
-    n === nothing && return "no parameter named by the form (the row went away before the edit landed)"
+    n === nothing && return NO_QML_NAME
     n in _derived_names(m) && return ORBIT_ORIENTS
     v = _qmlreal(value, NaN)
     isnan(v) && return "not a number: $(value)"
@@ -1317,9 +1345,10 @@ function shell_set_param_state(name, state)
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
-    n = Symbol(String(name))
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
     n in _derived_names(m) && return ORBIT_ORIENTS
-    return _set_state!(sh, m, n, String(state))
+    return _set_state!(sh, m, n, _qmlstr(state))
 end
 
 """
@@ -1367,7 +1396,9 @@ function shell_set_bound(name, lo, hi)
     l = _qmlreal(lo, NaN); h = _qmlreal(hi, NaN)
     (isnan(l) || isnan(h)) && return "bounds must be numbers"
     l < h || return "lower bound must be below upper"
-    m.bounds[Symbol(String(name))] = (l, h)
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    m.bounds[n] = (l, h)
     return ""
 end
 
@@ -1383,7 +1414,9 @@ function shell_set_tie(name, expr)
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
-    n = Symbol(String(name)); e = String(expr)
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    e = _qmlstr(expr)
     m.ties[n] = e
     delete!(m.free, n)
     v = eval_tie(e, m.params)
@@ -1439,7 +1472,7 @@ that the default for everything.
 """
 function shell_set_tessellation(kind, nside_exp, precision)
     sh = _sh()
-    k = Symbol(String(kind))
+    k = Symbol(_qmlstr(kind))
     k === :healpix || return "only :healpix is wired; :longlat has no regularizers or gradients"
     sh.tessel[] = k
     sh.nside_exp[] = clamp(Int(nside_exp), 2, 6)
@@ -1489,7 +1522,7 @@ other one.
 """
 function shell_set_polyft_backend(kind)
     sh = _sh()
-    k = Symbol(String(kind))
+    k = Symbol(_qmlstr(kind))
     k in (:nufft, :turbo, :scalar) || return "backend must be nufft, turbo or scalar"
     # `:turbo` needs LoopVectorization, which ROTIR does NOT load: measured, loading it
     # invalidates OITOOLS' precompiled canvas code and takes one `build_canvas` from 341 ms to
@@ -1626,9 +1659,10 @@ Turn one decoration on or off, everywhere.
 """
 function shell_set_decoration(name, on)
     sh = _sh()
-    k = Symbol(String(name))
+    k = _qmlname(name)
+    k === nothing && return NO_QML_NAME
     haskey(sh.decor, k) || return "unknown decoration $(name)"
-    sh.decor[k] = String(on) == "1"
+    sh.decor[k] = _qmlstr(on) == "1"
     refresh_both!(sh)
     refresh_image_tab!(sh)
     return ""
@@ -1665,7 +1699,7 @@ current dataset", which is almost always what is wanted and is one fewer number 
 function shell_set_surface_field(intensity, model, band_um)
     sh = _sh()
     sh.intensity[] = String(intensity) == "1"
-    m = Symbol(String(model))
+    m = Symbol(_qmlstr(model))
     m in (:linear, :planck) || return "unknown intensity model $(model)"
     sh.intensity_model[] = m
     b = _qmlreal(band_um, 0.0)
@@ -2257,7 +2291,7 @@ prediction, and whether the y axis is logarithmic.
 """
 function shell_set_obs_view(kind, color, overlay, logy, maxbaseline = "0")
     sh = _sh()
-    k = String(kind)
+    k = _qmlstr(kind)
     # A closure quantity can be plotted against the geometric mean of its triangle's baselines
     # or against the LONGEST leg — the resolution the closure actually probes. Same data, so it
     # is a modifier on the view rather than a view of its own.
@@ -2265,7 +2299,7 @@ function shell_set_obs_view(kind, color, overlay, logy, maxbaseline = "0")
         k *= "_max"
     end
     sh.obskind[]    = Symbol(k)
-    sh.obscolor[]   = Symbol(String(color))
+    sh.obscolor[]   = Symbol(_qmlstr(color))
     sh.obsoverlay[] = String(overlay) == "1"
     sh.obslog[]     = String(logy) == "1"
     return refresh_obs!(sh)
@@ -2379,7 +2413,7 @@ function shell_set_colormap(name)
     sh = _sh()
     ok = false
     for c in (sh.sky, sh.msky, sh.star, sh.moll, sh.imsky, sh.immoll)
-        ok |= set_colormap!(c, String(name))
+        ok |= set_colormap!(c, _qmlstr(name))
     end
     # The Mollweide computes its colours from the map, so it has to be redrawn rather than
     # re-tinted; the sky canvases keep their values and `set_colormap!` remaps them in place.
@@ -2910,7 +2944,7 @@ function shell_fit(method, maxeval)
     isempty(names) && return isbin ?
         "nothing is free — mark a parameter free on either component, or a position" :
         "nothing is free — mark at least one parameter free"
-    meth = Symbol(String(method))
+    meth = Symbol(_qmlstr(method))
     # Named before the membership test, so asking for it gets the REASON rather than
     # "unknown method" — it is a method ROTIR has and the GUI declines, not a typo.
     meth === :ultranest &&

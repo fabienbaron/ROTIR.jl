@@ -1584,6 +1584,90 @@ end
     @test isempty(sh.orbitcanvas.cursorlabel[])
 end
 
+@testset "no callback throws on the shapes QML sends" begin
+    # THE FREEZE CLASS. An exception thrown inside a Julia callback escapes through
+    # `QML.julia_call` and stops the whole window responding — no error on screen, nothing in
+    # the console, just a dead GUI. So for these entry points "does not throw" is the property
+    # that matters, ahead of what they return.
+    #
+    # The shapes are the ones QML really sends: a TextField gives a String, a SpinBox an
+    # Int32, a Slider a Float64, and a RECYCLED DELEGATE gives `undefined`, which arrives as
+    # `nothing` — `onEditingFinished` fires on focus loss and can run after its row's model
+    # context is gone. `String(::Int32)`, `String(::Float64)` and `String(::Nothing)` all have
+    # no method, and every one of those was a reachable freeze.
+    shapes = Any["1", "0", "", "abc", Int32(1), Int32(-1), 0.0, 1.0, -5.0, nothing]
+
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    G.shell_add_model(G.BINARY_CODE)
+
+    # `f(args...)` must return, whatever it returns. A refusal is fine; a throw is not.
+    function survives(f, args...)
+        try
+            f(args...)
+            return true
+        catch err
+            @error "callback threw — this freezes the window" f args err
+            return false
+        end
+    end
+
+    for a in shapes
+        # name-taking setters: the recycled-delegate case is `nothing` here
+        @test survives(G.shell_set_param, a, "1.0")
+        @test survives(G.shell_set_param_state, a, "free")
+        @test survives(G.shell_set_bound, a, "0", "1")
+        @test survives(G.shell_set_tie, a, "x")
+        @test survives(G.shell_set_param2, a, "1.0")
+        @test survives(G.shell_set_param_state2, a, "free")
+        @test survives(G.shell_set_bound2, a, "0", "1")
+        @test survives(G.shell_set_tie2, a, "x")
+        @test survives(G.shell_set_position_param, a, "1.0")
+        @test survives(G.shell_set_position_state, a, "free")
+        @test survives(G.shell_set_binary_orbit_param, a, "1.0")
+        @test survives(G.shell_set_binary_orbit_state, a, "free")
+        @test survives(G.shell_set_binary_orbit_bound, a, "0", "1")
+        @test survives(G.shell_set_binary_orbit_tie, a, "x")
+        @test survives(G.shell_set_orbit_param, a, "1.0")
+        @test survives(G.shell_set_orbit_state, a, "free")
+        @test survives(G.shell_set_orbit_bound, a, "0", "1")
+        @test survives(G.shell_set_orbit_tie, a, "x")
+        @test survives(G.shell_set_orbit_render_param, a, "1.0")
+        @test survives(G.shell_set_decoration, a, "1")
+        # and the VALUE side of the same calls
+        @test survives(G.shell_set_param, "rpole", a)
+        @test survives(G.shell_set_binary_orbit_param, "a", a)
+        @test survives(G.shell_set_orbit_param, "a", a)
+        @test survives(G.shell_set_binary_orbit_state, "a", a)
+        @test survives(G.shell_set_binary_orbit_bound, "a", a, a)
+        @test survives(G.shell_set_binary_orbit_tie, "a", a)
+        # flags and choices, which arrive from ticks and combos
+        @test survives(G.shell_set_decoration, "limb", a)
+        @test survives(G.shell_set_binary, a, 3)
+        @test survives(G.shell_set_binary_placement, a)
+        @test survives(G.shell_set_surface_field, a, "linear", "0")
+        @test survives(G.shell_set_surface_field, "1", a, "0")
+        @test survives(G.shell_set_orbit_option, a, "1")
+        @test survives(G.shell_set_orbit_option, "render", a)
+        @test survives(G.shell_set_orbit_star_model, a)
+        @test survives(G.shell_set_orbit_component, a, "uniform")
+        @test survives(G.shell_set_times, a, a, a, a)
+        @test survives(G.shell_set_time_index, a)
+        @test survives(G.shell_step_time, a)
+        @test survives(G.shell_set_graticule, a, a, "black")
+        @test survives(G.shell_set_colormap, a)
+    end
+
+    # And the READERS, which QML calls on every refresh: one of these throwing freezes the
+    # window on a tab switch rather than on an edit, which is harder to place.
+    for f in (G.shell_params, G.shell_params2, G.shell_position_params,
+              G.shell_binary_orbit_params, G.shell_orbit_params, G.shell_times,
+              G.shell_binary_placement, G.shell_free_count, G.shell_surface_field,
+              G.shell_epochs, G.shell_models, G.shell_validate_model)
+        @test survives(f)
+    end
+end
+
 @testset "the surface map as a file" begin
     sh = fresh_shell()
     # Nothing to save is a message, not an exception.

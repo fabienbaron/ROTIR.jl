@@ -770,16 +770,20 @@ end
 
 function shell_set_orbit_param(name, value)
     sh = _sh()
-    v = tryparse(Float64, String(value))
-    v === nothing && return "not a number: $(value)"
-    sh.orbit.params[Symbol(String(name))] = v
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    v = _qmlreal(value, NaN)
+    isnan(v) && return "not a number: $(value)"
+    sh.orbit.params[n] = v
     refresh_orbit!(sh)
     return ""
 end
 
 function shell_set_orbit_state(name, state)
     sh = _sh(); o = sh.orbit
-    n = Symbol(String(name)); s = String(state)
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    s = _qmlstr(state)
     if s == "free";      push!(o.free, n); delete!(o.ties, n)
     elseif s == "fixed"; delete!(o.free, n); delete!(o.ties, n)
     elseif s == "tied";  delete!(o.free, n); haskey(o.ties, n) || (o.ties[n] = "")
@@ -790,16 +794,20 @@ end
 
 function shell_set_orbit_bound(name, lo, hi)
     sh = _sh()
-    l = tryparse(Float64, String(lo)); h = tryparse(Float64, String(hi))
-    (l === nothing || h === nothing) && return "bounds must be numbers"
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    l = _qmlreal(lo, NaN); h = _qmlreal(hi, NaN)
+    (isnan(l) || isnan(h)) && return "bounds must be numbers"
     l < h || return "lower bound must be below upper"
-    sh.orbit.bounds[Symbol(String(name))] = (l, h)
+    sh.orbit.bounds[n] = (l, h)
     return ""
 end
 
 function shell_set_orbit_tie(name, expr)
     sh = _sh(); o = sh.orbit
-    n = Symbol(String(name)); e = String(expr)
+    n = _qmlname(name)
+    n === nothing && return NO_QML_NAME
+    e = _qmlstr(expr)
     o.ties[n] = e; delete!(o.free, n)
     v = eval_tie(e, o.params)
     v === nothing && return isempty(strip(e)) ? "" : "does not evaluate yet"
@@ -833,7 +841,7 @@ swapping a pair of disks for a pair of Roche lobes must not move the secondary.
 """
 function shell_set_orbit_star_model(kind)
     sh = _sh(); o = sh.orbit
-    k = Symbol(String(kind))
+    k = Symbol(_qmlstr(kind))
     k in (:analytic, :tessellated) || return "star model must be analytic or tessellated"
     # The 3-D components ARE the Model tab's binary — its two parameter sets, its limb
     # darkening, its β — rather than a second thin description that can disagree with it.
@@ -873,9 +881,9 @@ otherwise, so switching a disk to a Gaussian and back does not lose the diameter
 """
 function shell_set_orbit_component(which, kind)
     sh = _sh(); o = sh.orbit
-    k = Symbol(String(kind))
+    k = Symbol(_qmlstr(kind))
     k in (Symbol(x[1]) for x in ORBIT_COMPONENT_KINDS) || return "unknown kind $(kind)"
-    w = String(which)
+    w = _qmlstr(which)
     if w == "1"; o.kind1 = k; _seed_component!(o.params, k, :c1)
     elseif w == "2"; o.kind2 = k; _seed_component!(o.params, k, :c2)
     else return "component must be 1 or 2"
@@ -915,8 +923,8 @@ end
 
 function shell_set_orbit_option(name, on)
     sh = _sh(); o = sh.orbit
-    v = String(on) == "1"
-    n = String(name)
+    v = _qmlstr(on) == "1"
+    n = _qmlstr(name)
     n == "render"      ? (o.render = v)      :
     n == "roche"       ? (o.roche = v)       :
     n == "irradiation" ? (o.irradiation = v) :
@@ -932,10 +940,11 @@ shell_orbit_render_params() = (o = _sh().orbit;
 
 function shell_set_orbit_render_param(name, value)
     sh = _sh()
-    v = tryparse(Float64, String(value))
-    v === nothing && return "not a number: $(value)"
-    f = Symbol(String(name))
-    f in (:rpole1, :rpole2, :tpole1, :tpole2, :q) || return "unknown field $(name)"
+    v = _qmlreal(value, NaN)
+    isnan(v) && return "not a number: $(value)"
+    f = _qmlname(name)
+    f === nothing && return NO_QML_NAME
+    f in (:rpole1, :rpole2, :tpole1, :tpole2, :q) || return "unknown field $(f)"
     setfield!(sh.orbit, f, v)
     refresh_orbit!(sh)
     return ""
@@ -1046,7 +1055,7 @@ Tick the Times row and set its range. Empty or unparseable fields keep the resol
 """
 function shell_set_times(on, start, stop, step)
     sh = _sh()
-    sh.times.on = String(on) == "1"
+    sh.times.on = _qmlstr(on) == "1"
     a = _qmlreal(start, NaN); b = _qmlreal(stop, NaN); st = _qmlreal(step, NaN)
     sh.times.start = a
     sh.times.stop  = b
@@ -1103,7 +1112,7 @@ function shell_fit_orbit(method, maxeval)
     d = current_dataset(sh.session)
     d === nothing && return "no dataset"
     isempty(o.free) && return "nothing is free — mark at least one parameter free"
-    meth = Symbol(String(method))
+    meth = Symbol(_qmlstr(method))
     # No `:ultranest`: the GUI is Python-free by construction, so the method that would need
     # PythonCall is not offered here at all. `fit_orbit(...; method = :ultranest)` still works
     # from a script that loads it.
