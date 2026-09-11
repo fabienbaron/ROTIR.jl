@@ -284,12 +284,13 @@ Segments are joined into ONE line plot with NaN separators rather than one `line
 Makie breaks a polyline at NaN, so a graticule with a hundred occlusion-clipped runs stays a
 single plot object. That matters for the GUI, where the plot pool is fixed at construction.
 """
-function draw_graticules_makie!(ax, star; nlat = 5, nlon = 8, color = :black,
+function draw_graticules_makie!(ax, star; nlat = 5, nlon = 8, dlat = NaN, dlon = NaN,
+                                color = :black,
                                 linewidth = 0.8, alpha = 0.5,
                                 offset_west = 0.0, offset_north = 0.0,
                                 inclination = NaN, position_angle = NaN,
                                 npoints = 200, star_params = nothing, limb = true)
-    segs = graticule_segments(star; nlat, nlon, offset_west, offset_north,
+    segs = graticule_segments(star; nlat, nlon, dlat, dlon, offset_west, offset_north,
                               inclination, position_angle, npoints, star_params)
     limb && draw_limb_makie!(ax, star; offset_west, offset_north,
                              color = color, linewidth = linewidth, alpha = alpha)
@@ -299,7 +300,14 @@ function draw_graticules_makie!(ax, star; nlat = 5, nlon = 8, color = :black,
         append!(pts, (Makie.Point2f(s[i, 1], s[i, 2]) for i in axes(s, 1)))
         push!(pts, Makie.Point2f(NaN, NaN))          # break, not a join to the next run
     end
-    Makie.lines!(ax, pts; color = (color, alpha), linewidth = linewidth)
+    # OVERDRAW, because the line and the tessel polygons sit at the SAME depth and the depth
+    # test then drops the line in patches — which reads as a dashed curve and is exactly what
+    # it looked like. MEASURED: identical points render solid over a blank axis and dashed over
+    # the star; `overdraw = true` makes them continuous again.
+    #
+    # Safe here because the hidden half is already gone from the DATA: `_visible_segments`
+    # keeps only the points with z > 0, so there is nothing behind the star to leak through.
+    Makie.lines!(ax, pts; color = (color, alpha), linewidth = linewidth, overdraw = true)
     return ax
 end
 

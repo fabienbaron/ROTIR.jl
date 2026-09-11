@@ -202,3 +202,27 @@ See [Saving a reconstruction](../guides/reconstruction.md) for the round trip.
 save_surface_map
 load_surface_map
 ```
+
+## Saving a model geometry
+
+The companion to the pair above, and for the other half of the model: this writes the SURFACE —
+the tessellated mesh, the stellar parameters it was built from, the surface type, and for a
+binary the second component and how the two are placed — with none of the map values in it.
+
+Keep the two apart the way the physics does. A map belongs to one reconstruction; a geometry
+belongs to the star, and the same geometry carries every map ever fitted on it. The mesh itself
+is stored, not just the parameters, so a surface can be reproduced exactly rather than rebuilt
+and assumed identical — which matters for a Roche component, whose shape comes from a root
+solve on the instantaneous separation.
+
+```julia
+g = load_star_geometry("spica_primary.fits")
+g.star                       # the mesh as it was, ready to draw or to set up a chi-squared
+g.params                     # and the parameters that produced it
+setup_oi!(data, [g.star])    # the Fourier setup is rebuilt against your data, not stored
+```
+
+```@docs
+save_star_geometry
+load_star_geometry
+```

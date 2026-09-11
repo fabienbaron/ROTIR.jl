@@ -7,6 +7,7 @@ function __init__()
     # Callbacks must be registered before any QML file that calls them is loaded.
     QML.@qmlfunction(shell_ready, shell_console, shell_status, shell_ui_scale,
                      shell_settings_path, shell_reset_settings, shell_set_marker_size,
+                     shell_companion_surface_type,
                      shell_ui_font_files, shell_controls_styles,
                      shell_default_controls_style,
                      shell_refresh,
@@ -28,9 +29,12 @@ function __init__()
                      shell_orbit_star_models, shell_orbit_star_model,
                      shell_set_orbit_star_model,
                      shell_save_map, shell_load_map, shell_save_figure,
+                     shell_save_geometry, shell_load_geometry,
                      shell_fits, shell_current_fit, shell_select_fit, shell_fit_params,
                      shell_posterior_pair, shell_set_posterior_pair,
                      shell_set_orbit_option, shell_orbit_render_params,
+                     shell_times, shell_set_times, shell_set_time_index,
+                     shell_step_time,
                      shell_set_orbit_render_param, shell_fit_orbit,
                      shell_orbit_result, shell_save_orbit, shell_load_orbit,
                      shell_surface_types, shell_add_model, shell_models, shell_select_model,
@@ -46,6 +50,9 @@ function __init__()
                      shell_position_params, shell_set_position_param,
                      shell_set_position_state, shell_set_position_bound,
                      shell_set_param2, shell_companion_type,
+                     shell_binary_orbit_params, shell_set_binary_orbit_param,
+                     shell_set_binary_orbit_state, shell_set_binary_orbit_bound,
+                     shell_set_binary_orbit_tie,
                      shell_regularizer_kinds, shell_reconstruct, shell_images,
                      shell_imaging_context,
                      shell_job_poll, shell_job_stop, shell_job_running,
@@ -310,22 +317,14 @@ function ROTIR.gui(session::Session = Session();
     obs === nothing &&
         @warn "OITOOLSGUIExt is not loaded, so the Data tab's observable plot is unavailable"
 
-    sh = ShellState(session, sky, star, moll, chi2, imsky, immoll, msky,
-                    obs, obsmodel, Ref(:v2), Ref(:baseline), Ref(true),
-                    # Intensity, not temperature, by DEFAULT: the map is a temperature but what
-                    # the interferometer measures is the emergent intensity, so the intensity
-                    # is the picture a χ² can be reasoned about from.
-                    Ref(true), Ref(:linear), Ref(0.0),
-                    Dict(:limb => true, :compass => true, :graticules => false,
-                         :spin => false, :plotmesh => false),
-                    Ref(30.0), Ref(30.0), Ref("black"),
-                    Ref(:healpix), Ref(3), Ref{DataType}(Float32),
-                    default_orbit(), orbitcanvas, "",
-                    String[],
-                    _session_status(session), nothing, :none, "", Dict{Symbol,Any}(),
-                    Ref{Any}(nothing), Ref{Any}(nothing),
-                    post, Ref(1), Ref(2), Ref(false), imstar,
-                    Ref{Any}(nothing))
+    # BY KEYWORD. Only what this window actually has: everything else — the view state, the
+    # decorations, the caches — takes the default that lives with the field, so adding a field
+    # to `ShellState` does not touch this call at all. (Intensity rather than temperature is
+    # one of those defaults: the map is a temperature, but what the interferometer measures is
+    # the emergent intensity, so that is the picture a χ² can be reasoned about from.)
+    sh = ShellState(; session, sky, star, moll, chi2, imsky, immoll, msky,
+                    obs, obsmodel, orbitcanvas, post, imstar,
+                    status = _session_status(session))
     SHELL[] = sh
     # Right-click to reset the zoom, and the zoom bound itself. Both read Makie's event
     # stream, so they attach to the canvases rather than to anything in QML.

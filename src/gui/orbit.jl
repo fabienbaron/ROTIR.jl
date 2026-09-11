@@ -87,6 +87,20 @@ function _seed_component!(p::Dict{Symbol,Float64}, kind::Symbol, prefix::Symbol)
 end
 
 """
+    _analytic_radius(kind, params, prefix) -> mas
+
+The outer radius the ANALYTIC profile of one component draws at.
+
+The same extent `_profile_rings` uses, which is half the diameter for a disc and the FWHM
+itself for a Gaussian — so a tessellated radius taken from here renders the component at the
+size its 2-D profile has.
+"""
+_analytic_radius(kind::Symbol, p::AbstractDict, pre::Symbol) =
+    kind in (:uniform, :limbdark) ? Float64(get(p, Symbol("$(pre)_diameter"), 0.5)) / 2 :
+    kind in (:gaussian, :ellgauss) ? Float64(get(p, Symbol("$(pre)_fwhm"), 0.5)) :
+    0.02
+
+"""
     default_orbit() -> OrbitEntry
 
 A two-disk orbit at neutral values. Deliberately not a copy of β Lyr or Spica: a default that
@@ -106,14 +120,35 @@ function default_orbit()
     b[:c1_ld1] = (0.0, 1.0); b[:c2_ld1] = (0.0, 1.0)
     b[:c1_ratio] = (0.05, 1.0); b[:c2_ratio] = (0.05, 1.0)
     b[:c1_pa] = (-180.0, 180.0); b[:c2_pa] = (-180.0, 180.0)
+    # The tessellated polar radii are HALF THE DEFAULT DIAMETERS, so the two star models draw
+    # the same star. They were 0.2 and 0.12 against two 0.5 mas discs, so switching from
+    # "analytic 2-D profiles" to the 3-D surfaces changed the size of both components — which
+    # reads as one of the two views having a factor wrong.
     return OrbitEntry("orbit", :uniform, :uniform, p, Set([:a, :i, :Omega, :T0]), b,
                       Dict{Symbol,String}(), :analytic, false, true, false, false,
-                      0.2, 0.12, 20000.0, 15000.0, 0.5)
+                      _analytic_radius(:uniform, p, :c1), _analytic_radius(:uniform, p, :c2),
+                      20000.0, 15000.0, 0.5)
 end
 
-"The parameter rows the form shows, in the order they appear."
-function orbit_param_names(o::OrbitEntry)
-    ns = Symbol[collect(ORBIT_ELEMENTS)..., :f]
+"""
+    orbit_param_names(o) -> Vector{Symbol}
+
+The parameter rows the form shows, in the order they appear.
+
+The nine ELEMENTS always; the flux ratio and the per-component profile parameters
+(`c1_diameter`, `c2_fwhm`, …) only under the ANALYTIC star model, because that is the only
+model that reads them. The tessellated path sizes its components from `rpole1`/`rpole2` and
+takes their relative brightness from the temperatures, so `c1_diameter` shown beside a 3-D
+binary is a number nothing uses — it sat in the same flat table as the elements and was drawn
+whatever the star model was.
+
+The values are not deleted, only unlisted: switching back to analytic brings them back as they
+were, which is what makes the two star models comparable at all.
+"""
+function orbit_param_names(o::OrbitEntry; analytic::Bool = o.model === :analytic)
+    ns = Symbol[collect(ORBIT_ELEMENTS)...]
+    analytic || return ns
+    push!(ns, :f)
     append!(ns, Symbol("c1_$(n)") for n in _kind_params(o.kind1))
     append!(ns, Symbol("c2_$(n)") for n in _kind_params(o.kind2))
     return ns
@@ -284,6 +319,14 @@ function load_orbit(path::AbstractString)
     haskey(d, "star_model") &&
         (o.model = Symbol(get(d["star_model"], "kind", String(o.model))))
     r = get(d, "rendering", Dict())
+    # The tessellated radii default to the ANALYTIC sizes, so an orbit file that says nothing
+    # about rendering still draws the same star under both star models. Both shipped orbits
+    # carried `default_orbit`'s old 0.2 and 0.12 — never revised when the files were written —
+    # and Spica's analytic primary is 0.894 mas across, so its 3-D surfaces came out at less
+    # than half the size of its 2-D profiles. A file that DOES give a radius still wins: a
+    # component can legitimately render at a size its analytic profile does not have.
+    o.rpole1 = _analytic_radius(o.kind1, o.params, :c1)
+    o.rpole2 = _analytic_radius(o.kind2, o.params, :c2)
     o.render      = get(r, "render", o.render)
     o.roche       = get(r, "roche", o.roche)
     o.irradiation = get(r, "irradiation", o.irradiation)
@@ -322,12 +365,29 @@ struct OrbitCanvas
     polyplot::Any
     primary::Makie.Observable{Vector{Makie.Point2f}}
     primaryplot::Any
+    # The synthetic TIME CURSOR: one position on the track, drawn filled so it cannot be read
+    # as one more observed epoch. Empty unless the Times row is ticked. A plot of its own,
+    # created here like everything else on this canvas — nothing may be inserted after the
+    # window exists (see the note at the top of livecanvas.jl).
+    cursor::Makie.Observable{Vector{Makie.Point2f}}
+    cursorplot::Any
+    # A VECTOR of labels, not a String, even though there is only ever one. `text!` with a
+    # positions vector treats a lone String as one text block and then demands exactly one
+    # position, so an empty cursor (0 positions, 1 block) fails to resolve — CairoMakie says
+    # "Text blocks and positions have different lengths: 1 != 0" and the offscreen save dies.
+    # Both observables must move together, which is what the epoch labels already do.
+    cursorlabel::Makie.Observable{Vector{String}}
+    cursorlabelplot::Any
     message::Makie.Observable{String}
     messageplot::Any
     colormap::Makie.Observable{Any}
     cbarlimits::Makie.Observable{Tuple{Float32,Float32}}
     cbarlabel::Makie.Observable{String}
     colorbar::Any
+    # The full extent `show_orbit!` framed. A zoom is bounded against it and a right-click
+    # returns to it — the same role `homespan` plays on `SkyCanvas`. A `Ref` because the
+    # struct is immutable and this is rewritten on every redraw.
+    homespan::Base.RefValue{Float64}
 end
 
 function build_orbit_canvas(fig)
@@ -352,6 +412,16 @@ function build_orbit_canvas(fig)
     prim   = Makie.Observable(Makie.Point2f[])
     pmplot = Makie.scatter!(ax, prim; color = :black, marker = :cross, markersize = 12)
 
+    # FILLED and coloured, against the epoch marks' hollow black rings: the epoch marks say
+    # "we observed here" and the cursor says "this is the time on screen". Two things that
+    # mean different things must not look alike.
+    curs   = Makie.Observable(Makie.Point2f[])
+    cplot  = Makie.scatter!(ax, curs; color = (:dodgerblue, 0.95), strokecolor = :black,
+                            strokewidth = 0.8, markersize = 11)
+    ctext  = Makie.Observable(String[])
+    ctplot = Makie.text!(ax, curs; text = ctext, fontsize = 10, color = (:dodgerblue4, 0.95),
+                         align = (:left, :top), offset = (5, -5))
+
     msg  = Makie.Observable("")
     msgp = Makie.text!(ax, [Makie.Point2f(0, 0)]; text = msg, fontsize = 15,
                        color = Makie.RGBAf(0.45, 0.5, 0.55, 1), align = (:center, :center))
@@ -364,10 +434,40 @@ function build_orbit_canvas(fig)
     cbar = Makie.Colorbar(fig[1, 2]; colormap = cmap, colorrange = lims, label = clab)
 
     c = OrbitCanvas(fig, ax, track, tplot, marks, mplot, lpos, ltext, lplot,
-                    polys, pcols, pplot, prim, pmplot, msg, msgp, cmap, lims, clab, cbar)
+                    polys, pcols, pplot, prim, pmplot, curs, cplot, ctext, ctplot,
+                    msg, msgp, cmap, lims, clab, cbar,
+                    Base.RefValue(0.0))
     idle!(c, "no orbit yet")
     return c
 end
+
+"""
+    zoom_step!(c::OrbitCanvas, steps; at = nothing) -> c
+    reset_zoom!(c::OrbitCanvas) -> c
+
+Wheel zoom for the orbit view, BOUNDED — the same treatment the sky and Mollweide views get.
+
+**Unbounded zoom here could take the machine down.** QMLMakie delivers 120 units per wheel
+detent, so Makie's own `ScrollZoom` applies `(1 - speed)^120` for a single notch; on the canvases
+that already route through [`zoom_step!`](@ref) that is divided by `WHEEL_DETENT` first, but this
+one still had Makie's interaction and so had neither the division nor the span limits. One notch
+was enough to drive the limits to something the renderer could not cope with.
+
+Bounds are the shared `ZOOM_MIN_SPAN`/`ZOOM_MAX_SPAN` fractions of the framed extent, so they
+mean the same thing for a 1 mas orbit and a 200 mas one.
+"""
+zoom_step!(c::OrbitCanvas, steps::Real; at = nothing) =
+    (zoom_step!(c.axis, c.homespan[], steps; at = at); c)
+
+reset_zoom!(c::OrbitCanvas) = begin
+    a = c.homespan[] / 2
+    a > 0 || return c
+    Makie.xlims!(c.axis, a, -a); Makie.ylims!(c.axis, -a, a)   # East to the left, as framed
+    return c
+end
+
+_install_zoom!(c::OrbitCanvas) =
+    _install_zoom!(c.axis, s -> zoom_step!(c, s), () -> reset_zoom!(c))
 
 _recolor!(::OrbitCanvas) = nothing
 
@@ -382,10 +482,11 @@ pairs of Roche surfaces is a picture of the geometry, not of the astrometry, and
 looked at here is usually whether the elements put the secondary where the data say it is.
 """
 function show_orbit!(c::OrbitCanvas, o::OrbitEntry, tepochs::AbstractVector;
-                     nside_exp::Int = 3, T::DataType = Float32, binary = nothing)
+                     nside_exp::Int = 3, T::DataType = Float32, binary = nothing,
+                     cursor::Union{Nothing,Real} = nothing)
     bp = orbit_bparams(o; binary = binary)
     busy!(c)
-    c.track[]   = _orbit_track_2d(bp)
+    c.track[]   = _orbit_track_2d(bp; t0 = _track_epoch(bp, tepochs))
     c.primary[] = [Makie.Point2f(0, 0)]
 
     pts = Makie.Point2f[]; lab = String[]
@@ -395,13 +496,30 @@ function show_orbit!(c::OrbitCanvas, o::OrbitEntry, tepochs::AbstractVector;
     end
     c.marks[] = pts; c.labelpos[] = pts; c.labeltext[] = lab
 
-    if o.render && !isempty(tepochs)
+    # THE SYNTHETIC TIME CURSOR — visualization only. `tepochs` still drives the numbered
+    # marks, because those mean "we observed here" and a chosen time is not an observation.
+    # What a cursor changes is which SINGLE time the surfaces are drawn at, and that is what
+    # makes the pair walkable frame by frame: the only way to watch a Roche pair's shape
+    # change around an eccentric orbit, since the shape follows D(t).
+    if cursor === nothing
+        c.cursor[] = Makie.Point2f[]; c.cursorlabel[] = String[]
+    else
+        cw, cn = orbit_to_rotir_offset(bp, Float64(cursor))
+        # POSITION FIRST, then the label: the two are one plot's inputs and a moment with a
+        # label and no position to put it at is what the length mismatch above is.
+        c.cursor[] = [Makie.Point2f(-cw, cn)]
+        c.cursorlabel[] = [Printf.@sprintf("JD %.3f", Float64(cursor))]
+    end
+    # What the RENDERING sweeps over: every observed epoch, or the one time on the cursor.
+    rendert = cursor === nothing ? collect(Float64, tepochs) : [Float64(cursor)]
+
+    if o.render && !isempty(rendert)
         # WHICH stars, from the star model: tessellated surfaces with real Roche shapes and
         # gravity darkening, or the analytic profiles the fit uses. Drawing the 3-D surfaces
         # under an analytic fit would be a picture of a model that is not being fitted.
         polys, cols, lo, hi, lab = o.model === :tessellated ?
-            (_render_epochs(o, bp, tepochs; nside_exp = nside_exp, T = T)..., "T (K)") :
-            (_render_analytic(o, bp, tepochs)..., "relative brightness")
+            (_render_epochs(o, bp, rendert; nside_exp = nside_exp, T = T)..., "T (K)") :
+            (_render_analytic(o, bp, rendert)..., "relative brightness")
         c.polys[] = polys; c.polycolors[] = cols
         c.cbarlimits[] = (Float32(lo), Float32(hi))
         c.cbarlabel[] = lab
@@ -415,7 +533,13 @@ function show_orbit!(c::OrbitCanvas, o::OrbitEntry, tepochs::AbstractVector;
     r = isempty(c.track[]) ? 1.0 :
         maximum(max(abs(p[1]), abs(p[2])) for p in c.track[])
     r = max(r, o.rpole1 + o.rpole2) * 1.15
-    Makie.xlims!(c.axis, r, -r); Makie.ylims!(c.axis, -r, r)   # East to the left
+    # Re-framed only when the extent actually changed — a different orbit, or stars of a
+    # different size. A redraw that leaves the geometry alone keeps the user's zoom, as the
+    # sky view does (`_frame!` in src/gui/livecanvas.jl).
+    if !(c.homespan[] > 0 && isapprox(c.homespan[], 2r; rtol = 1e-9))
+        Makie.xlims!(c.axis, r, -r); Makie.ylims!(c.axis, -r, r)   # East to the left
+    end
+    c.homespan[] = 2r
     return c
 end
 
@@ -486,7 +610,17 @@ function _profile_rings(kind::Symbol, p::AbstractDict, pre::Symbol,
     sp, cp = sind(pa), cosd(pa)
     pt(a, θ) = Makie.Point2f(cx + a * (cos(θ) * sp + ratio * sin(θ) * cp),
                              cy + a * (cos(θ) * cp - ratio * sin(θ) * sp))
+    # TWO angular ranges, and the difference is the bug that put a slice out of every disc.
+    #
+    # `θs` is open — 0 to 2π-Δ — which is what a FILLED polygon wants, since `poly!` closes
+    # the last point back to the first itself. An ANNULUS is drawn as one polygon with a slit:
+    # the outer arc, then the inner arc reversed. There the arcs have to CLOSE, so both need
+    # the 2π endpoint; without it the outer arc stopped at 2π-Δ and the polygon jumped
+    # straight inwards, leaving a Δ-wide wedge (5 degrees at `nang = 72`) missing from all
+    # nine annuli of every component. Only the central disc, the one case that takes `θs`,
+    # came out whole.
     θs = range(0, 2π, length = nang + 1)[1:nang]
+    θfull = range(0, 2π, length = nang + 1)
 
     polys = Vector{Makie.Point2f}[]; vals = Float64[]
     edges = range(0, R, length = nring + 1)
@@ -497,7 +631,7 @@ function _profile_rings(kind::Symbol, p::AbstractDict, pre::Symbol,
         else
             # Outer arc, then the inner one reversed: one closed polygon with a hole cut out
             # of it, which is what `poly!` draws without needing a second primitive.
-            vcat([pt(rout, θ) for θ in θs], [pt(rin, θ) for θ in reverse(θs)])
+            vcat([pt(rout, θ) for θ in θfull], [pt(rin, θ) for θ in reverse(θfull)])
         end
         push!(polys, ring)
         push!(vals, I((rin + rout) / 2))
@@ -505,10 +639,30 @@ function _profile_rings(kind::Symbol, p::AbstractDict, pre::Symbol,
     return (polys, vals)
 end
 
+"""
+    _track_epoch(bp, tepochs) -> t0
+
+Which periastron passage the drawn track belongs to.
+
+It matters only when the apsidal line MOVES: `omega_at` advances ω by `dω·(t − T0)`, so an
+ellipse sampled from `T0` carries the orbit's orientation THEN, not at the epochs being marked
+on it. Spica's elements are anchored in 2007 and its ω̇ is 0.0071 deg/day, so its 2015 epochs
+sit 21 degrees of apsidal rotation away from the `T0` ellipse — off the curve, which is the
+visible symptom. The track is drawn over the period containing the MIDDLE of the data instead,
+which is the orientation the marks are mostly computed at.
+
+With `dω = 0`, the overwhelmingly common case, this changes nothing at all: every periastron
+passage gives the same ellipse.
+"""
+function _track_epoch(bp, tepochs)
+    isempty(tepochs) && return bp.T0
+    bp.P > 0 || return bp.T0
+    return bp.T0 + round((sum(tepochs) / length(tepochs) - bp.T0) / bp.P) * bp.P
+end
+
 # The relative orbit over one period, in PLOT coordinates (x = East to the left, which the
 # reversed axis then draws). `orbit_to_rotir_offset` gives (West, North); x = -West.
-function _orbit_track_2d(bp; npoints::Int = 360)
-    t0 = bp.T0
+function _orbit_track_2d(bp; npoints::Int = 360, t0 = bp.T0)
     return [begin
                 ow, on = orbit_to_rotir_offset(bp, t0 + f * bp.P)
                 Makie.Point2f(-ow, on)
@@ -798,15 +952,136 @@ data are loaded — but with no epoch markers, because there are no epochs.
 function refresh_orbit!(sh::ShellState)
     sh.orbitcanvas === nothing && return sh.status
     d = current_dataset(sh.session)
-    tep = d === nothing ? Float64[] : d.mjd
+    # JULIAN DATE, not MJD. The elements are quoted in JD — Spica's `T0` is 2454189.4 — and
+    # every other consumer of an epoch time converts: `companion_offsets` adds 2400000.5, and
+    # `fit_orbit` does it for the whole uv table in `_uv_times`. This did not, so the epoch
+    # marks were evaluated 2.4 million days before the elements describe.
+    #
+    # The visible symptom was the marks not falling on the drawn track, and that is worth
+    # spelling out because it is not the obvious consequence. A wrong TIME alone would only
+    # put a mark at the wrong PHASE of the right ellipse, still on the curve. What takes it
+    # off the curve is apsidal motion: `omega_at` advances ω by `dω·(t − T0)`, so an offset of
+    # −2.4e6 days rotated the apsidal line by ~96 degrees for Spica's ω̇ of 0.0071 deg/day
+    # (mod 360) while `_orbit_track_2d`, which samples from `T0`, drew the unrotated ellipse.
+    # Two different ellipses, which is exactly what it looked like.
+    tep = d === nothing ? Float64[] : d.mjd .+ 2_400_000.5
     try
         show_orbit!(sh.orbitcanvas, sh.orbit, tep; binary = _orbit_binary(sh),
-                    nside_exp = sh.nside_exp[], T = sh.precision[])
+                    nside_exp = sh.nside_exp[], T = sh.precision[],
+                    cursor = cursor_time(sh))
     catch err
         idle!(sh.orbitcanvas, "could not draw the orbit — check the elements")
         console!(sh, "orbit draw failed: $(sprint(showerror, err))")
     end
     return sh.status
+end
+
+# ── the synthetic time axis ──────────────────────────────────────────────────────────────
+#
+# VISUALIZATION ONLY, and that is the whole design constraint. These times never become epochs:
+# the χ² is computed at the observations' times and nowhere else, the numbered marks on the
+# orbit keep meaning "we observed here", and nothing here touches the dataset or the model. What
+# a cursor decides is which single time the two surfaces are DRAWN at — which is what makes the
+# orbit walkable frame by frame, and the only way to watch a Roche pair's shape change around an
+# eccentric orbit, since the shape follows D(t).
+
+"""
+    cursor_times(sh) -> StepRangeLen or nothing
+
+The times the cursor can sit on, `start:step:stop` in JULIAN DATES.
+
+`nothing` when the Times row is unticked. Defaults, when the fields have not been set, are one
+PERIOD FROM PERIASTRON in 48 steps — the same span `_orbit_track_2d` samples, so the cursor
+walks exactly the ellipse that is drawn. Taken from the elements each time rather than stored,
+so editing `P` or `T0` moves the range with them.
+"""
+function cursor_times(sh::ShellState)
+    t = sh.times
+    t.on || return nothing
+    v = apply_orbit_ties(sh.orbit)
+    P = Float64(get(v, :P, 10.0))
+    T0 = Float64(get(v, :T0, 2.45e6))
+    a = isfinite(t.start) ? t.start : T0
+    b = isfinite(t.stop)  ? t.stop  : T0 + (P > 0 ? P : 1.0)
+    st = isfinite(t.step) && t.step > 0 ? t.step : (b - a) / 48
+    # A range with a non-positive span or step is not a range: one frame, at the start.
+    (st > 0 && b > a) || return range(a, a; length = 1)
+    return range(a, b; step = st)
+end
+
+"The time on the cursor now, or `nothing` when the Times row is unticked."
+function cursor_time(sh::ShellState)
+    ts = cursor_times(sh)
+    ts === nothing && return nothing
+    return ts[clamp(sh.times.index, 1, length(ts))]
+end
+
+"""
+    shell_times() -> String
+
+`on\tstart\tstop\tstep\tindex\tcount\ttime` — everything the Times row draws, including the
+RESOLVED start/stop/step, so the fields show the defaults that are in force rather than blanks
+the reader has to know the meaning of.
+"""
+function shell_times()
+    sh = _sh()
+    ts = cursor_times(sh)
+    # Resolved even when the row is unticked: ticking it should reveal the numbers it will use,
+    # not empty boxes.
+    was = sh.times.on
+    sh.times.on = true
+    tr = cursor_times(sh)
+    sh.times.on = was
+    n = length(tr)
+    i = clamp(sh.times.index, 1, n)
+    return join((was ? "1" : "0", _fmt_param(first(tr)), _fmt_param(last(tr)),
+                 _fmt_param(n > 1 ? step(tr) : 0.0), i, n,
+                 _fmt_param(ts === nothing ? first(tr) : ts[i])), "\t")
+end
+
+"""
+    shell_set_times(on, start, stop, step) -> String
+
+Tick the Times row and set its range. Empty or unparseable fields keep the resolved default.
+"""
+function shell_set_times(on, start, stop, step)
+    sh = _sh()
+    sh.times.on = String(on) == "1"
+    a = _qmlreal(start, NaN); b = _qmlreal(stop, NaN); st = _qmlreal(step, NaN)
+    sh.times.start = a
+    sh.times.stop  = b
+    sh.times.step  = st
+    ts = cursor_times(sh)
+    ts === nothing && (refresh_orbit!(sh); return "times off — the marks are the observations")
+    sh.times.index = clamp(sh.times.index, 1, length(ts))
+    refresh_orbit!(sh)
+    return Printf.@sprintf("times: %d frames, JD %.3f to %.3f", length(ts), first(ts), last(ts))
+end
+
+"""
+    shell_set_time_index(i) -> String
+    shell_step_time(delta) -> String
+
+Move the cursor: to a frame, or by a number of frames. Both clamp rather than wrap — an orbit
+is periodic but a TIME RANGE is not, and silently jumping from the last frame back to the first
+hides that the end has been reached.
+"""
+function shell_set_time_index(i)
+    sh = _sh()
+    ts = cursor_times(sh)
+    ts === nothing && return "times off"
+    sh.times.index = clamp(round(Int, _qmlreal(i, 1.0)), 1, length(ts))
+    refresh_orbit!(sh)
+    return Printf.@sprintf("JD %.3f  (frame %d of %d)", ts[sh.times.index],
+                           sh.times.index, length(ts))
+end
+
+function shell_step_time(delta)
+    sh = _sh()
+    ts = cursor_times(sh)
+    ts === nothing && return "times off"
+    return shell_set_time_index(clamp(sh.times.index + round(Int, _qmlreal(delta, 0.0)),
+                                      1, length(ts)))
 end
 
 """
@@ -844,7 +1119,12 @@ function shell_fit_orbit(method, maxeval)
     # every kind so that switching a Gaussian to a disk and back does not lose them, but
     # `orbit_fit_spec` rejects a bound for a parameter that is not in the vector — and its
     # error names the parameter without saying that the component kind is why.
-    known = Set(orbit_param_names(o))
+    # `analytic = true` unconditionally: a fit IS analytic — `fit_orbit(model = :tessellated)`
+    # throws by design — so the vector it assembles has the component parameters in it whatever
+    # the tab is currently DRAWING. Without this, selecting the 3-D star model would silently
+    # drop a free `c1_diameter` from the fit instead of letting `fit_orbit` refuse with its own
+    # explanation.
+    known = Set(orbit_param_names(o; analytic = true))
     fr = sort([n for n in o.free if n in known])
     bd = Dict(k => v for (k, v) in o.bounds if k in known)
     ti = Dict(k => v for (k, v) in o.ties if k in known && !isempty(strip(v)))

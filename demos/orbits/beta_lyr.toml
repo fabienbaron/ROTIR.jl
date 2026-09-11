@@ -20,13 +20,11 @@ i = 91.62788629341878
 
 [rendering]
 tpole1 = 20000.0
-rpole1 = 0.2
 irradiation = false
 occultation = false
-rpole2 = 0.12
 tpole2 = 15000.0
 render = false
-q = 0.5
+q = 4.5
 roche = true
 
 [ties]

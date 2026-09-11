@@ -15,87 +15,132 @@
 # back on the GUI thread.
 
 """
+    TimeCursor
+
+The Orbit tab's synthetic time axis: `start:step:stop`, and which of those times is current.
+
+**Visualization only.** These times are not epochs and never become any: the χ² is computed at
+the observations' times and nowhere else, and the epoch marks on the orbit keep meaning "we
+observed here". What this drives is the picture — where the cursor sits on the track and, when
+rendering is on, which single time the two surfaces are drawn at. That is what makes the orbit
+walkable frame by frame, which is the only way to watch a Roche pair's shape change around an
+eccentric orbit, since the shape follows `D(t)`.
+
+Times are JULIAN DATES, like `T0` and like everything `orbit_to_rotir_offset` reads — the one
+place that passed MJD is exactly where the epoch marks went wrong (see plans/gui_todo.md #4).
+
+Lives on `ShellState` rather than on `OrbitEntry`: an `OrbitEntry` is saved and loaded as TOML
+and describes a SYSTEM, while a cursor describes what is on screen right now.
+"""
+mutable struct TimeCursor
+    on::Bool
+    start::Float64
+    stop::Float64
+    step::Float64
+    index::Int         # 1-based, into `start:step:stop`
+end
+
+"A cursor covering one period from periastron, which is what the track already samples."
+TimeCursor() = TimeCursor(false, NaN, NaN, NaN, 1)
+
+"""
     ShellState
 
 One mutable bundle holding the session, the canvases and the console, reached through the
 global `SHELL[]` because Qt callbacks take no arguments.
+
+**Constructed by KEYWORD, and every field but `session` has a default.** It was positional, and
+with forty fields that made adding one a four-place edit: `gui()`, the headless test harness,
+and — the one that is easy to miss, because it lives in another file and only runs at
+precompile time — the `@compile_workload` in `ext/ROTIRGUIExt.jl`. Adding `times` broke exactly
+that third site, and the failure is a `MethodError` printing all thirty-nine argument types on
+one line, which says nothing about which field is missing.
+
+Three comments in this struct used to end "appended rather than placed with the other canvases
+because every positional construction would otherwise have to be renumbered". That reason is
+gone: a new field can go where it belongs, with a default, and no call site changes at all.
+
+The defaults are the values every caller was spelling out identically anyway — and they had
+already drifted, with the workload passing `nothing` for the orbit canvas and the harness `""`
+for a status the window computes.
 """
-mutable struct ShellState
+Base.@kwdef mutable struct ShellState
     session::Session
-    sky::Any            # SkyCanvas
-    star::Any           # StarCanvas
-    moll::Any           # MollCanvas
-    chi2::Any           # Chi2Canvas
+    sky::Any            = nothing   # SkyCanvas
+    star::Any           = nothing   # StarCanvas
+    moll::Any           = nothing   # MollCanvas
+    chi2::Any           = nothing   # Chi2Canvas
     # The Imaging tab's own pair. Separate figures, not a second view of the two above: a Makie
     # Figure belongs to one MakieArea at a time, and a reconstruction must not overwrite the
     # plot being read on another tab.
-    imsky::Any          # SkyCanvas
-    immoll::Any         # MollCanvas
-    msky::Any           # SkyCanvas — the Model tab's own, and its DEFAULT view
+    imsky::Any          = nothing   # SkyCanvas
+    immoll::Any         = nothing   # MollCanvas
+    msky::Any           = nothing   # SkyCanvas — the Model tab's own, and its DEFAULT view
     # The Data tab's observable plot: an OITOOLS `LiveCanvas`, reached through its GUI
     # extension rather than reimplemented. See `build_obs_canvas`.
-    obs::Any
-    obsmodel::Any       # Observable{Vector{Point2f}} — the model prediction drawn over it
-    obskind::Base.RefValue{Symbol}
-    obscolor::Base.RefValue{Symbol}
-    obsoverlay::Base.RefValue{Bool}
+    obs::Any            = nothing
+    obsmodel::Any       = nothing   # Observable{Vector{Point2f}} — the model prediction drawn over it
+    obskind::Base.RefValue{Symbol} = Ref(:v2)
+    obscolor::Base.RefValue{Symbol} = Ref(:baseline)
+    obsoverlay::Base.RefValue{Bool} = Ref(true)
     # What the surface views COLOUR BY: the temperature map itself, or the emergent intensity —
     # limb darkening multiplied in, and optionally a Planck conversion at the observing
     # wavelength. Two different physical quantities, and the one you want depends on whether
     # you are reading the model or reading what the interferometer sees.
-    intensity::Base.RefValue{Bool}
-    intensity_model::Base.RefValue{Symbol}
-    band::Base.RefValue{Float64}          # metres; 0 means "take it from the data"
+    intensity::Base.RefValue{Bool} = Ref(true)
+    intensity_model::Base.RefValue{Symbol} = Ref(:linear)
+    band::Base.RefValue{Float64} = Ref(0.0)   # metres; 0 means "take it from the data"
     # Which decorations the sky views draw. One set for every panel, because they are the same
     # picture seen on different tabs and three different sets of annotations for one star would
     # be three things to keep in your head rather than one.
-    decor::Dict{Symbol,Bool}
+    decor::Dict{Symbol,Bool} = Dict(:limb => true, :compass => true,
+                                    :graticules => false, :spin => false,
+                                    :plotmesh => false)
     # Graticule settings. Spacing in DEGREES, which is how anyone reading a map thinks about
     # it; `graticule_segments` counts lines, so the two are converted where they meet.
-    gratlat::Base.RefValue{Float64}
-    gratlon::Base.RefValue{Float64}
-    gratcolor::Base.RefValue{String}
+    gratlat::Base.RefValue{Float64} = Ref(30.0)
+    gratlon::Base.RefValue{Float64} = Ref(30.0)
+    gratcolor::Base.RefValue{String} = Ref("black")
     # The mesh the model is evaluated on, and the float type it is built in. Both belong to the
     # MODEL rather than to a plot: they decide what is being fitted, not how it is drawn.
-    tessel::Base.RefValue{Symbol}         # :healpix (:longlat is not wired yet)
-    nside_exp::Base.RefValue{Int}         # log2(nside); 3 for a result, 2 to try something
-    precision::Base.RefValue{DataType}
+    tessel::Base.RefValue{Symbol} = Ref(:healpix)   # :longlat is not wired yet
+    nside_exp::Base.RefValue{Int} = Ref(3)   # log2(nside); 3 for a result, 2 to try something
+    precision::Base.RefValue{DataType} = Ref{DataType}(Float32)
     # The Orbit perspective. One orbit at a time, like the model — a session fitting two
     # unrelated binaries at once is not a thing anyone does, and a selector for it would be
     # another way to have the wrong one selected.
-    orbit::Any                            # OrbitEntry
-    orbitcanvas::Any                      # OrbitCanvas
-    lastorbit::String                     # the fit result table
-    console::Vector{String}
-    status::String
-    job::Any            # GuiJob or nothing
-    jobkind::Symbol
-    lastfit::String     # rendered result table of the last fit
-    imaging_defaults::Dict{Symbol,Any}
+    orbit::Any                  = default_orbit()   # OrbitEntry
+    orbitcanvas::Any            = nothing   # OrbitCanvas
+    lastorbit::String           = ""        # the fit result table
+    console::Vector{String} = String[]
+    status::String = ""
+    job::Any            = nothing   # GuiJob or nothing
+    jobkind::Symbol = :none
+    lastfit::String     = ""        # rendered result table of the last fit
+    imaging_defaults::Dict{Symbol,Any} = Dict{Symbol,Any}()
     # Cache for `epoch_chi2`, keyed on what it actually depends on. Recomputing it is seconds
     # of work — the geometry at every epoch plus `setup_oi!`, i.e. the polygon FT against every
     # uv point — and before this it ran on every tab switch.
-    chi2cache::Base.RefValue{Any}
-    chi2key::Base.RefValue{Any}
-    # The posterior panel: the canvas, and which two parameters it is showing. Appended rather
-    # than placed with the other canvases because every positional construction of this struct
-    # — the tests, the precompile workload — would otherwise have to be renumbered.
-    post::Any                             # PostCanvas
-    postx::Base.RefValue{Int}             # marginal / pair x
-    posty::Base.RefValue{Int}             # pair y
-    # Whether the observable plot's y axis is logarithmic. Appended for the same reason as
-    # `post`: the field order is what every positional construction of this struct spells out.
-    obslog::Base.RefValue{Bool}
+    chi2cache::Base.RefValue{Any} = Ref{Any}(nothing)
+    chi2key::Base.RefValue{Any} = Ref{Any}(nothing)
+    # The posterior panel: the canvas, and which two parameters it is showing.
+    post::Any                   = nothing   # PostCanvas
+    postx::Base.RefValue{Int} = Ref(1)      # marginal / pair x
+    posty::Base.RefValue{Int} = Ref(2)      # pair y
+    # Whether the observable plot's y axis is logarithmic.
+    obslog::Base.RefValue{Bool} = Ref(false)
     # The Imaging tab's own 3-D scene. A reconstruction is a map like any other and is looked
     # at the same three ways; it needs a scene of its own because a Figure belongs to one
     # MakieArea at a time — pointing two tabs at one figure leaves one blank and draws the
     # other detached across the panel beside it.
-    imstar::Any                           # StarCanvas
+    imstar::Any                 = nothing   # StarCanvas
     # The map the Imaging views are currently showing, as `(star, x, title)` — or `nothing`
     # before the first reconstruction. Kept because those views are drawn ONCE, when a run
     # finishes, so a later change to how a map is drawn (the intensity tick, a decoration, the
     # graticule) had nothing to redraw from and silently did nothing on this tab.
-    lastmap::Base.RefValue{Any}
+    lastmap::Base.RefValue{Any} = Ref{Any}(nothing)
+    # The Orbit tab's synthetic time cursor.
+    times::TimeCursor = TimeCursor()
 end
 
 const SHELL = Ref{Any}(nothing)
@@ -409,7 +454,7 @@ shell_surface_types() =
     join(vcat(["$(c)\t$(SURFACE_TYPES[c].name)\t$(SURFACE_TYPES[c].label)\t" *
                replace(SURFACE_TYPES[c].doc, "\n" => " ")
                for c in SURFACE_TYPE_ORDER],
-              ["$(BINARY_CODE)\tbinary\tBinary (two components)\t" *
+              ["$(BINARY_CODE)\tbinary\tRoche Binary\t" *
                "two Roche components sharing one orbit, which is taken from the Orbit tab. " *
                "Each component keeps its own surface type, radius, temperature and limb " *
                "darkening; change either with the selectors that appear. The χ² is that of " *
@@ -436,6 +481,12 @@ function shell_add_model(surface_type)
     if st == BINARY_CODE
         m = add_model!(sh.session, 3)
         shell_set_binary("1", 3)
+        # BY THE ORBIT, unlike the `secondary` tick. Ticking `secondary` on an arbitrary model
+        # defaults to a fixed offset because one displacement is what a snapshot constrains
+        # (see `DEFAULT_COMPANION_OFFSET`); but a Roche shape is computed FROM the
+        # instantaneous separation, so this entry already has an orbit in it, and placing the
+        # pair by a hand-typed offset while shaping it from an orbit says two things at once.
+        m.companion.place = :orbit
         console!(sh, "model $(m.name): binary, two roche components")
         sh.status = "model $(m.name) (binary)"
         refresh_model_tab!(sh)
@@ -498,7 +549,18 @@ Rows a given `ldtype` does not use are still listed, with `state` forced to `fix
 them would make the form jump around as the law is changed, and a value that is never read
 must not be left floating in a fit.
 """
-shell_params() = (m = current_model(_sh().session); m === nothing ? "" : _params_table(m))
+# The ORBIT group is dropped once there is a companion: it belongs to the PAIR, and a copy in
+# each component frame is two editable copies of one physical orbit that can disagree. See
+# `shell_binary_orbit_params`, which shows it once, in the Positions frame.
+function shell_params()
+    sh = _sh()
+    m = current_model(sh.session)
+    m === nothing && return ""
+    # SYNC FIRST, so the rows show the value that will actually be drawn rather than the one
+    # the next build is about to overwrite.
+    _sync_orbit_from_tab!(sh, m)
+    return _params_table(m; orbit = m.companion === nothing, frozen = _derived_names(m))
+end
 
 """
     _fmt_param(v) -> String
@@ -530,23 +592,36 @@ end
 
 The form rows for ONE model. Shared by the primary and, for a binary, the companion — so the
 two forms cannot drift apart, and a column added here appears in both.
+
+`orbit = false` leaves the orbit group out, which is what both component frames of a BINARY
+ask for: those elements describe the pair, not either star, and are shown once in the Positions
+frame instead (`shell_binary_orbit_params`).
+
+`frozen` names rows that are DERIVED rather than editable — the orientation a component takes
+from the orbit that places it (see `_derived_names`). They are still listed, with their value
+and a doc saying where it comes from, because hiding them would make the form jump around and
+would hide the answer to "what inclination is this actually being drawn at".
 """
-function _params_table(m)
+function _params_table(m; orbit::Bool = true, frozen = Set{Symbol}())
     used = ld_coefficients_used(round(Int, get(m.params, :ldtype, 3.0)))
     rows = String[]
     for ps in surface_params(m.surface_type)
+        (orbit || ps.group !== :orbit) || continue
         v  = get(m.params, ps.name, ps.default)
         lo, hi = get(m.bounds, ps.name, (ps.lo, ps.hi))
         tie = get(m.ties, ps.name, "")
-        inert = ps.group === :limbdark && ps.name in (:ld1, :ld2, :ld3, :ld4) &&
-                !(ps.name in used)
+        inert = (ps.group === :limbdark && ps.name in (:ld1, :ld2, :ld3, :ld4) &&
+                 !(ps.name in used)) || ps.name in frozen
         state = !isempty(tie) ? "tied" :
                 (inert ? "fixed" : (ps.name in m.free ? "free" : "fixed"))
         ch = join(("$(k)=$(vv)" for (k, vv) in ps.choices), "|")
+        doc = ps.name in frozen ?
+              "from the orbit, which is what places the secondary: " *
+              "inclination = 180 - i, position angle = Ω - 180. " * ps.doc : ps.doc
         push!(rows, join((ps.name, ps.label, ps.unit, _fmt_param(v), state,
                           _fmt_param(lo), _fmt_param(hi),
                           tie, ps.group, ps.kind, ch,
-                          replace(ps.doc, "\n" => " ", "\t" => " "),
+                          replace(doc, "\n" => " ", "\t" => " "),
                           inert ? "1" : "0"), "\t"))
     end
     return join(rows, "\n")
@@ -574,6 +649,25 @@ function shell_binary()
     m = current_model(_sh().session)
     m === nothing && return ""
     return m.companion === nothing ? "0" : "1"
+end
+
+"""
+    shell_companion_surface_type() -> String
+
+The companion's surface type as a code, or `""` when there is no companion.
+
+The panel needs this to SHOW what the companion is, not merely to set it: the combo beside
+"Secondary" had no way to read the current value and so sat blank, even on a binary whose
+companion had a perfectly good type. `shell_companion_type` is the setter; this is the missing
+getter.
+"""
+function shell_companion_surface_type()
+    m = current_model(_sh().session)
+    (m === nothing || m.companion === nothing) && return ""
+    # The FIELD, not `params[:surface_type]` — the constructor deliberately excludes that key
+    # from the parameter dict (`if k !== :surface_type`), so reading it there silently returned
+    # the fallback and the combo reported a Roche companion whatever it actually was.
+    return string(m.companion.surface_type)
 end
 
 """
@@ -607,6 +701,10 @@ function shell_set_binary(on, surface_type = 3)
                 Dict{Symbol,Tuple{Float64,Float64}}(ps.name => (ps.lo, ps.hi)
                                                     for ps in surface_params(st)),
                 Dict{Symbol,String}(), true, nothing, :offset, DEFAULT_COMPANION_OFFSET)
+            # The orbit is the PAIR's, so the companion starts from the primary's copy of it
+            # rather than from the schema defaults — and with `q` INVERTED, which the Roche
+            # potential requires and which a schema default cannot express.
+            _sync_shared_orbit!(m)
             console!(sh, "binary: added a $(spec.name) companion")
         end
     else
@@ -674,7 +772,13 @@ end
 
 [`shell_params`](@ref) for the companion; empty when the model is not a binary.
 """
-shell_params2() = (c = _companion(_sh()); c === nothing ? "" : _params_table(c))
+function shell_params2()
+    sh = _sh()
+    m = current_model(sh.session)
+    (m === nothing || m.companion === nothing) && return ""
+    _sync_orbit_from_tab!(sh, m)
+    return _params_table(m.companion; orbit = false, frozen = _derived_names(m))
+end
 
 """
     shell_set_param2(name, value) -> String
@@ -685,8 +789,9 @@ function shell_set_param2(name, value)
     sh = _sh()
     c = _companion(sh)
     c === nothing && return "not a binary"
-    v = tryparse(Float64, String(value))
-    v === nothing && return "not a number: $(value)"
+    Symbol(String(name)) in _derived_names(current_model(sh.session)) && return ORBIT_ORIENTS
+    v = _qmlreal(value, NaN)
+    isnan(v) && return "not a number: $(value)"
     c.params[Symbol(String(name))] = v
     Symbol(String(name)) === :ldtype && _reset_unused_ld!(c)
     sh.chi2key[] = nothing
@@ -709,14 +814,16 @@ binary are rarely the same kind of thing. So it gets the same four setters and t
 function shell_set_param_state2(name, state)
     sh = _sh(); c = _companion(sh)
     c === nothing && return "not a binary"
-    return _set_state!(sh, c, Symbol(String(name)), String(state))
+    n = Symbol(String(name))
+    n in _derived_names(current_model(sh.session)) && return ORBIT_ORIENTS
+    return _set_state!(sh, c, n, String(state))
 end
 
 function shell_set_bound2(name, lo, hi)
     c = _companion(_sh())
     c === nothing && return "not a binary"
-    l = tryparse(Float64, String(lo)); h = tryparse(Float64, String(hi))
-    (l === nothing || h === nothing) && return "bounds must be numbers"
+    l = _qmlreal(lo, NaN); h = _qmlreal(hi, NaN)
+    (isnan(l) || isnan(h)) && return "bounds must be numbers"
     l < h || return "lower bound must be below upper"
     c.bounds[Symbol(String(name))] = (l, h)
     return ""
@@ -789,8 +896,8 @@ end
 function shell_set_position_param(name, value)
     sh = _sh(); c = _companion(sh)
     c === nothing && return "not a binary"
-    v = tryparse(Float64, String(value))
-    v === nothing && return "not a number: $(value)"
+    v = _qmlreal(value, NaN)
+    isnan(v) && return "not a number: $(value)"
     n = Symbol(String(name))
     i = findfirst(q -> q[1] === n, POSITION_PARAMS)
     i === nothing && return "unknown position parameter $(name)"
@@ -812,6 +919,290 @@ end
 
 "Bounds for one position component."
 shell_set_position_bound(name, lo, hi) = shell_set_bound2(name, lo, hi)
+
+# ── the ORBIT, once, for the PAIR ────────────────────────────────────────────────────────
+#
+# A Roche component's SHAPE depends on the instantaneous separation, so the orbital elements
+# are part of its surface definition and the schema lists them on surface type 3. In a binary
+# that puts them on BOTH components, and the Primary and Secondary frames each showed an
+# editable copy of one physical orbit — two sets of numbers, side by side, free to disagree.
+# They are shown once here instead, in the frame that already answers "where is the secondary".
+#
+# WHO OWNS WHAT is the only part that needs thought:
+#
+#   * The ELEMENTS (P, a, e, T0, i, Ω, ω, Ṗ, ω̇) are the Orbit tab's whenever the ORBIT is what
+#     places the secondary — that is what "secondary by the orbit" means — so they are shown
+#     read-only here and copied into both components, which is what makes the SHAPE agree with
+#     the position. Under a fixed offset nothing else owns them: a Roche shape still needs a
+#     separation, and these rows are then the only place to give it one, so they are editable.
+#   * `q` and `d` are never elements. The Orbit tab's own header says why: a relative
+#     astrometric orbit does not constrain a mass ratio. They stay here, editable, always.
+#
+# `q` is also the one quantity whose NUMBER differs between the components. The Roche potential
+# reads M_companion/M_self, which is `q` on the primary and `1/q` on the secondary
+# (`update_roche_radii`'s own note, and `demos/spica_binary_roche.jl` writes `1.0/q_binary` by
+# hand). The row is in the PRIMARY's convention — M₂/M₁, as published solutions quote it — and
+# the secondary's copy is written inverted. It was not: a default binary had q = 0.5 on both
+# components, which is a different system on each side of the same model.
+const ORBIT_PARAM_NAMES = Set{Symbol}(ps.name for ps in surface_params(3)
+                                      if ps.group === :orbit)
+
+# Schema name -> the Orbit tab's name for the same element. `q` and `d` are absent on purpose:
+# they are not elements. The tab spells three of these ASCII (`Omega`, `omega`, `domega`) while
+# the geometry code reads the Unicode fields, so the mapping cannot be an identity.
+const ORBIT_ELEMENT_OF = Dict{Symbol,Symbol}(
+    :P => :P, :a => :a, :e => :e, :T0 => :T0, :i => :i,
+    :Ω => :Omega, :ω => :omega, :dP => :dP, :dω => :domega)
+
+"Both components of a binary, primary first; just the primary when there is no companion."
+_components(m) = m.companion === nothing ? (m,) : (m, m.companion)
+
+"The shared orbit rows to show, in schema order, from whichever component carries them."
+function _orbit_specs(m)
+    out = similar(surface_params(3), 0)
+    seen = Set{Symbol}()
+    for c in _components(m), ps in surface_params(c.surface_type)
+        (ps.group === :orbit && !(ps.name in seen)) || continue
+        push!(seen, ps.name); push!(out, ps)
+    end
+    return out
+end
+
+"Which component carries the state, bounds and tie of a shared orbit parameter."
+_orbit_owner(m, n::Symbol) =
+    haskey(m.params, n) ? m :
+    (m.companion !== nothing && haskey(m.companion.params, n)) ? m.companion : nothing
+
+"One shared orbit parameter, in the primary's convention."
+function _orbit_value(m, n::Symbol)
+    haskey(m.params, n) && return m.params[n]
+    c = m.companion
+    (c !== nothing && haskey(c.params, n)) || return NaN
+    return n === :q ? 1 / c.params[n] : c.params[n]
+end
+
+"Write one shared orbit parameter into every component that carries it, each in its own sense."
+function _put_orbit!(m, n::Symbol, v::Real)
+    haskey(m.params, n) && (m.params[n] = Float64(v))
+    c = m.companion
+    if c !== nothing && haskey(c.params, n)
+        c.params[n] = n === :q ? 1 / Float64(v) : Float64(v)
+    end
+    return m
+end
+
+"""
+    _sync_shared_orbit!(m) -> m
+
+Push the primary's resolved orbital elements onto the companion, `q` inverted.
+
+Called before the geometry is built rather than only on edit, so it also covers the two paths
+that do not go through the panel: a TIED element, whose value is not in `params` at all until
+`apply_model_ties` runs, and a FIT, which writes trial values straight into the owner. Without
+it a free shared `a` moved the primary's shape and left the secondary's at its old separation —
+the same orbit disagreeing with itself, one component at a time.
+
+The companion's own free set and ties for these names are dropped: its copy is DERIVED, and a
+derived value that is independently free is a second coordinate for one physical quantity.
+"""
+function _sync_shared_orbit!(m)
+    c = m.companion
+    c === nothing && return m
+    v = apply_model_ties(m)
+    for n in ORBIT_PARAM_NAMES
+        (haskey(v, n) && haskey(c.params, n)) || continue
+        c.params[n] = n === :q ? 1 / v[n] : v[n]
+        delete!(c.free, n); delete!(c.ties, n)
+    end
+    return m
+end
+
+"""
+    _sync_orbit_from_tab!(sh, m) -> m
+
+Copy the Orbit tab's elements into a binary whose secondary is placed BY that orbit.
+
+With `place === :orbit` the separation at each epoch comes from the Orbit tab, while the Roche
+SHAPE is computed from the component's own elements — so two orbits decided the two halves of
+one picture, and the star could be shaped by a 10-day period while being moved on a 4-day one.
+One orbit: the tab's. `q` and `d` are left alone, being star-model quantities rather than
+elements (`orbit_bparams` reads `q` off the primary for exactly that reason).
+"""
+function _sync_orbit_from_tab!(sh::ShellState, m)
+    c = m.companion
+    (c === nothing || c.place !== :orbit) && return m
+    v = apply_orbit_ties(sh.orbit)
+    for (n, e) in ORBIT_ELEMENT_OF
+        haskey(v, e) || continue
+        for comp in _components(m)
+            haskey(comp.params, n) && (comp.params[n] = Float64(v[e]))
+        end
+    end
+    # AND THE ORIENTATION. Both components are oriented by the ORBIT, not by themselves:
+    # `create_binary_geometry` takes the spin axis from the orbital inclination and node, and
+    # `orbit_bparams` has applied exactly this conversion since the Orbit tab was written —
+    #
+    #     inclination = 180 - i,   position_angle = Ω - 180
+    #
+    # while the Model tab passed each component's OWN `inclination`/`position_angle` to
+    # `create_star_multiepochs`. So the Orbit plot and the Model tab oriented the same pair
+    # differently; `graticule_segments` records the same trap from the other side, measuring
+    # the two answers 102.6 degrees apart on a Spica-like binary.
+    #
+    # Derived, therefore, and not independent: the panel shows these two rows inert (see
+    # `_derived_names`) and `binary_fit_names` drops them, because a value this overwrites on
+    # the next build must not also be a coordinate a fit can move.
+    inc = 180.0 - Float64(get(v, :i, 90.0))
+    pa  = Float64(get(v, :Omega, 0.0)) - 180.0
+    for comp in _components(m), (n, val) in ((:inclination, inc), (:position_angle, pa))
+        haskey(comp.params, n) || continue
+        comp.params[n] = val
+        delete!(comp.free, n); delete!(comp.ties, n)
+    end
+    return m
+end
+
+"""
+    ORBIT_ORIENTED
+
+The component parameters an ORBIT owns, when the orbit is what places the secondary.
+
+Not the orbital elements — those are `ORBIT_ELEMENT_OF`. These are the two fields of each
+COMPONENT that `create_binary_geometry` derives from the orbit and would overwrite anyway.
+"""
+const ORBIT_ORIENTED = (:inclination, :position_angle)
+
+"""
+    _derived_names(m) -> Set{Symbol}
+
+The parameter names a component frame must show INERT, because something else owns them.
+
+Empty for a single star and for a binary placed by a fixed offset — there, a component's
+orientation is its own. Non-empty only while the ORBIT places the secondary, which is exactly
+when `_sync_orbit_from_tab!` writes these from the elements.
+"""
+_derived_names(m) =
+    (m.companion !== nothing && m.companion.place === :orbit) ?
+    Set{Symbol}(ORBIT_ORIENTED) : Set{Symbol}()
+
+"""
+    shell_binary_orbit_params() -> String
+
+The PAIR's orbit, in the same 13 columns [`shell_params`](@ref) uses — so the Positions frame
+draws it with the same delegate as everything else.
+
+Empty unless the model is a binary whose components carry orbital elements at all: two spheres
+have no orbit to shape them, and for them this frame is the offset and nothing more. Element
+rows are marked INERT while the orbit places the secondary, because then the Orbit tab owns
+them.
+"""
+function shell_binary_orbit_params()
+    sh = _sh()
+    m = current_model(sh.session)
+    (m === nothing || m.companion === nothing) && return ""
+    _sync_orbit_from_tab!(sh, m)
+    _sync_shared_orbit!(m)
+    byorbit = m.companion.place === :orbit
+    rows = String[]
+    for ps in _orbit_specs(m)
+        own = _orbit_owner(m, ps.name)
+        own === nothing && continue
+        inert = byorbit && haskey(ORBIT_ELEMENT_OF, ps.name)
+        lo, hi = get(own.bounds, ps.name, (ps.lo, ps.hi))
+        tie = get(own.ties, ps.name, "")
+        state = !isempty(tie) ? "tied" :
+                (inert ? "fixed" : (ps.name in own.free ? "free" : "fixed"))
+        doc = inert ? "from the Orbit tab, which is what places the secondary. " * ps.doc :
+              ps.doc
+        push!(rows, join((ps.name, ps.label, ps.unit, _fmt_param(_orbit_value(m, ps.name)),
+                          state, _fmt_param(lo), _fmt_param(hi), tie, "orbit", ps.kind,
+                          join(("$(k)=$(vv)" for (k, vv) in ps.choices), "|"),
+                          replace(doc, "\n" => " ", "\t" => " "),
+                          inert ? "1" : "0"), "\t"))
+    end
+    return join(rows, "\n")
+end
+
+"The message an orientation edit gets back while the orbit is what decides it."
+const ORBIT_ORIENTS = "the orbit orients both components (inclination = 180 - i, " *
+                      "position angle = Ω - 180); change i or Ω, or switch to a fixed offset"
+
+"The message an element edit gets back while the Orbit tab is the one that owns it."
+const ORBIT_TAB_OWNS = "the orbit places the secondary; set its elements on the Orbit tab, " *
+                       "or switch to a fixed offset"
+
+"Set one shared orbital parameter, in every component that carries it."
+function shell_set_binary_orbit_param(name, value)
+    sh = _sh()
+    m = current_model(sh.session)
+    (m === nothing || m.companion === nothing) && return "not a binary"
+    n = Symbol(String(name))
+    n in ORBIT_PARAM_NAMES || return "unknown orbital parameter $(name)"
+    haskey(ORBIT_ELEMENT_OF, n) && m.companion.place === :orbit && return ORBIT_TAB_OWNS
+    v = _qmlreal(value, NaN)
+    isnan(v) && return "not a number: $(value)"
+    # The secondary's copy is `1/q`, so zero is not a value this can carry.
+    n === :q && v == 0 && return "mass ratio cannot be zero"
+    _put_orbit!(m, n, v)
+    # AND BACK TO THE ORBIT TAB, so the two tabs cannot describe different systems. The sync
+    # already ran the other way — `_sync_orbit_from_tab!` pushes the tab's elements into both
+    # components whenever the orbit is what places the secondary — but under a FIXED OFFSET
+    # nothing owned these, so an element edited here left the Orbit tab drawing the old one.
+    # One orbit, edited from either end.
+    #
+    # `q` and `d` do not propagate: they are not elements. The Orbit tab's `q` is a rendering
+    # assumption used only when there is no model to take it from, and `orbit_bparams` already
+    # prefers the model's.
+    if haskey(ORBIT_ELEMENT_OF, n)
+        sh.orbit.params[ORBIT_ELEMENT_OF[n]] = v
+        refresh_orbit!(sh)
+    end
+    sh.chi2key[] = nothing
+    refresh_both!(sh)
+    return ""
+end
+
+"Free, fix or tie one shared orbital parameter."
+function shell_set_binary_orbit_state(name, state)
+    sh = _sh()
+    m = current_model(sh.session)
+    (m === nothing || m.companion === nothing) && return "not a binary"
+    n = Symbol(String(name))
+    own = _orbit_owner(m, n)
+    own === nothing && return "unknown orbital parameter $(name)"
+    haskey(ORBIT_ELEMENT_OF, n) && m.companion.place === :orbit && return ORBIT_TAB_OWNS
+    return _set_state!(sh, own, n, String(state))
+end
+
+"Bounds for one shared orbital parameter."
+function shell_set_binary_orbit_bound(name, lo, hi)
+    m = current_model(_sh().session)
+    (m === nothing || m.companion === nothing) && return "not a binary"
+    n = Symbol(String(name))
+    own = _orbit_owner(m, n)
+    own === nothing && return "unknown orbital parameter $(name)"
+    l = _qmlreal(lo, NaN); h = _qmlreal(hi, NaN)
+    (isnan(l) || isnan(h)) && return "bounds must be numbers"
+    l < h || return "lower bound must be below upper"
+    own.bounds[n] = (l, h)
+    return ""
+end
+
+"Tie one shared orbital parameter to an expression."
+function shell_set_binary_orbit_tie(name, expr)
+    sh = _sh()
+    m = current_model(sh.session)
+    (m === nothing || m.companion === nothing) && return "not a binary"
+    n = Symbol(String(name))
+    own = _orbit_owner(m, n)
+    own === nothing && return "unknown orbital parameter $(name)"
+    haskey(ORBIT_ELEMENT_OF, n) && m.companion.place === :orbit && return ORBIT_TAB_OWNS
+    e = strip(String(expr))
+    isempty(e) ? delete!(own.ties, n) : (own.ties[n] = String(e))
+    sh.chi2key[] = nothing
+    refresh_both!(sh)
+    return ""
+end
 
 """
     shell_companion_type(surface_type) -> String
@@ -852,6 +1243,34 @@ function _reset_unused_ld!(m)
 end
 
 """
+    _qmlreal(x, default) -> Float64
+
+A number arriving from QML, whatever shape QML chose to send it in.
+
+**QML does not always send text.** A `TextField` hands over a string, but a `SpinBox` hands
+over its integer `value` and a slider a real — so a callback that assumed text and wrote
+`tryparse(Float64, String(x))` threw the moment it was wired to a spin box:
+
+    shell_set_graticule(lat_deg::Int32, lon_deg::Int32, colour::QML.QStringAllocated)
+    The type `String` exists, but no method is defined for this combination of argument types
+
+and the exception escaped through `QML.julia_call` and froze the window — the same failure
+mode as a `nothing` name (see [`_qmlname`](@ref)). `nothing` is handled here too, for the same
+reason it is there: a recycled delegate can call with no value at all.
+"""
+_qmlreal(x, default::Real) =
+    x === nothing ? Float64(default) :
+    x isa Real    ? Float64(x) :
+    something(tryparse(Float64, String(x)), Float64(default))
+
+"""
+    _qmlstr(x, default = "") -> String
+
+Text arriving from QML, or `default` when QML sent nothing. See [`_qmlreal`](@ref).
+"""
+_qmlstr(x, default::AbstractString = "") = x === nothing ? String(default) : String(x)
+
+"""
     _qmlname(x) -> Symbol or nothing
 
 A parameter name arriving from QML, or `nothing` when QML had none to give.
@@ -880,8 +1299,9 @@ function shell_set_param(name, value)
     m === nothing && return "no model"
     n = _qmlname(name)
     n === nothing && return "no parameter named by the form (the row went away before the edit landed)"
-    v = tryparse(Float64, String(value))
-    v === nothing && return "not a number: $(value)"
+    n in _derived_names(m) && return ORBIT_ORIENTS
+    v = _qmlreal(value, NaN)
+    isnan(v) && return "not a number: $(value)"
     m.params[n] = v
     n === :ldtype && _reset_unused_ld!(m)
     refresh_model_tab!(sh)
@@ -897,7 +1317,9 @@ function shell_set_param_state(name, state)
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
-    return _set_state!(sh, m, Symbol(String(name)), String(state))
+    n = Symbol(String(name))
+    n in _derived_names(m) && return ORBIT_ORIENTS
+    return _set_state!(sh, m, n, String(state))
 end
 
 """
@@ -942,8 +1364,8 @@ function shell_set_bound(name, lo, hi)
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
-    l = tryparse(Float64, String(lo)); h = tryparse(Float64, String(hi))
-    (l === nothing || h === nothing) && return "bounds must be numbers"
+    l = _qmlreal(lo, NaN); h = _qmlreal(hi, NaN)
+    (isnan(l) || isnan(h)) && return "bounds must be numbers"
     l < h || return "lower bound must be below upper"
     m.bounds[Symbol(String(name))] = (l, h)
     return ""
@@ -1186,11 +1608,11 @@ this GUI draws, and above 90 there is at most one parallel to see.
 """
 function shell_set_graticule(lat_deg, lon_deg, colour)
     sh = _sh()
-    la = something(tryparse(Float64, String(lat_deg)), sh.gratlat[])
-    lo = something(tryparse(Float64, String(lon_deg)), sh.gratlon[])
+    la = _qmlreal(lat_deg, sh.gratlat[])
+    lo = _qmlreal(lon_deg, sh.gratlon[])
     sh.gratlat[] = clamp(la, 5.0, 90.0)
     sh.gratlon[] = clamp(lo, 5.0, 90.0)
-    c = String(colour)
+    c = _qmlstr(colour)
     c in GRATICULE_COLORS && (sh.gratcolor[] = c)
     refresh_both!(sh)
     refresh_image_tab!(sh)
@@ -1246,7 +1668,7 @@ function shell_set_surface_field(intensity, model, band_um)
     m = Symbol(String(model))
     m in (:linear, :planck) || return "unknown intensity model $(model)"
     sh.intensity_model[] = m
-    b = something(tryparse(Float64, String(band_um)), 0.0)
+    b = _qmlreal(band_um, 0.0)
     sh.band[] = b > 0 ? b * 1e-6 : _data_band(sh)
     # Fall back to the data's own mean wavelength whenever the field is empty, zero or
     # unparseable — the band the observations were taken in is the only defensible default for
@@ -1287,9 +1709,64 @@ function surface_values(sh::ShellState, tmap, star; visible_only::Bool)
     b = sh.band[] > 0 ? sh.band[] : nothing
     Imap = sh.intensity_model[] === :linear ? tmap :
            b === nothing ? tmap : ROTIR.intensity(Float64.(tmap), :planck, b)
-    idx = visible_only ? star.index_quads_visible : eachindex(Imap)
-    return Float64.(Imap[idx]) .* Float64.(star.ldmap[idx])
+    visible_only || return Float64.(Imap)
+    # LIMB DARKENING ONLY ON THE VIEW THAT HAS A LIMB.
+    #
+    # `ldmap` is a viewing-geometry quantity: it is zero wherever the surface faces away, on
+    # exactly half the tessels (measured: 384 non-zero of 768). Multiplying a WHOLE-SURFACE
+    # map by it therefore blanked the far side — the Mollweide and the 3-D view came out with
+    # half the star black, which read as a map that had never been populated.
+    #
+    # The orthographic view is the one where limb darkening belongs, and it is the one the
+    # intensity tick was added for: it shows what the interferometer sees, which is the
+    # brightness of the visible hemisphere, darkened towards the limb. A Mollweide is a map OF
+    # THE SURFACE, where "how foreshortened is this patch from here" is not a property of the
+    # surface at all — and the 3-D view can be rotated, so a per-tessel factor baked for one
+    # viewpoint would be wrong from every other.
+    return Float64.(Imap[star.index_quads_visible]) .*
+           Float64.(star.ldmap[star.index_quads_visible])
 end
+
+"""
+    visible_values(sh, allv, star) -> Vector{Float64}
+
+The orthographic view's values, from the whole-surface ones already computed.
+
+The two differ by exactly the limb-darkening factor, so the expensive half — the `intensity`
+evaluation, a Planck integral per tessel when that law is chosen, on every keystroke in the
+parameter form — is done once by [`surface_values`](@ref) and this applies the cheap half.
+
+It WAS a plain slice, `allv[star.index_quads_visible]`, and that was correct only while limb
+darkening went onto both conventions. It does not any more (see `surface_values`), so a slice
+silently drew the orthographic view without a limb — flat across the disk, exactly as the
+temperature view — and the intensity tick stopped doing anything on the two tabs that took
+this route.
+"""
+visible_values(sh::ShellState, allv::AbstractVector, star) =
+    sh.intensity[] ?
+    Float64.(allv[star.index_quads_visible]) .*
+        Float64.(star.ldmap[star.index_quads_visible]) :
+    Float64.(allv[star.index_quads_visible])
+
+"""
+    whole_surface_label(sh) -> String
+
+The colour-bar label for a view that has no limb — the 3-D scene and the Mollweide.
+
+NOT the same rule as the orthographic view's, and the difference is the honest statement of
+what the intensity tick does. The tick means two things at once: switch the quantity from a
+temperature to an emergent intensity, and multiply limb darkening in. Only the first survives
+on a whole-surface view, and under the `linear` law the first is the identity — `surface_values`
+returns `tmap` untouched — so a "linear intensity" on these views IS the temperature map, and
+labelling it `I (arb.)` would claim a quantity that is not there.
+
+Under `planck` it is a real surface brightness at the observing wavelength, which is a
+different quantity from T and is labelled as one. These two colour bars read `T (K)` as a
+CONSTANT before this existed, so a Planck map was drawn under a temperature label.
+"""
+whole_surface_label(sh::ShellState) =
+    (sh.intensity[] && sh.intensity_model[] === :planck) ? "I (arb.)" : "T (K)"
+
 
 """
     build_epoch_star(sh) -> (star, values) or nothing
@@ -1374,14 +1851,15 @@ Redraw the 3-D preview and the Mollweide from the current model. GUI thread only
 # layer actually takes.
 function _decor(sh::ShellState)
     d = sh.decor
-    # Degrees to LINE COUNTS, which is what `graticule_segments` takes: parallels span 180
-    # degrees of latitude and meridians 360 of longitude.
-    nlat = max(2, round(Int, 180 / sh.gratlat[]))
-    nlon = max(2, round(Int, 360 / sh.gratlon[]))
+    # DEGREES STRAIGHT THROUGH. This used to convert to line COUNTS
+    # (`nlat = round(180/gratlat)`), and the conversion could not express what was asked:
+    # `graticule_segments` spaces `nlat` parallels at `180/(nlat + 1)`, so a requested 75
+    # degrees became 2 parallels 60 degrees apart. It now takes the spacing itself and places
+    # parallels at multiples of it from the equator — 75 gives -75, 0, +75.
     return (limb = d[:limb], compass = d[:compass], graticules = d[:graticules],
             plotmesh = d[:plotmesh],
             rotation_axis = d[:spin], rotation_arrow = d[:spin],
-            graticule_nlat = nlat, graticule_nlon = nlon,
+            graticule_dlat = sh.gratlat[], graticule_dlon = sh.gratlon[],
             graticule_color = Symbol(sh.gratcolor[]))
 end
 
@@ -1402,13 +1880,16 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
     # worse than the cost, because switching is meant to be instant.
     lbl = sh.intensity[] ? "I (arb.)" : "T (K)"
     sh.msky.cbarlabel[] = lbl
+    # The 3-D scene and the Mollweide have no limb, so they label by their own rule.
+    sh.star.cbarlabel[] = whole_surface_label(sh)
+    sh.moll.cbarlabel[] = whole_surface_label(sh)
     # ONE evaluation, three views. This called `surface_values` three times — twice with
     # exactly the same arguments — and it runs on every keystroke in the parameter form. With
     # the intensity tick on and Planck selected that is a Planck evaluation over every tessel,
-    # done twice for nothing. The visible values are a SLICE of the full ones by construction
-    # (`surface_values` differs only in the index it applies), so one call covers all three.
+    # done twice for nothing. `visible_values` takes the orthographic view's values off the
+    # full ones instead, which is the cheap half of the difference between them.
     allv = surface_values(sh, tmap, star; visible_only = false)
-    visv = allv[star.index_quads_visible]
+    visv = visible_values(sh, allv, star)
     if bin2 === nothing
         show_map!(sh.msky, star, visv; star_params = star_params(m), _decor(sh)...)
     else
@@ -1416,8 +1897,12 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
         # a Mollweide is a map of one surface, and two of them in one frame is two pictures.
         star2, tmap2, off = bin2
         v2 = surface_values(sh, tmap2, star2; visible_only = true)
+        # The COMPANION's own parameters too: every decoration is drawn for both components
+        # now, and `_polar_radius` reads `rpole`/`radius` — the primary's would draw the
+        # secondary's spin axis at the primary's length.
         show_binary_map!(sh.msky, star, visv, star2, v2, off;
-                         star_params = star_params(m), _decor(sh)...)
+                         star_params = star_params(m),
+                         star_params2 = star_params(m.companion), _decor(sh)...)
     end
     if bin2 === nothing
         show_star3d!(sh.star, star, allv)
@@ -1480,7 +1965,8 @@ function refresh_data_tab!(sh::ShellState; got = build_epoch_star(sh))
             star2, tmap2, off = bin2
             v2 = surface_values(sh, tmap2, star2; visible_only = true)
             show_binary_map!(sh.sky, star, vals, star2, v2, off; title = ttl,
-                             star_params = star_params(m), _decor(sh)...)
+                             star_params = star_params(m),
+                             star_params2 = star_params(m.companion), _decor(sh)...)
         end
     end
     c = epoch_chi2(sh)
@@ -1588,6 +2074,11 @@ function model_state(sh::ShellState)
     d = current_dataset(sh.session)
     m = current_model(sh.session)
     (d === nothing || m === nothing) && return nothing
+    # ONE orbit for the pair, resolved before anything is built from it: the Orbit tab's when
+    # it is what places the secondary, the primary's otherwise, and the companion's copy
+    # derived from it either way.
+    _sync_orbit_from_tab!(sh, m)
+    _sync_shared_orbit!(m)
     p = star_params(m)
     isempty(validate_star_params(p)) || return nothing
     c = m.companion
@@ -1960,6 +2451,10 @@ function install_interactions!(sh::ShellState)
     for c in (sh.star, sh.imstar)
         c === nothing || _install_zoom!(c.scene)
     end
+    # The ORBIT view too, and it is the one that most needed it: without a limiter it kept
+    # Makie's own `ScrollZoom`, which receives QMLMakie's 120-unit event undivided — a single
+    # wheel notch was enough to drive the limits somewhere the renderer could not survive.
+    sh.orbitcanvas === nothing || _install_zoom!(sh.orbitcanvas)
     return sh
 end
 
@@ -2280,13 +2775,23 @@ _fit_component_of(n::Symbol) = n in (:pos_x, :pos_y, :pos_z) ? 3 : 2
 
 "The `(component, name)` pairs a fit will move, primary first."
 function binary_fit_names(m)
-    out = Tuple{Int,Symbol}[(1, n) for n in sort(collect(m.free))]
     c = m.companion
+    # An orbital ELEMENT is not a coordinate while the Orbit tab is what places the secondary.
+    # The panel shows those rows read-only for that reason, and `_sync_orbit_from_tab!`
+    # overwrites on the next build whatever a fit had put there — so a free one would be a
+    # direction the χ² only appears to respond to. They are fitted on the Orbit tab instead.
+    frozen = c !== nothing && c.place === :orbit
+    # The orbital ELEMENTS, and the ORIENTATION the orbit derives (`ORBIT_ORIENTED`): both are
+    # rewritten by `_sync_orbit_from_tab!` on the next build, so a fit that moved them would be
+    # moving a direction the χ² only appears to respond to.
+    movable(n) = !(frozen && (haskey(ORBIT_ELEMENT_OF, n) || n in ORBIT_ORIENTED))
+    out = Tuple{Int,Symbol}[(1, n) for n in sort(collect(m.free)) if movable(n)]
     c === nothing && return out
     for n in sort(collect(c.free))
         # A position is only a coordinate when a fixed offset is what places the secondary; if
         # the orbit does, these numbers are not read and freeing them would add flat directions.
         (_fit_component_of(n) == 3 && c.place !== :offset) && continue
+        movable(n) || continue
         push!(out, (_fit_component_of(n), n))
     end
     return out
@@ -2337,6 +2842,9 @@ function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop)
     return function (θ)
         stop[] && return 1e30
         for (k, nm) in enumerate(names); _fit_put!(snap, nm, θ[k]); end
+        # A shared orbital element is written into the OWNER only; the companion's copy is
+        # derived and has to follow before its shape is built (see `_sync_shared_orbit!`).
+        _sync_shared_orbit!(snap)
         p1 = star_params(snap); p2 = star_params(snap.companion)
         (isempty(validate_star_params(p1)) && isempty(validate_star_params(p2))) || return 1e30
         try
@@ -2838,29 +3346,51 @@ So the panel chooses names, weights and the one scalar knob, and [`build_regular
 constructs the rest at run time. Passing four numbers — which is what a naive `name:a:b:c`
 string invites — cannot work at all.
 
-Fields: name, default weight, extra-knob label ("" when there is none), extra default, doc.
+Fields: name, default weight, extra-knob label ("" when there is none), extra default, SHORT
+label, doc.
+
+TWO descriptions, not one shortened description. The row was asking a single string to name the
+maths AND say when to reach for the regularizer, and it overflowed its column doing it — the
+column is what is left of the row after a tick, the name, the weight and, on three of the ten
+rows, an extra knob and its label, so it is ~90 px narrower exactly where the strings were
+longest. Shortening again would have cost the advice, which is the half a user actually needs.
+
+So the SHORT label is the formula alone, sized to fit the narrow case, and the doc carries the
+advice into the tooltip, which has as much room as it likes.
 """
 const REGULARIZER_KINDS = [
-    ("sobel",     1e1, "",      0.0, "∫|∇x| dΩ, edge-preserving"),
-    ("sobel2",    1e1, "",      0.0, "∫|∇x|² dΩ, smooth — usual first choice"),
-    ("tv",        1e1, "",      0.0, "‖Lx‖, curvature L1"),
-    ("tv2",       1e1, "",      0.0, "‖Lx‖², curvature L2"),
-    ("mem",       1e1, "",      0.0, "maximum entropy, per-pixel"),
-    ("mean",      1e1, "",      0.0, "departure from the mean"),
-    ("bias",      1e1, "B",     2.0, "harmonic bias; B is the asymmetry"),
-    ("radflat",   1e2, "nbins", 6.0, "flat BETWEEN annuli — single epoch only"),
-    ("radialvar", 1e2, "nbins", 6.0, "variance WITHIN annuli"),
-    ("orthold",   1e2, "",      0.0, "penalises the LD-degenerate direction"),
+    ("sobel",     1e1, "",      0.0, "∫|∇x| dΩ",
+     "∫|∇x| dΩ — edge-preserving"),
+    ("sobel2",    1e1, "",      0.0, "∫|∇x|² dΩ",
+     "∫|∇x|² dΩ — smooth, and the usual first choice"),
+    ("tv",        1e1, "",      0.0, "‖Lx‖",
+     "‖Lx‖ — curvature in L1"),
+    ("tv2",       1e1, "",      0.0, "‖Lx‖²",
+     "‖Lx‖² — curvature in L2"),
+    ("mem",       1e1, "",      0.0, "entropy",
+     "maximum entropy, per-pixel"),
+    ("mean",      1e1, "",      0.0, "from the mean",
+     "departure from the mean"),
+    ("bias",      1e1, "B",     2.0, "harmonic bias",
+     "harmonic bias; the knob B is the asymmetry"),
+    ("radflat",   1e2, "nbins", 6.0, "flat in annuli",
+     "flat BETWEEN annuli — single epoch only"),
+    ("radialvar", 1e2, "nbins", 6.0, "annulus variance",
+     "variance WITHIN annuli"),
+    ("orthold",   1e2, "",      0.0, "⊥ LD direction",
+     "penalises the limb-darkening-degenerate direction"),
 ]
 
 """
     shell_regularizer_kinds() -> String
 
-`name\tweight\textra_label\textra_default\tdoc` per line. The panel shows the extra field only
-where `extra_label` is non-empty, which is what keeps eight of the ten rows to two controls.
+`name\tweight\textra_label\textra_default\tshort\tdoc` per line. The panel shows the extra
+field only where `extra_label` is non-empty, which is what keeps eight of the ten rows to two
+controls; it draws `short` in the row and puts `doc` in the tooltip.
 """
 shell_regularizer_kinds() =
-    join(("$(n)\t$(w)\t$(el)\t$(ed)\t$(doc)" for (n, w, el, ed, doc) in REGULARIZER_KINDS), "\n")
+    join(("$(n)\t$(w)\t$(el)\t$(ed)\t$(sh)\t$(doc)"
+          for (n, w, el, ed, sh, doc) in REGULARIZER_KINDS), "\n")
 
 """
     parse_regularizers(spec) -> Vector{NamedTuple}
@@ -3141,7 +3671,9 @@ function show_reconstruction!(sh::ShellState, star, x; title::AbstractString = "
     # tabs to disagree about how one is displayed.
     allv = surface_values(sh, x, star; visible_only = false)
     sh.imsky.cbarlabel[] = sh.intensity[] ? "I (arb.)" : "T (K)"
-    show_map!(sh.imsky, star, allv[star.index_quads_visible];
+    sh.immoll.cbarlabel[] = whole_surface_label(sh)
+    sh.imstar === nothing || (sh.imstar.cbarlabel[] = whole_surface_label(sh))
+    show_map!(sh.imsky, star, visible_values(sh, allv, star);
               title = title, star_params = sp, _decor(sh)...)
     show_mollweide!(sh.immoll, allv, star)
     sh.imstar === nothing || show_star3d!(sh.imstar, star, allv)
@@ -3470,7 +4002,7 @@ end
 Turn the live plot typography by hand. Zero restores the value computed from the screen.
 """
 function shell_set_plot_scale(x)
-    v = set_plot_scale!(something(tryparse(Float64, String(x)), 0.0))
+    v = set_plot_scale!(_qmlreal(x, 0.0))
     sh = SHELL[]
     # `GUI_LIVE`, not just `sh !== nothing`: `applySavedSettings` calls this during
     # `Component.onCompleted`, before the first frame, and redrawing there deadlocks the window
@@ -3523,7 +4055,7 @@ Set the data-point size in the Data tab's plot. Zero restores each plot's own de
 Forwarded to OITOOLS, which owns that canvas — see [`marker_size_user`](@ref).
 """
 function shell_set_marker_size(x)
-    v = something(tryparse(Float64, String(x)), 0.0)
+    v = _qmlreal(x, 0.0)
     O = _oitools_gui()
     O === nothing && return "no plot to size: the OITOOLS GUI extension is not loaded"
     got = try
@@ -3691,6 +4223,149 @@ function shell_load_map(path)
     console!(sh, st)
     refresh_both!(sh)
     sh.status = st
+    return sh.status
+end
+
+# ── the model GEOMETRY as a file ────────────────────────────────────────────────────────
+#
+# The third of three things this panel can write, and the three are deliberately different:
+#
+#   * the COMMAND LOG is the script that would rebuild the session — "how did you get this";
+#   * the MAP is what the surface is emitting — "what is this";
+#   * the GEOMETRY is the surface itself — "what shape was it".
+#
+# A map file already carries the parameters, so in principle it could rebuild the mesh. In
+# practice it would rebuild it with whatever `create_star` does the day it is read: the Roche
+# equipotential is a root solve, the rapid rotator's radii come from a cubic, the visibility
+# clip is a sigmoid with a κ. Writing the mesh is what turns "the geometry comes out the same"
+# from an assumption into something that can be checked — and `shell_load_geometry` checks it.
+
+"""
+    shell_save_geometry(path) -> String
+
+Write the current model's GEOMETRY to FITS: the mesh, the parameters that built it, the
+surface type, the tessellation, and — for a binary — the companion and how it is placed.
+
+NOT the map values. `shell_save_map` has those, and the two are separate files because they
+have separate lifetimes: one geometry carries every map ever fitted on it.
+"""
+function shell_save_geometry(path)
+    sh = _sh()
+    p = String(path); startswith(p, "file://") && (p = p[8:end])
+    endswith(lowercase(p), ".fits") || (p *= ".fits")
+    p = unique_path(p)
+    m = current_model(sh.session)
+    if m === nothing
+        sh.status = "no model — add one before saving a geometry"
+        console!(sh, sh.status); return sh.status
+    end
+    got = build_epoch_star(sh)
+    if got === nothing
+        sh.status = "the model does not build — fix the parameters first"
+        console!(sh, sh.status); return sh.status
+    end
+    d = current_dataset(sh.session)
+    c = m.companion
+    try
+        # The star EXACTLY as it is drawn, at the epoch on screen — `build_epoch_star` is what
+        # the canvases are fed, so the file and the picture cannot disagree.
+        star2 = length(got) >= 5 ? got[3] : nothing
+        save_star_geometry(p, got[1], star_params(m);
+                           nside_exp = sh.nside_exp[],
+                           tessellation = sh.tessel[],
+                           star2 = star2,
+                           params2 = star2 === nothing ? nothing : star_params(c),
+                           place = c === nothing ? :offset : c.place,
+                           offset = c === nothing ? (0.0, 0.0, 0.0) : c.offset,
+                           tepochs = d === nothing ? nothing : d.tepochs,
+                           mjd     = d === nothing ? nothing : d.mjd,
+                           secondary = m.secondary,
+                           comment = m.name)
+        log!(sh.session, "save_star_geometry($(repr(p)), star, params; " *
+                         "nside_exp = $(sh.nside_exp[]))"; note = "save geometry")
+        sh.status = "wrote $(p) — $(got[1].npix) tessels" *
+                    (star2 === nothing ? "" : " + $(star2.npix) for the secondary")
+    catch err
+        sh.status = "could not write $(p): $(sprint(showerror, err))"
+    end
+    console!(sh, sh.status)
+    return sh.status
+end
+
+"""
+    shell_load_geometry(path) -> String
+
+Read a geometry back as the current model, and say how closely it rebuilds.
+
+The model is rebuilt from the stored PARAMETERS — that is what the rest of the panel edits and
+what every χ² is computed from — and the stored MESH is then compared against the rebuild. The
+largest vertex disagreement goes to the console in mas.
+
+Zero for a surface that is a multiplication — a sphere, an ellipsoid. Float32 round-off, of
+order 1e-7 of the radius, for one whose radii come from a root solve: a Roche component
+rebuilds to 6e-8 mas on a 0.7 mas polar radius, which is the mesh precision and not a
+disagreement. Anything larger than that names, in one number, a geometry the current code no
+longer reproduces — which is exactly what a parameter-only file cannot tell you.
+"""
+function shell_load_geometry(path)
+    sh = _sh()
+    p = String(path); startswith(p, "file://") && (p = p[8:end])
+    local g
+    try
+        g = load_star_geometry(p)
+    catch err
+        sh.status = "could not read $(p): $(sprint(showerror, err))"
+        console!(sh, sh.status); return sh.status
+    end
+    g.tessellation === :healpix ||
+        return (sh.status = "$(basename(p)) is on a $(g.tessellation) tessellation, " *
+                            "which the GUI cannot show yet"; console!(sh, sh.status); sh.status)
+    haskey(g.params, :surface_type) ||
+        return (sh.status = "$(basename(p)) carries no parameters — nothing to rebuild from";
+                console!(sh, sh.status); sh.status)
+
+    # ONE model at a time, the same rule "+ model" and "Load map" follow.
+    empty!(sh.session.models); sh.session.current_model = 0; sh.chi2key[] = nothing
+    m = add_model!(sh.session, Int(g.params.surface_type);
+                   name = "loaded_" * splitext(basename(p))[1], secondary = g.secondary)
+    for (k, v) in pairs(g.params)
+        k === :surface_type && continue
+        haskey(m.params, k) && (m.params[k] = Float64(v))
+    end
+    if g.params2 !== nothing && haskey(g.params2, :surface_type)
+        shell_set_binary("1", Int(g.params2.surface_type))
+        c = m.companion
+        for (k, v) in pairs(g.params2)
+            k === :surface_type && continue
+            haskey(c.params, k) && (c.params[k] = Float64(v))
+        end
+        c.place = g.place
+        c.offset = g.offset
+    end
+    sh.nside_exp[] = g.nside_exp
+    sh.precision[] = eltype(g.star.vertices_xyz)
+
+    # THE CHECK the file exists for. Same epoch, same level, same precision — so any
+    # difference is the geometry code, not the inputs.
+    dev = try
+        r = create_star(tessellation_healpix(g.nside_exp; T = sh.precision[]),
+                        star_params(m), sh.precision[](g.t); secondary = m.secondary)
+        size(r.vertices_xyz) == size(g.star.vertices_xyz) ?
+            maximum(abs.(Float64.(r.vertices_xyz) .- Float64.(g.star.vertices_xyz))) : NaN
+    catch err
+        console!(sh, "could not rebuild the geometry to compare: $(sprint(showerror, err))")
+        NaN
+    end
+    # `@sprintf` takes a LITERAL format string — a concatenation is an ArgumentError at
+    # macro-expansion time, i.e. when the extension is precompiled, not when this runs.
+    console!(sh, isnan(dev) ? "geometry: the rebuild could not be compared" :
+                 dev == 0   ? "geometry: the rebuild is identical to the stored mesh" :
+                 Printf.@sprintf("geometry: the rebuild differs from the stored mesh by at most %.3g mas", dev))
+    log!(sh.session, "g = load_star_geometry($(repr(p)))"; note = "load geometry", binding = "g")
+    refresh_both!(sh)
+    sh.status = "loaded $(basename(p)) — $(g.star.npix) tessels at level $(g.nside_exp)" *
+                (g.star2 === nothing ? "" : ", binary")
+    console!(sh, sh.status)
     return sh.status
 end
 

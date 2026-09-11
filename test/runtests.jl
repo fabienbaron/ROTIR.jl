@@ -84,6 +84,10 @@ end
     # to `spheroid_chi2_fg` when the secondary is dark.
     include(joinpath(TESTDIR, "test_binary_imaging.jl"))
 
+    # The geometry and map FITS files: the mesh back bit-for-bit, and the ASCII aliasing that
+    # lets a Roche model's Unicode orbital elements into a FITS string column at all.
+    include(joinpath(TESTDIR, "test_geometry_io.jl"))
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions

@@ -138,9 +138,14 @@ function build_sky_canvas(fig)
                            strokewidth = 0.35)
 
     limb  = Makie.Observable(Makie.Point2f[])
-    limbp = Makie.lines!(ax, limb; color = :black, linewidth = 0.8)
+    # 1.3, not 0.8: the limb is the star's OUTLINE and at 0.8 it was the same weight as the
+    # tessel strokes it sits on top of, so the edge of the disc read as one more mesh line.
+    limbp = Makie.lines!(ax, limb; color = :black, linewidth = 1.3)
     grat  = Makie.Observable(Makie.Point2f[])
-    gratp = Makie.lines!(ax, grat; color = (:black, 0.55), linewidth = 0.6)
+    # `overdraw`: the graticule shares a depth with the tessel polygons, and without it the
+    # depth test drops it in patches — a solid curve that renders dashed. The hidden half is
+    # already absent from the data (`_visible_segments` clips to z > 0), so nothing leaks.
+    gratp = Makie.lines!(ax, grat; color = (:black, 0.55), linewidth = 0.6, overdraw = true)
     comp  = Makie.Observable(Makie.Point2f[])
     compp = Makie.lines!(ax, comp; color = :black, linewidth = 1.4)
     ctpos = Makie.Observable(Makie.Point2f[])
@@ -153,9 +158,24 @@ function build_sky_canvas(fig)
     cmap  = Makie.Observable{Any}(_padded_cmap("gist_heat"))
     cbar  = Makie.Colorbar(fig[1, 2]; colormap = cmap, colorrange = lims, label = label)
     axs   = Makie.Observable(Makie.Point2f[])
-    axsp  = Makie.lines!(ax, axs; color = (:black, 0.8), linewidth = 1.4, linestyle = :dash)
+    # THICKER THAN THE GRATICULE, and drawn over it. Two black dashed-ish lines at the same
+    # weight are the same line to the eye — the axis was 1.4 against the graticule's 0.6 and a
+    # meridian passing near the pole read as the axis. 2.2 separates them at a glance.
+    #
+    # `overdraw` is what makes "after" mean anything here. These plots are created after the
+    # graticule and so draw after it, but the graticule is itself `overdraw = true` (it has to
+    # be, or z-fighting with the tessels renders it dashed) and an overdrawn line beats an
+    # ordinary one whatever the order. With both overdrawn, insertion order decides and the
+    # axis wins, which is what was asked for.
+    #
+    # Safe for the same reason it is safe for the graticule: the hidden half is already gone
+    # from the DATA. `_axis_polyline` emits a stub only for a pole whose sky z is >= 0, and
+    # `_spin_polyline` NaN-breaks the half of its arc that is behind the star — so there is
+    # nothing hidden for `overdraw` to reveal.
+    axsp  = Makie.lines!(ax, axs; color = (:black, 0.8), linewidth = 2.2, linestyle = :dash,
+                         overdraw = true)
     spn   = Makie.Observable(Makie.Point2f[])
-    spnp  = Makie.lines!(ax, spn; color = :black, linewidth = 1.4)
+    spnp  = Makie.lines!(ax, spn; color = :black, linewidth = 1.8, overdraw = true)
 
     msg   = Makie.Observable("")
     msgp  = Makie.text!(ax, [Makie.Point2f(0, 0)]; text = msg, fontsize = 15,
@@ -165,6 +185,34 @@ function build_sky_canvas(fig)
                   comp, compp, ctpos, ctlab, ctp, lims, label, cmap, cbar, msg, msgp,
                   Ref(Float64[]), Ref(false), Ref(1.0), axs, axsp, spn, spnp)
     idle!(c, "no model — add one on the Model tab")
+    return c
+end
+
+"""
+    _frame!(c, amax) -> c
+
+Set the sky view's frame to ±`amax`, KEEPING the user's zoom when the frame has not changed.
+
+**A redraw is not a reason to throw away a zoom.** Every path that repaints this canvas ended
+in an unconditional `xlims!`/`ylims!`, so ticking `limb` or `graticules` — which changes
+nothing about the geometry — snapped the view back to the whole star, and inspecting a feature
+at high zoom meant never touching a decoration.
+
+The frame is only reset when the home extent ACTUALLY changes: a different star, a new radius,
+a companion appearing. That is the case where the old limits describe a picture that is no
+longer there, and where resetting is what the user wants. `homespan` starting at zero is what
+makes the first draw frame itself.
+
+Right-click still resets on demand — see `reset_zoom!`, which sets the limits from `homespan`
+rather than going through here.
+"""
+function _frame!(c, amax::Real)
+    span = 2amax
+    unchanged = c.homespan[] > 0 && isapprox(c.homespan[], span; rtol = 1e-9)
+    c.homespan[] = span
+    unchanged && return c
+    Makie.xlims!(c.axis, amax, -amax)          # reversed: East to the left
+    Makie.ylims!(c.axis, -amax, amax)
     return c
 end
 
@@ -180,7 +228,7 @@ function show_map!(c::SkyCanvas, star, values;
                    colorrange = nothing, offset_west = 0.0, offset_north = 0.0,
                    limb = true, graticules = false, compass = true, plotmesh = false,
                    rotation_axis = false, rotation_arrow = false,
-                   graticule_nlat::Int = 5, graticule_nlon::Int = 8,
+                   graticule_dlat::Float64 = NaN, graticule_dlon::Float64 = NaN,
                    graticule_color::Symbol = :black,
                    star_params = nothing, pad = 0.5, title = "")
     busy!(c)
@@ -205,7 +253,7 @@ function show_map!(c::SkyCanvas, star, values;
     end
     c.grat[] = graticules ?
         _flatten_segments(graticule_segments(star; star_params = star_params,
-                                             nlat = graticule_nlat, nlon = graticule_nlon,
+                                             dlat = graticule_dlat, dlon = graticule_dlon,
                                              offset_west = offset_west,
                                              offset_north = offset_north)) : Makie.Point2f[]
     c.gratplot.color[] = (graticule_color, 0.55)
@@ -227,11 +275,26 @@ function show_map!(c::SkyCanvas, star, values;
     c.cbarlabel[] = c.cbarlabel[]              # keep the label; the size follows the theme
     c.colorbar.labelsize[] = 16 * live_plot_scale()
     c.colorbar.ticklabelsize[] = 13 * live_plot_scale()
-    c.homespan[] = 2amax
-    Makie.xlims!(c.axis, amax, -amax)          # reversed: East to the left
-    Makie.ylims!(c.axis, -amax, amax)
+    _frame!(c, amax)
     isempty(title) || (c.axis.title = title)
     return c
+end
+
+"""
+    _break(a, b) -> Vector{Point2f}
+
+Two polylines as ONE, with the pen lifted between them.
+
+Makie breaks a line at a NaN point, which is what lets a canvas whose plots are all created
+before the window exists draw two disjoint pieces — a limb around each component of a binary,
+say — without adding a second plot. Either side may be empty, in which case nothing is joined
+and no stray NaN is left at an end.
+"""
+function _break(a::AbstractVector, b::AbstractVector)
+    isempty(a) && return collect(Makie.Point2f, b)
+    isempty(b) && return collect(Makie.Point2f, a)
+    return vcat(collect(Makie.Point2f, a), [Makie.Point2f(NaN, NaN)],
+                collect(Makie.Point2f, b))
 end
 
 """
@@ -247,17 +310,29 @@ the pair a SHARED colour range, which is what makes the picture readable: the se
 Spica is 4700 K cooler than the primary, and scaling each to its own range would draw them as
 though they were the same temperature.
 
-Decorations follow the PRIMARY. A limb and a spin axis drawn for both would be two of
-everything over a picture whose point is the pair's geometry; the axis extent, though, covers
-both, or the companion would sit outside the frame at every epoch but conjunction.
+DECORATIONS COVER BOTH COMPONENTS. They used to follow the primary alone, on the reasoning
+that two of everything would clutter a picture about the pair's geometry — but a limb around
+one star and not the other reads as the second star having no edge, and a spin axis on one says
+the companion does not rotate. A binary is where the comparison between the two is the whole
+point: which is more distorted, whether their poles are aligned, where each one's equator is.
+
+Each decoration is ONE polyline, and it stays one: the two components' geometry is concatenated
+with a NaN break between them, which lifts the pen exactly as `_flatten_segments` already does
+between graticule runs and `_axis_polyline` does between the two poles. No plot is added, which
+is the constraint this file is arranged around.
+
+`star_params2` is the companion's own parameter set. It is needed and not optional-in-practice:
+`_polar_radius` reads `rpole`/`radius` from it, so passing the primary's would draw the
+secondary's axis at the primary's length — on Spica, twice too long.
 """
 function show_binary_map!(c::SkyCanvas, star1, values1, star2, values2, offset;
                           colorrange = nothing, offset_west = 0.0, offset_north = 0.0,
                           limb = true, graticules = false, compass = true, plotmesh = false,
                           rotation_axis = false, rotation_arrow = false,
-                          graticule_nlat::Int = 5, graticule_nlon::Int = 8,
+                          graticule_dlat::Float64 = NaN, graticule_dlon::Float64 = NaN,
                           graticule_color::Symbol = :black,
-                          star_params = nothing, pad = 0.5, title = "")
+                          star_params = nothing, star_params2 = nothing,
+                          pad = 0.5, title = "")
     busy!(c)
     ow2 = offset_west + Float64(offset[1])
     on2 = offset_north + Float64(offset[2])
@@ -274,24 +349,30 @@ function show_binary_map!(c::SkyCanvas, star1, values1, star2, values2, offset;
         fill(Makie.RGBAf(0.45, 0.45, 0.45, 1), length(cols)) : cols
     c.cbarlimits[] = (Float32(cr[1]), Float32(cr[2]))
 
-    if limb
-        vis = star1.index_quads_visible
-        hx, hy = convex_hull_2d(vec(-star1.proj_west[vis, :] .- offset_west),
-                                vec( star1.proj_north[vis, :] .+ offset_north))
-        c.limb[] = _closed_ring(hx, hy)
-    else
-        c.limb[] = Makie.Point2f[]
+    # BOTH STARS, in every decoration. `_break` is what keeps each one a single polyline.
+    function limb_of(st, ow, on)
+        vis = st.index_quads_visible
+        isempty(vis) && return Makie.Point2f[]
+        hx, hy = convex_hull_2d(vec(-st.proj_west[vis, :] .- ow),
+                                vec( st.proj_north[vis, :] .+ on))
+        return _closed_ring(hx, hy)
     end
+    c.limb[] = limb ? _break(limb_of(star1, offset_west, offset_north),
+                             limb_of(star2, ow2, on2)) : Makie.Point2f[]
+    grat_of(st, sp, ow, on) =
+        _flatten_segments(graticule_segments(st; star_params = sp,
+                                             dlat = graticule_dlat, dlon = graticule_dlon,
+                                             offset_west = ow, offset_north = on))
     c.grat[] = graticules ?
-        _flatten_segments(graticule_segments(star1; star_params = star_params,
-                                             nlat = graticule_nlat, nlon = graticule_nlon,
-                                             offset_west = offset_west,
-                                             offset_north = offset_north)) : Makie.Point2f[]
+        _break(grat_of(star1, star_params, offset_west, offset_north),
+               grat_of(star2, star_params2, ow2, on2)) : Makie.Point2f[]
     c.gratplot.color[] = (graticule_color, 0.55)
     c.axis3d[] = rotation_axis ?
-        _axis_polyline(star1, star_params, offset_west, offset_north) : Makie.Point2f[]
+        _break(_axis_polyline(star1, star_params, offset_west, offset_north),
+               _axis_polyline(star2, star_params2, ow2, on2)) : Makie.Point2f[]
     c.spin[] = rotation_arrow ?
-        _spin_polyline(star1, star_params, offset_west, offset_north) : Makie.Point2f[]
+        _break(_spin_polyline(star1, star_params, offset_west, offset_north),
+               _spin_polyline(star2, star_params2, ow2, on2)) : Makie.Point2f[]
 
     # The frame must hold BOTH stars and the separation between them, at every epoch.
     amax = max(sky_axis_max(star1; pad),
@@ -307,9 +388,7 @@ function show_binary_map!(c::SkyCanvas, star1, values1, star2, values2, offset;
     c.cbarlabel[] = c.cbarlabel[]
     c.colorbar.labelsize[] = 16 * live_plot_scale()
     c.colorbar.ticklabelsize[] = 13 * live_plot_scale()
-    c.homespan[] = 2amax
-    Makie.xlims!(c.axis, amax, -amax)
-    Makie.ylims!(c.axis, -amax, amax)
+    _frame!(c, amax)
     isempty(title) || (c.axis.title = title)
     return c
 end
@@ -544,15 +623,38 @@ function clamp_zoom!(c::SkyCanvas)
     return true
 end
 
-# The spin axis, as ONE polyline with the tips included. The plot convention is
-# `x = -West`, the same negation `tessel_polygons` applies.
+# The spin axis: each pole's stub, FROM the pole outward, and only for a pole that is facing
+# us. The plot convention is `x = -West`, the same negation `tessel_polygons` applies.
+#
+# It used to be the single run `[stip, south, north, ntip]` — the whole axis, tip to tip,
+# crossing the disk, drawn after the polygons and so on top of them. That reads as an axis
+# passing THROUGH the star rather than emerging from it, and it draws the hidden pole's half
+# as confidently as the visible one.
+#
+# The test is the pole's own sky z, which `_spin_axis` already returns, so there is no rule to
+# keep in step with the geometry: it self-corrects as the inclination changes, and at exactly
+# 90 degrees both poles sit on the limb and both stubs are drawn, which is right.
+#
+# The interior run is gone rather than faded. What it was for — saying the axis continues
+# behind the star — is what a stub emerging from the visible pole already says, and a dashed
+# line across the disk at any alpha competes with the map, which is the thing being looked at.
+#
+# ONE polyline still, with a NaN break between the halves: this canvas may not insert a plot
+# after the window exists (see the note at the top of this file), so lifting the pen is how it
+# draws two disjoint pieces. `_spin_polyline` uses the same device.
 function _axis_polyline(star, star_params, ow, on; arrow_frac = 0.3)
     north, south = _spin_axis(star, star_params, NaN, NaN)
     d = north .- south
-    ntip = north .+ arrow_frac .* d
-    stip = south .- arrow_frac .* d
     P(p) = Makie.Point2f(-(p[1] + ow), p[2] + on)
-    return [P(stip), P(south), P(north), P(ntip)]
+    out = Makie.Point2f[]
+    if north[3] >= 0
+        push!(out, P(north), P(north .+ arrow_frac .* d))
+    end
+    if south[3] >= 0
+        isempty(out) || push!(out, Makie.Point2f(NaN, NaN))
+        push!(out, P(south), P(south .- arrow_frac .* d))
+    end
+    return out
 end
 
 # The 300-degree spin circle about the north pole, split at z = 0 with a NaN break so the half
@@ -658,6 +760,11 @@ struct StarCanvas
     orbitplot::Any
     colormap::Makie.Observable{Any}
     cbarlimits::Makie.Observable{Tuple{Float32,Float32}}
+    # The colour bar's label, as an Observable and not a constant. It WAS the constant
+    # "T (K)", so a Planck intensity — which is a real surface brightness and not a
+    # temperature at all — was drawn under a temperature label on this view and on the
+    # Mollweide. The orthographic view had this right all along.
+    cbarlabel::Makie.Observable{String}
     colorbar::Any
     message::Makie.Observable{String}
     messageplot::Any
@@ -708,7 +815,8 @@ function build_star_canvas(fig)
 
     cmap = Makie.Observable{Any}(_padded_cmap("gist_heat"))
     lims = Makie.Observable((0.0f0, 1.0f0))
-    cbar = Makie.Colorbar(fig[1, 2]; colormap = cmap, colorrange = lims, label = "T (K)")
+    clab = Makie.Observable("T (K)")
+    cbar = Makie.Colorbar(fig[1, 2]; colormap = cmap, colorrange = lims, label = clab)
     # In a Label rather than in the scene: an LScene has no data-space anchor that stays put as
     # the camera turns, so a `text!` inside it would drift off-screen on the first drag.
     msg  = Makie.Observable("")
@@ -716,7 +824,8 @@ function build_star_canvas(fig)
     # camera, so a `text!` anchored in it would drift off-screen on the first drag.
     msgp = Makie.Label(fig[2, 1], msg; fontsize = 15, color = Makie.RGBAf(0.45, 0.5, 0.55, 1),
                        tellwidth = false)
-    c = StarCanvas(fig, ls, m1, c1, p1, m2, c2, p2, orb, op, cmap, lims, cbar, msg, msgp)
+    c = StarCanvas(fig, ls, m1, c1, p1, m2, c2, p2, orb, op, cmap, lims, clab, cbar,
+                   msg, msgp)
     idle!(c, "no model — add one on the Model tab")
     return c
 end
@@ -908,6 +1017,7 @@ struct MollCanvas
     meshplot::Any
     colormap::Makie.Observable{Any}
     cbarlimits::Makie.Observable{Tuple{Float32,Float32}}
+    cbarlabel::Makie.Observable{String}       # see the note on `StarCanvas.cbarlabel`
     colorbar::Any
     message::Makie.Observable{String}
     messageplot::Any
@@ -973,12 +1083,13 @@ function build_moll_canvas(fig)
 
     cmap = Makie.Observable{Any}(_padded_cmap("gist_heat"))
     lims = Makie.Observable((0.0f0, 1.0f0))
+    clab = Makie.Observable("T (K)")
     cbar = Makie.Colorbar(fig[2, 1]; colormap = cmap, colorrange = lims, vertical = false,
-                          label = "T (K)", width = Makie.Relative(0.6))
+                          label = clab, width = Makie.Relative(0.6))
     msg  = Makie.Observable("")
     msgp = Makie.text!(ax, [Makie.Point2f(0, 0)]; text = msg, fontsize = 15,
                        color = Makie.RGBAf(0.45, 0.5, 0.55, 1), align = (:center, :center))
-    cc = MollCanvas(fig, ax, m, c, mp, cmap, lims, cbar, msg, msgp)
+    cc = MollCanvas(fig, ax, m, c, mp, cmap, lims, clab, cbar, msg, msgp)
     idle!(cc, "no model — add one on the Model tab")
     return cc
 end
@@ -1039,6 +1150,56 @@ empty most of the time, and a layout size is not a plot at all — so both are l
 window exists, which is the constraint everything in this file is arranged around.
 """
 function idle!(c, message::AbstractString)
+    c.message[] = String(message)
+    _colorbar_visible!(c, false)
+    return c
+end
+
+"""
+    idle!(c::SkyCanvas,  message)
+    idle!(c::StarCanvas, message)
+    idle!(c::MollCanvas, message)
+
+Go idle AND stop drawing the old picture.
+
+**Setting the message is not enough.** The generic method above only writes the caption, so
+clearing the model left the star it had drawn still on screen with "no model" written over it —
+a picture of something that is no longer there. MEASURED after `shell_clear_model`: the message
+was correct while `msky.polys[]` still held 422 polygons and `star.mesh[]` 3072 vertices.
+
+The mesh canvases go back to the PLACEHOLDER rather than to nothing: a mesh plot's render
+object needs a valid mesh with a matching colour vector, and an empty one fails to build at all
+(`_empty_mesh` and `_empty_colors` are what the builders seed, and they exist for this reason).
+The polygon canvas can simply be emptied — `poly!` accepts an empty vector.
+"""
+function idle!(c::SkyCanvas, message::AbstractString)
+    c.polys[] = Vector{Makie.Point2f}[]
+    c.colors[] = Makie.RGBAf[]
+    c.strokecolors[] = Makie.RGBAf[]
+    c.limb[] = Makie.Point2f[]
+    c.grat[] = Makie.Point2f[]
+    c.compass[] = Makie.Point2f[]
+    c.compasstext[] = Makie.Point2f[]
+    c.compasslabels[] = String[]
+    c.axis3d[] = Makie.Point2f[]
+    c.spin[] = Makie.Point2f[]
+    c.message[] = String(message)
+    _colorbar_visible!(c, false)
+    return c
+end
+
+function idle!(c::StarCanvas, message::AbstractString)
+    c.mesh[]    = _empty_mesh();  c.colors[]  = _empty_colors()
+    c.mesh2[]   = _empty_mesh();  c.colors2[] = _empty_colors()
+    c.orbit[]   = Makie.Point3f[]
+    c.message[] = String(message)
+    _colorbar_visible!(c, false)
+    return c
+end
+
+function idle!(c::MollCanvas, message::AbstractString)
+    c.mesh[]    = _empty_mesh2d()
+    c.colors[]  = _empty_colors()
     c.message[] = String(message)
     _colorbar_visible!(c, false)
     return c

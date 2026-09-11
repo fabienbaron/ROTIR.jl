@@ -74,7 +74,7 @@ Pane {
             var f = lines[i].split("\t")
             if (f.length < 5) continue
             regModel.append({ rname: f[0], weight: f[1], extraLabel: f[2],
-                              extra: f[3], rdoc: f[4], on: false })
+                              extra: f[3], rshort: f[4], rdoc: f[5], on: false })
         }
     }
 
@@ -216,12 +216,20 @@ Pane {
                             selectByMouse: true
                             onEditingFinished: regModel.setProperty(index, "extra", text)
                         }
+                        // The FORMULA here, the advice in the tooltip. One string could not
+                        // carry both: what is left of the row after the tick, the name, the
+                        // weight and — on three of the ten rows — an extra knob and its label
+                        // is narrow exactly where the descriptions were longest, so they
+                        // elided mid-sentence. A tooltip has as much room as it likes.
                         Label {
                             Layout.fillWidth: true
-                            text: rdoc
+                            text: rshort
                             elide: Text.ElideRight
                             color: "#7f8c98"
                             font.pointSize: root.fontPt - 1
+                            ToolTip.text: rdoc
+                            ToolTip.visible: dma.containsMouse
+                            MouseArea { id: dma; anchors.fill: parent; hoverEnabled: true }
                         }
                     }
                 }

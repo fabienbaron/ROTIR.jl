@@ -192,7 +192,11 @@ const SURFACE_TYPES = Dict{Int,SurfaceSpec}(
 
     2 => SurfaceSpec(2, :rapid_rotator, "Rapid rotator",
         vcat([ParamSpec(:rpole, "Polar radius", "mas", 1.0, 1e-4, 1e3, :geometry, ""),
-              ParamSpec(:frac_escapevel, "v_eq / v_crit", "", 0.5, 0.0, 0.999, :geometry,
+              # 0.95, not 0.5. A rapid rotator is worth looking at when it is visibly
+              # oblate with real gravity darkening, and at 0.5 it is very nearly a sphere —
+              # so "+ model" on this surface type showed something that did not look like
+              # what it is for. 0.999 remains the upper bound; break-up is at 1.
+              ParamSpec(:frac_escapevel, "v_eq / v_crit", "", 0.95, 0.0, 0.999, :geometry,
                         "Equatorial rotation as a fraction of critical. 1 is break-up: " *
                         "the equatorial radius diverges as it is approached.")],
              _THERMAL, [_BETA], _LIMBDARK, _ORIENTATION),
@@ -201,7 +205,7 @@ const SURFACE_TYPES = Dict{Int,SurfaceSpec}(
                    "differential-rotation path is not wired in (see rotate_star).")],
         "Roche-model oblate rotator with von Zeipel gravity darkening."),
 
-    3 => SurfaceSpec(3, :roche, "Roche lobe (binary component)",
+    3 => SurfaceSpec(3, :roche, "Roche lobe",
         vcat([ParamSpec(:rpole, "Polar radius", "mas", 0.5, 1e-4, 1e3, :geometry,
                         "Defines the equipotential when the matching fill-out factor is -1.")],
              _FILLOUT, _THERMAL, [_BETA], _LIMBDARK, _ORIENTATION_SYNC, _ORBIT),

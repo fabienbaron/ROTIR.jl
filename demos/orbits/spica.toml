@@ -18,14 +18,12 @@ c2_diameter = 0.453
 i = 116.0
 
 [rendering]
-tpole1 = 20000.0
-rpole1 = 0.2
+tpole1 = 25300.0
 irradiation = false
 occultation = false
-rpole2 = 0.12
-tpole2 = 15000.0
+tpole2 = 20585.0
 render = false
-q = 0.5
+q = 0.6188
 roche = true
 
 [ties]

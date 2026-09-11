@@ -763,6 +763,11 @@ ApplicationWindow {
                 win.refreshAll()
                 return
             }
+            if (mode === "geometry") {
+                win.status = Julia.shell_load_geometry(paths.split("\n")[0])
+                win.refreshAll()
+                return
+            }
             // `shell_open_many` handles one file too, and reads a whole set together —
             // `readoifits_multiepochs` in one call rather than six, which is what makes the
             // epoch origin come out right and the log one line instead of six.
@@ -848,6 +853,34 @@ ApplicationWindow {
                 enabled: !win.jobRunning
                 onClicked: {
                     picker.purpose = "map"
+                    picker.canAdd = false
+                    picker.saveMode = false
+                    picker.openAt(initialFolder)
+                }
+            }
+            // And the GEOMETRY, beside the map and deliberately not part of it. A map file
+            // carries the parameters, so it could in principle rebuild the mesh — with
+            // whatever `create_star` does the day it is read. This writes the mesh itself, so
+            // a geometry can be reproduced rather than re-derived and assumed equal; loading
+            // one reports the largest disagreement between the two.
+            Button {
+                text: "Save model geometry"
+                font.pointSize: pt(10)
+                enabled: !win.jobRunning
+                ToolTip.text: "the mesh, the stellar parameters, the surface type and the " +
+                              "orbit or offset — and none of the map values"
+                ToolTip.visible: hovered
+                onClicked: win.status = Julia.shell_save_geometry("rotir_geometry.fits")
+            }
+            Button {
+                text: "Load model geometry"
+                font.pointSize: pt(10)
+                enabled: !win.jobRunning
+                ToolTip.text: "rebuild the model from a saved geometry, and report how far " +
+                              "the rebuilt mesh is from the stored one"
+                ToolTip.visible: hovered
+                onClicked: {
+                    picker.purpose = "geometry"
                     picker.canAdd = false
                     picker.saveMode = false
                     picker.openAt(initialFolder)

@@ -250,7 +250,8 @@ star whose parameters were not supplied — it is interpolated from the MESH its
 `_mesh_body_curve`, so the graticule follows the real deformed surface rather than a sphere
 that only approximates it.
 """
-function graticule_segments(star; nlat=5, nlon=8, offset_west=0.0, offset_north=0.0,
+function graticule_segments(star; nlat=5, nlon=8, dlat=NaN, dlon=NaN,
+                            offset_west=0.0, offset_north=0.0,
                             inclination=NaN, position_angle=NaN, npoints=200,
                             star_params=nothing)
 
@@ -296,7 +297,29 @@ function graticule_segments(star; nlat=5, nlon=8, offset_west=0.0, offset_north=
     graticule_lines = Vector{Matrix{Float64}}()
 
     # Latitude circles (constant colatitude)
-    θ_targets = collect(range(π/(nlat+1), stop=π*nlat/(nlat+1), length=nlat))
+    # SPACING, when the caller gives one, rather than a count divided evenly between the
+    # poles. "Every 75 degrees of latitude" means parallels at 0 and +/-75 — which a count
+    # cannot express: `nlat = round(180/75) = 2` parallels get placed at 180/(nlat+1) = 60
+    # apart, so asking for 75 drew 60. Longitudes never had the problem, because `360/nlon`
+    # is exactly the requested step.
+    #
+    # `nlat`/`nlon` stay the default so every existing caller — and `test_plotting.jl` —
+    # keeps its current layout.
+    θ_targets = if isfinite(dlat) && dlat > 0
+        # From the equator outwards, both ways, stopping before the pole itself (a parallel
+        # AT the pole is a point).
+        lats = Float64[]
+        k = 0
+        while true
+            l = k * dlat
+            l >= 90 && break
+            k == 0 ? push!(lats, 0.0) : append!(lats, (l, -l))
+            k += 1
+        end
+        sort!((90 .- lats) .* (π / 180))        # latitude -> colatitude, in radians
+    else
+        collect(range(π/(nlat+1), stop=π*nlat/(nlat+1), length=nlat))
+    end
     ϕ_range = collect(range(-π, stop=π, length=npoints))
     for θ0 in θ_targets
         vis = nothing
@@ -324,7 +347,11 @@ function graticule_segments(star; nlat=5, nlon=8, offset_west=0.0, offset_north=
     end
 
     # Longitude lines (constant azimuth)
-    ϕ_targets = collect(range(0, stop=2π*(1 - 1/nlon), length=nlon))
+    ϕ_targets = if isfinite(dlon) && dlon > 0
+        collect(range(0, step = dlon * π / 180, length = max(1, floor(Int, 360 / dlon))))
+    else
+        collect(range(0, stop=2π*(1 - 1/nlon), length=nlon))
+    end
     θ_range = collect(range(0, stop=π, length=npoints))
     for ϕ0 in ϕ_targets
         vis = nothing

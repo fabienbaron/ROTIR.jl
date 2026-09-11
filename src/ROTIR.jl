@@ -28,6 +28,7 @@ include("resources.jl");
 include("oistars.jl");
 include("surface_schema.jl");
 include("surface_map_io.jl");
+include("surface_geometry_io.jl");
 include("soft_visibility.jl");
 
 # Convert all AbstractFloat fields of a NamedTuple to type T in one shot.
@@ -223,6 +224,8 @@ export ParamSpec, SurfaceSpec, SURFACE_TYPES, SURFACE_TYPE_ORDER,
 # A surface map as a file, with the tessellation and the parameters that reproduce its χ²
 # (src/surface_map_io.jl).
 export save_surface_map, load_surface_map
+# The geometry, without the map on it (src/surface_geometry_io.jl).
+export save_star_geometry, load_star_geometry
 
 # Geometry: stars and binaries
 export stellar_geometry

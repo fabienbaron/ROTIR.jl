@@ -129,20 +129,15 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
 
         if isfile(_pcfile)
             load_dataset!(_s, _pcfile)
-            _sh = ShellState(_s, _sky, _star, _moll, _chi, _sky, _moll, _sky,
-                             nothing, Makie.Observable(Makie.Point2f[]),
-                             Ref(:v2), Ref(:baseline), Ref(true),
-                             Ref(true), Ref(:linear), Ref(0.0),
-                             Dict(:limb => true, :compass => true, :graticules => false,
-                                  :spin => false, :plotmesh => false),
-                             Ref(30.0), Ref(30.0), Ref("black"),
-                             Ref(:healpix), Ref(3), Ref{DataType}(Float32),
-                             default_orbit(), nothing, "", String[], "",
-                             nothing, :none, "", Dict{Symbol,Any}(),
-                             Ref{Any}(nothing), Ref{Any}(nothing),
-                             build_post_canvas(Makie.Figure()), Ref(1), Ref(2), Ref(false),
-                             build_star_canvas(Makie.Figure()),
-                             Ref{Any}(nothing))
+            # BY KEYWORD, so a field added to `ShellState` does not break THIS site — which
+            # is the one that is easy to miss: it is in another file and only runs while the
+            # extension precompiles, so the failure is a `MethodError` at build time listing
+            # every argument type on one line.
+            _sh = ShellState(; session = _s, sky = _sky, star = _star, moll = _moll,
+                             chi2 = _chi, imsky = _sky, immoll = _moll, msky = _sky,
+                             obsmodel = Makie.Observable(Makie.Point2f[]),
+                             post = build_post_canvas(Makie.Figure()),
+                             imstar = build_star_canvas(Makie.Figure()))
             SHELL[] = _sh
             # The two refreshes are the whole redraw path: geometry, temperature map, colours,
             # polygons, the 3-D mesh, the Mollweide resampling and the per-epoch χ². MEASURED

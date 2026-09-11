@@ -57,9 +57,13 @@ Pane {
     signal statusChanged(string s)
 
     function dp(px) { return Math.round(px * uiScale) }
+    // Through the PROPERTIES, not through one row's controls. Two rows drive this now — the
+    // orthographic view's tick-and-law, and the whole-surface views' single quantity combo —
+    // and reading `modelBox.currentText` would have made the second row's choice depend on a
+    // control that is not on screen.
     function pushField() {
         statusChanged(Julia.shell_set_surface_field(
-            intensity ? "1" : "0", modelBox.currentText, bandField.text))
+            intensity ? "1" : "0", intensityModel, band))
         viewChanged()
     }
 
@@ -177,8 +181,19 @@ Pane {
         Layout.fillWidth: true
         spacing: dp(6)
         visible: root.showField && root.viewIndex !== 3
+        // THE TICK IS ORTHOGRAPHIC-ONLY, and that is not a rendering limitation — it is what
+        // the tick MEANS. It does two things at once: switch the quantity from a temperature
+        // to an emergent intensity, and multiply LIMB DARKENING in. Only a view with a limb
+        // can do the second, and under the `linear` law the first is the identity — so on the
+        // Mollweide and in 3-D the tick changed the picture not at all and relabelled the
+        // colour bar, which is worse than an absent control.
+        //
+        // Those two views get the single combo below instead: temperature, or the Planck
+        // intensity, which IS a different quantity from T and is the one case that works
+        // there.
         CheckBox {
             id: intensityBox
+            visible: root.viewIndex === 0
             text: "intensity"
             checked: root.intensity
             font.pointSize: root.fontPt - 1
@@ -188,24 +203,46 @@ Pane {
         }
         ComboBox {
             id: modelBox
-            visible: root.intensity
+            visible: root.viewIndex === 0 && root.intensity
             Layout.preferredWidth: root.dp(110)
             model: ["linear", "planck"]
+            currentIndex: root.intensityModel === "planck" ? 1 : 0
             font.pointSize: root.fontPt - 1
             ToolTip.text: "linear: I proportional to T. planck: a real surface brightness at " +
                           "the observing wavelength"
             ToolTip.visible: hovered
             onActivated: { root.intensityModel = currentText; root.pushField() }
         }
+        // The whole-surface views' one control. `linear` is absent on purpose: a linear
+        // intensity of a temperature map IS that map, so offering it would be offering the
+        // first entry twice under two names.
+        ComboBox {
+            id: quantityBox
+            visible: root.viewIndex !== 0
+            Layout.preferredWidth: root.dp(150)
+            model: ["temperature", "Planck intensity"]
+            currentIndex: (root.intensity && root.intensityModel === "planck") ? 1 : 0
+            font.pointSize: root.fontPt - 1
+            ToolTip.text: "what the colours mean. Limb darkening is not offered here: it is " +
+                          "viewing geometry, and these views have no limb — the 3-D camera " +
+                          "can be turned, so a factor baked for one viewpoint would be wrong " +
+                          "from every other"
+            ToolTip.visible: hovered
+            onActivated: {
+                root.intensity = (currentIndex === 1)
+                root.intensityModel = (currentIndex === 1) ? "planck" : "linear"
+                root.pushField()
+            }
+        }
         Label {
-            visible: root.intensity && modelBox.currentText === "planck"
+            visible: root.intensity && root.intensityModel === "planck"
             text: "λ (µm)"
             color: "#7f8c98"
             font.pointSize: root.fontPt - 1
         }
         TextField {
             id: bandField
-            visible: root.intensity && modelBox.currentText === "planck"
+            visible: root.intensity && root.intensityModel === "planck"
             Layout.preferredWidth: root.dp(66)
             // Filled from Julia with the wavelength that WOULD be used — the data's own mean
             // — rather than left at a sentinel the reader has to know the meaning of.
@@ -214,7 +251,7 @@ Pane {
             selectByMouse: true
             ToolTip.text: "defaults to the mean wavelength of the loaded observations"
             ToolTip.visible: hovered
-            onEditingFinished: root.pushField()
+            onEditingFinished: { root.band = text; root.pushField() }
         }
         // Decorations, to the RIGHT of the intensity controls: they annotate the same
         // picture, they are all one-click toggles, and putting them on a row of their own

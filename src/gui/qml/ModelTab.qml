@@ -156,6 +156,14 @@ Pane {
         }
         // The companion, when there is one.
         root.isBinary = Julia.shell_binary() === "1"
+        // The companion's own surface type, pushed into the selector beside "Secondary".
+        // Every path that changes the model comes through here, which is what keeps the box
+        // honest; see the note on `compTypeBox`.
+        var ccode = Julia.shell_companion_surface_type()
+        var cidx = -1
+        for (var ci = 0; ci < typeModel.count; ++ci)
+            if (typeModel.get(ci).code === ccode) { cidx = ci; break }
+        compTypeBox.currentIndex = cidx
         var rows2 = root.isBinary ? Julia.shell_params2() : ""
         param2Model.clear()
         if (rows2.length > 0) {
@@ -180,6 +188,22 @@ Pane {
                                   pstate: e[4], plo: e[5], phi: e[6], ptie: e[7],
                                   pgroup: e[8], pkind: e[9], pchoices: e[10], pdoc: e[11],
                                   pinert: e.length > 12 && e[12] === "1", pcomp: 3 })
+            }
+        }
+        // THE ORBIT, in the same table and below the offset, because it answers the same
+        // question — where the secondary is — and because a copy in each component frame was
+        // two editable orbits for one pair. `pcomp: 4` routes it to the shared setters;
+        // sectioning by `pgroup` keeps it under its own heading.
+        var orows = root.isBinary ? Julia.shell_binary_orbit_params() : ""
+        if (orows.length > 0) {
+            var ols = orows.split("\n")
+            for (var oi = 0; oi < ols.length; ++oi) {
+                var o = ols[oi].split("\t")
+                if (o.length < 12) continue
+                posModel.append({ pname: o[0], plabel: o[1], punit: o[2], pvalue: o[3],
+                                  pstate: o[4], plo: o[5], phi: o[6], ptie: o[7],
+                                  pgroup: o[8], pkind: o[9], pchoices: o[10], pdoc: o[11],
+                                  pinert: o.length > 12 && o[12] === "1", pcomp: 4 })
             }
         }
         var pl = Julia.shell_binary_placement()
@@ -207,22 +231,27 @@ Pane {
     // delegate reads it off its own ListView, so one row definition serves all three tables
     // and a control added to it appears in every one.
     function setParam(comp, n, v) {
-        return comp === 3 ? Julia.shell_set_position_param(n, v)
+        return comp === 4 ? Julia.shell_set_binary_orbit_param(n, v)
+             : comp === 3 ? Julia.shell_set_position_param(n, v)
              : comp === 2 ? Julia.shell_set_param2(n, v)
                           : Julia.shell_set_param(n, v)
     }
     function setState(comp, n, s) {
-        return comp === 3 ? Julia.shell_set_position_state(n, s)
+        return comp === 4 ? Julia.shell_set_binary_orbit_state(n, s)
+             : comp === 3 ? Julia.shell_set_position_state(n, s)
              : comp === 2 ? Julia.shell_set_param_state2(n, s)
                           : Julia.shell_set_param_state(n, s)
     }
     function setBound(comp, n, lo, hi) {
-        return comp === 3 ? Julia.shell_set_position_bound(n, lo, hi)
+        return comp === 4 ? Julia.shell_set_binary_orbit_bound(n, lo, hi)
+             : comp === 3 ? Julia.shell_set_position_bound(n, lo, hi)
              : comp === 2 ? Julia.shell_set_bound2(n, lo, hi)
                           : Julia.shell_set_bound(n, lo, hi)
     }
     function setTie(comp, n, e) {
-        return comp === 2 || comp === 3 ? Julia.shell_set_tie2(n, e) : Julia.shell_set_tie(n, e)
+        return comp === 4 ? Julia.shell_set_binary_orbit_tie(n, e)
+             : comp === 2 || comp === 3 ? Julia.shell_set_tie2(n, e)
+                          : Julia.shell_set_tie(n, e)
     }
 
     // The secondary's placement, pushed to Julia which owns it. Only the MODE is set here:
@@ -468,6 +497,17 @@ Pane {
                     ComboBox {
                         id: typeBox
                         Layout.fillWidth: true
+                        // A FLOOR, because this is the only `fillWidth` item in the row and so
+                        // it pays for everything else that appears: ticking `secondary` adds a
+                        // companion-type combo, and the surface-type name — "Triaxial
+                        // ellipsoid", "Rapid rotator" — was squeezed to nothing. The same
+                        // effect moved the click test's "+ model" coordinate from x=400 to 299
+                        // (see the note in test/gui/gui_click.sh).
+                        //
+                        // A minimum rather than a fixed width: with room to spare the combo
+                        // should still take it, since the longest entry is what has to be
+                        // readable.
+                        Layout.minimumWidth: dp(130)
                         model: typeModel
                         textRole: "label"
                         font.pointSize: root.fontPt
@@ -520,21 +560,7 @@ Pane {
                             root.refresh(); root.redraw()
                         }
                     }
-                    ComboBox {
-                        id: compTypeBox
-                        visible: root.isBinary
-                        Layout.preferredWidth: dp(120)
-                        model: typeModel
-                        textRole: "label"
-                        font.pointSize: root.fontPt - 1
-                        ToolTip.text: "the companion's surface type"
-                        ToolTip.visible: hovered
-                        onActivated: {
-                            root.statusChanged(Julia.shell_companion_type(
-                                parseInt(typeModel.get(currentIndex).code)))
-                            root.refresh(); root.redraw()
-                        }
-                    }
+    
                     Button {
                         text: "− model"
                         enabled: modelListModel.count > 0
@@ -660,12 +686,45 @@ Pane {
                 // component in its own right — its own surface type, its own free set, its own
                 // bounds — not a set of numbers hanging off the primary, and a reduced form here
                 // would have said otherwise.
-                Label {
+                // The companion's SURFACE TYPE lives here, with the secondary's parameters,
+                // not up in the model row. It was the only control in that row that appears
+                // and disappears, so every pixel it needed came out of the surface-type name
+                // beside it. Here it also reads as what it is: a property of the secondary.
+                // (The labels were shortened to "Binary" and "Roche lobe" as well, which is
+                // what makes the remaining row comfortable rather than merely survivable.)
+                RowLayout {
                     visible: root.isBinary
-                    text: "Secondary"
-                    font.bold: true
-                    font.pointSize: root.fontPt
-                    color: "#7f8c98"
+                    Layout.fillWidth: true
+                    spacing: dp(6)
+                    Label {
+                        text: "Secondary"
+                        font.bold: true
+                        font.pointSize: root.fontPt
+                        color: "#7f8c98"
+                    }
+                    ComboBox {
+                        id: compTypeBox
+                        visible: root.isBinary
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: dp(150)
+                        // The current value is pushed by `refresh()`, NOT bound here. A
+                        // binding on `Julia.shell_companion_surface_type()` evaluates once and
+                        // never again: QML has no way to know when a plain function call's
+                        // answer has changed, so the box was still showing the -1 it computed
+                        // before the companion existed — i.e. blank, which reads as "nothing
+                        // chosen" rather than as "Roche lobe".
+                        model: typeModel
+                        textRole: "label"
+                        font.pointSize: root.fontPt - 1
+                        ToolTip.text: "the companion's surface type"
+                        ToolTip.visible: hovered
+                        onActivated: {
+                            root.statusChanged(Julia.shell_companion_type(
+                                parseInt(typeModel.get(currentIndex).code)))
+                            root.refresh(); root.redraw()
+                        }
+                        }
+                    Item { Layout.fillWidth: true }
                 }
                 Frame {
                     visible: root.isBinary
@@ -680,12 +739,12 @@ Pane {
                         spacing: dp(2)
                         section.property: "pgroup"
                         section.delegate: Label {
-                            width: param2List.width
-                            text: section
-                            font.bold: true
-                            font.pointSize: root.fontPt - 1
-                            color: "#7f8c98"
-                            topPadding: dp(6)
+                        width: param2List.width
+                        text: section
+                        font.bold: true
+                        font.pointSize: root.fontPt - 1
+                        color: "#7f8c98"
+                        topPadding: dp(6)
                         }
                         delegate: paramRow
                     }
@@ -706,11 +765,17 @@ Pane {
                 Frame {
                     visible: root.isBinary
                     Layout.fillWidth: true
-                    Layout.preferredHeight: dp(118)
+                    // Sized to its CONTENT, like the two component frames above it: the orbit
+                    // moved in here, so a fixed height would have hidden most of it behind an
+                    // inner scroll area while the column it sits in scrolls anyway.
+                    Layout.preferredHeight: placeRow.implicitHeight + dp(4)
+                                            + posList.contentHeight
+                                            + topPadding + bottomPadding
                     ColumnLayout {
                         anchors.fill: parent
                         spacing: dp(2)
                         RowLayout {
+                            id: placeRow
                             Layout.fillWidth: true
                             spacing: dp(6)
                             Label { text: "secondary by"; color: "#7f8c98"
@@ -743,9 +808,22 @@ Pane {
                             id: posList
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            interactive: false
                             clip: true
                             model: posModel
-                            ScrollBar.vertical: ScrollBar {}
+                            spacing: dp(2)
+                            // "position" then "orbit", which is the order they are appended
+                            // in and the order they are read in: what the offset is, then
+                            // what the orbit that can replace it is.
+                            section.property: "pgroup"
+                            section.delegate: Label {
+                                width: posList.width
+                                text: section
+                                font.bold: true
+                                font.pointSize: root.fontPt - 1
+                                color: "#7f8c98"
+                                topPadding: dp(6)
+                            }
                             delegate: paramRow
                         }
                     }

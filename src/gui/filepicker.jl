@@ -19,7 +19,8 @@ const PICKER_EXTENSIONS_MAP   = (".fits", ".fit")
 "Extensions the picker offers for a purpose."
 picker_extensions(purpose::AbstractString) =
     purpose == "orbit" ? PICKER_EXTENSIONS_ORBIT :
-    purpose == "map"   ? PICKER_EXTENSIONS_MAP   : PICKER_EXTENSIONS
+    purpose == "map" || purpose == "geometry" ? PICKER_EXTENSIONS_MAP :
+    PICKER_EXTENSIONS
 
 """
     picker_places() -> String

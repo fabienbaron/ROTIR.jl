@@ -18,6 +18,23 @@
 # has no integer column type that survives a mixed table, so the type travels beside the value
 # and `load_surface_map` restores it.
 
+# FITS STRING COLUMNS ARE ASCII. The schema's orbital elements are Unicode by necessity —
+# `compute_coeff`, `omega_at` and `binary_orbit_abs` read `bparams.Ω`, `.ω` and `.dω` by those
+# exact names, and an ASCII `Omega` is a different field that fails at runtime (see
+# src/surface_schema.jl) — so a parameter table written verbatim throws
+#
+#     FITS file format accepts ASCII strings only
+#
+# on any Roche model, which is every binary. Three names need an alias and the mapping is fixed
+# and bidirectional: no schema field is spelled `Omega`, `omega` or `domega` in ASCII, so an
+# alias cannot collide with a real name. Shared with `surface_geometry_io.jl`, which writes the
+# same table.
+const _PARAM_ASCII = Dict{Symbol,String}(:Ω => "Omega", :ω => "omega", :dω => "domega")
+const _PARAM_UNICODE = Dict{String,Symbol}(v => k for (k, v) in _PARAM_ASCII)
+
+_param_ascii(k::Symbol) = get(_PARAM_ASCII, k, String(k))
+_param_unicode(s::AbstractString) = get(_PARAM_UNICODE, String(s), Symbol(s))
+
 """
     save_surface_map(path, x, params; nside_exp, kwargs...) -> path
 
@@ -86,7 +103,7 @@ function save_surface_map(path::AbstractString, x::AbstractVector, params::Named
         v = getfield(params, k)
         v isa Real || continue          # a NamedTuple field that is not a number is not a
                                         # fit parameter; nothing downstream reads one.
-        push!(names, String(k)); push!(values, Float64(v))
+        push!(names, _param_ascii(k)); push!(values, Float64(v))
         push!(types, v isa Integer ? "I" : v isa Bool ? "B" : "D")
     end
 
@@ -131,7 +148,7 @@ function load_surface_map(path::AbstractString)
             pn = read(t, "NAME"); pv = read(t, "VALUE")
             pt = _has_col(t, "TYPE") ? read(t, "TYPE") : fill("D", length(pn))
             for j in eachindex(pn)
-                push!(nms, Symbol(strip(String(pn[j]))))
+                push!(nms, _param_unicode(strip(String(pn[j]))))
                 s = strip(String(pt[j]))
                 push!(vls, s == "I" ? round(Int, pv[j]) :
                            s == "B" ? (pv[j] != 0)      : Float64(pv[j]))
