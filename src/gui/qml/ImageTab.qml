@@ -1,7 +1,7 @@
-// Imaging: a regularised surface reconstruction on the sphere.
+// Imaging: a regularized surface reconstruction on the sphere.
 //
 // NOT OITOOLS' 2-D imaging. The image here is one value per HEALPix tessel on a 3-D surface,
-// the Fourier transform is the polygon FT of that surface at each epoch, and the regularisers
+// the Fourier transform is the polygon FT of that surface at each epoch, and the regularizers
 // are the ones that mean something on a sphere.
 //
 // The engine reports by printing, so its trace streams into the console while it runs (see
@@ -63,7 +63,7 @@ Pane {
         for (var j = 0; j < backendModel.count; ++j)
             if (backendModel.get(j).bkey === cur) backendBox.currentIndex = j
     }
-    ListModel { id: regModel }      // every available regulariser, with its default weight
+    ListModel { id: regModel }      // every available regularizer, with its default weight
     ListModel { id: imageModel }
 
     Component.onCompleted: {
@@ -96,7 +96,7 @@ Pane {
         }
     }
 
-    // The regulariser string the shell parses: `name:weight:a:b` joined by `;`. Built here
+    // The regularizer string the shell parses: `name:weight:a:b` joined by `;`. Built here
     // from the ticked rows and parsed in one place on the Julia side, so the list of what
     // exists has a single authority.
     function regSpec() {
@@ -163,7 +163,7 @@ Pane {
                 }
             }
 
-            Label { text: "Regularisers"; font.bold: true; font.pointSize: root.fontPt }
+            Label { text: "Regularizers"; font.bold: true; font.pointSize: root.fontPt }
 
             Frame {
                 Layout.fillWidth: true

@@ -346,6 +346,8 @@ function ROTIR.gui(session::Session = Session();
 
     # `skyfig`, not `skyfig.scene`: QMLMakie's MakieArea resolves the scene itself. Handing it
     # the root Scene directly skips whatever the figure-level path sets up.
+    # A redraw asked for before this loop turns deadlocks the window black; see `GUI_LIVE`.
+    GUI_LIVE[] = false
     QML.loadqml(qmlfile;
                 skyPlot         = skyfig,
                 starPlot        = starfig,

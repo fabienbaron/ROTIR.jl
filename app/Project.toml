@@ -41,16 +41,28 @@ ROTIR = "1effc416-1cd3-435e-ba3b-8cf647137d25"
 #   Zygote                        -> the gradient fit           (ROTIRZygoteExt)
 #   AdvancedHMC + LogDensityProblems -> "NUTS"                  (ROTIRHMCExt)
 #   Pigeons + Distributions + ADTypes -> "Tempering"            (ROTIRPigeonsExt)
-#   LoopVectorization             -> the `:turbo` polygon-FT kernel (ROTIRLoopVectorizationExt)
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
-LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
 Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
+# LOOPVECTORIZATION IS DELIBERATELY ABSENT, and it is the one omission that costs a feature:
+# the `:turbo` polygon-FT kernel is not offered in a bundle. It cannot be: `create_app` builds a
+# MULTIVERSIONED sysimage (`--cpu-target=generic;sandybridge,...;haswell,...`) so the binary runs
+# on a CPU other than the one that built it, while VectorizationBase specialises to the BUILD
+# machine — and the two cannot be reconciled. MEASURED here: the sysimage link aborted with
+#
+#     LLVM ERROR: Cannot select: v2f64 = X86ISD::RCP14 ...
+#     In function: julia_inv_approx_286209u286212        (VectorizationBase/src/special/log.jl)
+#
+# an AVX512 reciprocal emitted for this machine that has no encoding in the generic target.
+# Narrowing the cpu_target to `native` would fix the link and give up portability, which is the
+# wrong trade for a kernel that is not even the default: the GUI ships `:nufft`, which its own
+# menu labels "fastest".
+#
 # PythonCall and PythonPlot are deliberately absent: they would pull a ~1.6 GB Conda
 # environment and map a SECOND Qt into the process, which is the conflict `check_qt_conflict`
 # exists to diagnose. The application therefore ships without UltraNest (Nautilus covers nested

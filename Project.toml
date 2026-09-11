@@ -94,7 +94,10 @@ LoopVectorization = "0.12.174"
 Makie = "0.24"
 NLopt = "1"
 Nautilus = "0.1"
-OITOOLS = "0.13"
+# 0.14 is the current release; 0.13 stays allowed so an existing resolve is not forced
+# forward. A single upper-bounded entry is what made the docs environment unsatisfiable —
+# `[sources]` fetches OITOOLS' default branch, which is 0.14, and CI could not resolve it.
+OITOOLS = "0.13, 0.14"
 Pigeons = "0.4"
 PrecompileTools = "1.2"
 PythonCall = "0.9"

@@ -100,6 +100,22 @@ end
 
 const SHELL = Ref{Any}(nothing)
 
+"""
+Whether Qt's event loop is turning, so a redraw asked for from QML can actually complete.
+
+**A Makie redraw before the first frame deadlocks the window, silently.** Qt's render thread
+sits in `MakieViewport::setup_buffer` waiting on `ForeignThreadManager::begin_julia` for the
+Julia lock; a callback that redraws during `Component.onCompleted` holds that lock through a
+full Makie pass, the render thread never gets in, and the window stays BLACK for ever. Nothing
+throws, so stdout, the console and the QML error channel are all empty — the only evidence is
+a backtrace showing the render thread blocked on a mutex.
+
+Set from [`shell_job_poll`](@ref), which is driven by a QML `Timer` and therefore cannot run
+until the loop is live. Cleared by `gui` before `loadqml`, so a second window in one session
+starts from false rather than inheriting the first one's.
+"""
+const GUI_LIVE = Ref(false)
+
 _sh() = SHELL[]::ShellState
 
 # ── console ─────────────────────────────────────────────────────────────────────────────
@@ -836,6 +852,23 @@ function _reset_unused_ld!(m)
 end
 
 """
+    _qmlname(x) -> Symbol or nothing
+
+A parameter name arriving from QML, or `nothing` when QML had none to give.
+
+**QML can hand us `undefined`, and it arrives here as `nothing`.** A ListView recycles its
+delegates, so a handler such as `onEditingFinished` — which fires on FOCUS LOSS — can run after
+its row's model context is gone; the roles then read `undefined`. `String(nothing)` throws, the
+exception escapes through `QML.julia_call`, and the whole window stops responding with nothing
+on screen and nothing in the console to say why.
+
+The QML side captures the row's identity at construction so this should not arise, but a
+callback that cannot be reached from a dead row is worth guaranteeing on this side too: every
+entry point that takes a name from QML goes through here and REFUSES rather than throws.
+"""
+_qmlname(x) = x === nothing ? nothing : Symbol(String(x))
+
+"""
     shell_set_param(name, value) -> String
 
 Set one parameter. Non-numeric text is refused rather than silently zeroing the field, which
@@ -845,10 +878,12 @@ function shell_set_param(name, value)
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
+    n = _qmlname(name)
+    n === nothing && return "no parameter named by the form (the row went away before the edit landed)"
     v = tryparse(Float64, String(value))
     v === nothing && return "not a number: $(value)"
-    m.params[Symbol(String(name))] = v
-    Symbol(String(name)) === :ldtype && _reset_unused_ld!(m)
+    m.params[n] = v
+    n === :ldtype && _reset_unused_ld!(m)
     refresh_model_tab!(sh)
     return ""
 end
@@ -972,7 +1007,7 @@ carry a spot but converges in seconds, which is what makes it the level to check
 before committing to one. Above 6 the polygon FT dominates everything else the GUI does.
 
 `:longlat` is accepted by the geometry but is NOT wired here: `create_star` builds it, and the
-regularisers and the shape gradients are all written against the HEALPix neighbour structure,
+regularizers and the shape gradients are all written against the HEALPix neighbour structure,
 so offering it would mean a mesh half the panel does not work on.
 
 `precision` is `Float32` by default. It is what `tessellation_healpix` itself defaults to, it
@@ -983,7 +1018,7 @@ that the default for everything.
 function shell_set_tessellation(kind, nside_exp, precision)
     sh = _sh()
     k = Symbol(String(kind))
-    k === :healpix || return "only :healpix is wired; :longlat has no regularisers or gradients"
+    k === :healpix || return "only :healpix is wired; :longlat has no regularizers or gradients"
     sh.tessel[] = k
     sh.nside_exp[] = clamp(Int(nside_exp), 2, 6)
     p = String(precision)
@@ -2040,6 +2075,9 @@ When the worker has finished, this is where the result is taken up and the canva
 on the GUI thread, which is the only place a GL call may happen.
 """
 function shell_job_poll()
+    # Driven by a QML Timer, so reaching this line proves the event loop is turning and a
+    # redraw can complete. See `GUI_LIVE`.
+    GUI_LIVE[] = true
     sh = _sh()
     j = sh.job
     j === nothing && return "0\t0\t\t"
@@ -2779,7 +2817,7 @@ _fit_table(names, best, errs) =
 """
     REGULARIZER_KINDS
 
-Every regulariser `spheroid_regularization` dispatches on, with what the panel needs to offer
+Every regularizer `spheroid_regularization` dispatches on, with what the panel needs to offer
 it: a default weight, and the ONE extra scalar (if any) the caller has to choose.
 
 Taken from the dispatch chain itself (src/oichi2_spheroid.jl:995-1019) rather than from the
@@ -2787,13 +2825,13 @@ docs, and it is longer than it looks: `mean`, `bias` and `radialvar` are impleme
 missing from the first version of this table, which would have made them unreachable from the
 GUI while `spheroid_regularization` happily accepted them from a script.
 
-A regulariser entry is FOUR elements — `[name, weight, aux, subset]` — and only the first two
+A regularizer entry is FOUR elements — `[name, weight, aux, subset]` — and only the first two
 are numbers the panel can supply:
 
   * `aux` is a precomputed STRUCTURE for most of them: the Sobel operator for `sobel`/`sobel2`,
     the neighbour Laplacian for `tv`/`tv2`, the radial binning for `radflat`/`radialvar`, the
     degenerate direction for `orthold`. Only `bias` takes a plain number there.
-  * `subset` is a PIXEL INDEX SET, not a number, and for the radial regularisers it must be
+  * `subset` is a PIXEL INDEX SET, not a number, and for the radial regularizers it must be
     the exact index set their binning was built from or the call errors.
 
 So the panel chooses names, weights and the one scalar knob, and [`build_regularizers`](@ref)
@@ -2803,16 +2841,16 @@ string invites — cannot work at all.
 Fields: name, default weight, extra-knob label ("" when there is none), extra default, doc.
 """
 const REGULARIZER_KINDS = [
-    ("sobel",     1e1, "",      0.0, "∫|∇x| dΩ — isotropic L1 on the sphere, edge-preserving"),
-    ("sobel2",    1e1, "",      0.0, "∫|∇x|² dΩ — smooth; the usual first choice"),
-    ("tv",        1e1, "",      0.0, "‖Lx‖ — curvature, L1"),
-    ("tv2",       1e1, "",      0.0, "‖Lx‖² — curvature, L2"),
-    ("mem",       1e1, "",      0.0, "maximum entropy: per-pixel contrast, no spatial coupling"),
-    ("mean",      1e1, "",      0.0, "departure from the map mean"),
-    ("bias",      1e1, "B",     2.0, "harmonic bias for asymmetric brightening; B is the asymmetry"),
-    ("radflat",   1e2, "nbins", 6.0, "flatness BETWEEN annuli — single-epoch, non-rotating only"),
-    ("radialvar", 1e2, "nbins", 6.0, "variance WITHIN annuli — the complement of radflat"),
-    ("orthold",   1e2, "",      0.0, "penalises the limb-darkening-degenerate direction"),
+    ("sobel",     1e1, "",      0.0, "∫|∇x| dΩ, edge-preserving"),
+    ("sobel2",    1e1, "",      0.0, "∫|∇x|² dΩ, smooth — usual first choice"),
+    ("tv",        1e1, "",      0.0, "‖Lx‖, curvature L1"),
+    ("tv2",       1e1, "",      0.0, "‖Lx‖², curvature L2"),
+    ("mem",       1e1, "",      0.0, "maximum entropy, per-pixel"),
+    ("mean",      1e1, "",      0.0, "departure from the mean"),
+    ("bias",      1e1, "B",     2.0, "harmonic bias; B is the asymmetry"),
+    ("radflat",   1e2, "nbins", 6.0, "flat BETWEEN annuli — single epoch only"),
+    ("radialvar", 1e2, "nbins", 6.0, "variance WITHIN annuli"),
+    ("orthold",   1e2, "",      0.0, "penalises the LD-degenerate direction"),
 ]
 
 """
@@ -2858,7 +2896,7 @@ end
 # result — which is also what a reader wants to see and edit.
 function _regularizer_source(specs, n)
     isempty(specs) && return "Any[]"
-    # Anything a regulariser has to CONSTRUCT first goes on its own line before the array.
+    # Anything a regularizer has to CONSTRUCT first goes on its own line before the array.
     # Putting it in a trailing comment inside the literal (which the first version did) makes
     # the following comma part of the comment, and the exported script does not parse.
     pre   = String[]
@@ -2900,7 +2938,7 @@ This is where the operators are actually built, and each is built ONCE per run r
 iteration — `sobel_gradient_healpix` and `tv_neighbors_healpix` are sparse assemblies over the
 whole mesh, and the criterion is evaluated thousands of times.
 
-Two subsets are in play and they are not the same. The mesh regularisers act on every pixel;
+Two subsets are in play and they are not the same. The mesh regularizers act on every pixel;
 the radial ones act only on `star.index_quads_visible`, and their fourth element must be the
 index set their binning was built from — `radflat_bins` checks and errors otherwise, which is
 the right behaviour but a confusing one to meet by accident.
@@ -2931,7 +2969,7 @@ function build_regularizers(specs, n::Integer, star, x0, star_params; subset = n
         elseif s.name in ("radflat", "radialvar")
             # These weight their annuli by `star.polyflux`, which `setup_oi!` fills. Said
             # plainly here because the failure otherwise is a BoundsError on an empty vector
-            # several calls down, which names neither the regulariser nor the missing step.
+            # several calls down, which names neither the regularizer nor the missing step.
             isempty(star.polyflux) &&
                 error("$(s.name) needs the Fourier setup: call setup_oi!(data, stars) before " *
                       "building it (the reconstruction path does this for you).")
@@ -2990,7 +3028,7 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
     log!(sh.session,
          "tess  = tessellation_healpix($n)\n" *
          "stars = create_star_multiepochs(tess, $(m.name), tepochs)\n" *
-         # `setup_oi!` BEFORE the regularisers, and it was missing entirely: the worker does
+         # `setup_oi!` BEFORE the regularizers, and it was missing entirely: the worker does
          # it, the exported script did not, and `radflat_bins` then indexed an empty
          # `star.polyflux` — a script that parsed, read correctly, and died on the fourth line.
          # Nothing caught it until the round trip was actually RUN in the test suite.
@@ -3125,7 +3163,7 @@ whatever the run left behind — every view option was live on the Model tab and
 function refresh_image_tab!(sh::ShellState)
     lm = sh.lastmap[]
     if lm === nothing
-        msg = "no reconstruction yet — set up the regularisers and press Reconstruct"
+        msg = "no reconstruction yet — set up the regularizers and press Reconstruct"
         idle!(sh.imsky, msg); idle!(sh.immoll, msg)
         sh.imstar === nothing || idle!(sh.imstar, msg)
         return sh
@@ -3434,7 +3472,11 @@ Turn the live plot typography by hand. Zero restores the value computed from the
 function shell_set_plot_scale(x)
     v = set_plot_scale!(something(tryparse(Float64, String(x)), 0.0))
     sh = SHELL[]
-    if sh !== nothing
+    # `GUI_LIVE`, not just `sh !== nothing`: `applySavedSettings` calls this during
+    # `Component.onCompleted`, before the first frame, and redrawing there deadlocks the window
+    # black. The value is still applied; the startup path redraws through `refreshAll()` a
+    # moment later.
+    if sh !== nothing && GUI_LIVE[]
         refresh_both!(sh)
     end
     return v == 0 ? "plot scale: from the screen" : Printf.@sprintf("plot scale: %.2f", v)
@@ -3489,8 +3531,13 @@ function shell_set_marker_size(x)
     catch err
         return "could not set the marker size: " * sprint(showerror, err)
     end
-    sh = SHELL[]
-    sh === nothing || refresh_data_tab!(sh)
+    # NO REDRAW HERE. This is called from `applySavedSettings` during
+    # `Component.onCompleted`, i.e. while Qt's render thread is inside
+    # `MakieViewport::setup_buffer` waiting on `begin_julia` for the Julia lock. Redrawing from
+    # this thread holds that lock through a full Makie pass, the render thread never gets in,
+    # and the window stays BLACK for ever — with no error anywhere, because nothing threw.
+    # The panel's own handler redraws after the frame; the startup path is followed by
+    # `refreshAll()` regardless.
     return got == 0 ? "marker size: each plot's own" : Printf.@sprintf("marker size: %.0f px", got)
 end
 
@@ -3521,7 +3568,7 @@ shell_script() = export_script(_sh().session)
 EVERY save action in this GUI writes a FIXED name — `rotir_map.fits`, `rotir_orbit.toml`,
 `rotirgui_session.jl`, `rotir_sky.png` — because the picker is a file CHOOSER and inventing a
 save dialog for a one-click action is a different widget. That is a reasonable trade until the
-second save, which silently destroyed the first: reconstruct, look, change a regulariser,
+second save, which silently destroyed the first: reconstruct, look, change a regularizer,
 reconstruct, save — and the map you wanted to compare against is gone with no message.
 
 Numbering rather than a timestamp: the files are meant to be found again by eye, and

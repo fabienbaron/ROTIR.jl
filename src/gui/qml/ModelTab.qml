@@ -240,8 +240,26 @@ Pane {
     Component {
         id: paramRow
         RowLayout {
+                        id: prow
                         width: ListView.view.width
                         spacing: dp(4)
+
+                        // THE ROW'S IDENTITY, CAPTURED AT CONSTRUCTION.
+                        //
+                        // A ListView recycles its delegates, and `onEditingFinished` fires on
+                        // FOCUS LOSS — which can happen after this row's model context has
+                        // been torn down by a `refresh()`. The roles then read `undefined`,
+                        // Julia is handed `nothing`, and `String(nothing)` throws:
+                        //
+                        //     shell_set_param(name::Nothing, value::QML.QStringAllocated)
+                        //     The type `String` exists, but no method is defined for ...
+                        //
+                        // The exception escapes through `QML.julia_call` and the whole window
+                        // stops responding — no error on screen, nothing in the console.
+                        // A plain property is evaluated once, when the row is built, and keeps
+                        // its value for as long as the item lives.
+                        readonly property string rowName: pname
+                        readonly property int rowComp: pcomp
 
                         Label {
                             Layout.preferredWidth: dp(118)
@@ -279,7 +297,7 @@ Pane {
                                 // overflow, and the leading digits are the ones that matter.
                                 onTextChanged: if (!activeFocus) cursorPosition = 0
                                 onEditingFinished: {
-                                    var msg = root.setParam(pcomp, pname, text)
+                                    var msg = root.setParam(prow.rowComp, prow.rowName, text)
                                     if (msg.length > 0) root.statusChanged(msg)
                                     root.refresh(); root.redraw()
                                 }
@@ -305,7 +323,7 @@ Pane {
                                     font.pointSize: root.fontPt
                                 }
                                 onActivated: {
-                                    root.setParam(pcomp, pname, model[currentIndex].split("=")[0])
+                                    root.setParam(prow.rowComp, prow.rowName, model[currentIndex].split("=")[0])
                                     root.refresh(); root.redraw()
                                 }
                             }
@@ -326,7 +344,7 @@ Pane {
                             font.pointSize: root.fontPt - 1
                             currentIndex: pstate === "free" ? 1 : pstate === "tied" ? 2 : 0
                             onActivated: {
-                                var msg = root.setState(pcomp, pname, model[currentIndex])
+                                var msg = root.setState(prow.rowComp, prow.rowName, model[currentIndex])
                                 if (msg.length > 0) root.statusChanged(msg)
                                 root.refresh()
                             }
@@ -345,7 +363,7 @@ Pane {
                             font.pointSize: root.fontPt - 1
                             selectByMouse: true
                             onEditingFinished: {
-                                root.statusChanged(root.setTie(pcomp, pname, text))
+                                root.statusChanged(root.setTie(prow.rowComp, prow.rowName, text))
                                 root.refresh(); root.redraw()
                             }
                         }
@@ -359,7 +377,7 @@ Pane {
                             ToolTip.text: "lower bound"
                             ToolTip.visible: hovered
                             onEditingFinished:
-                                root.statusChanged(root.setBound(pcomp, pname, text, hiField.text))
+                                root.statusChanged(root.setBound(prow.rowComp, prow.rowName, text, hiField.text))
                         }
                         TextField {
                             id: hiField
@@ -371,7 +389,7 @@ Pane {
                             ToolTip.text: "upper bound"
                             ToolTip.visible: hovered
                             onEditingFinished:
-                                root.statusChanged(root.setBound(pcomp, pname, loField.text, text))
+                                root.statusChanged(root.setBound(prow.rowComp, prow.rowName, loField.text, text))
                         }
                         // An AT-BOUND indicator: a free parameter sitting on its bound is not
                         // a fit result, it is a fit that was stopped, and the number alone
@@ -419,12 +437,12 @@ Pane {
             Layout.fillHeight: true
             clip: true
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-            // AlwaysOn: a binary's form runs past the bottom of the panel, and a panel that
-            // simply stops part way through a frame reads as a broken layout rather than as
-            // one that scrolls. Honoured by Fusion, which is the style on macOS; the Basic
-            // style on Linux still fades the bar out when nothing is flicking it, and shows
-            // it on the way past.
-            ScrollBar.vertical.policy: ScrollBar.AlwaysOn
+            // AsNeeded, not AlwaysOn. AlwaysOn draws a full-height bar even when everything
+            // fits, and against the viewport beside it that reads as a thick divider rather
+            // than as a scrollbar — which is what it looked like once the parameter frames
+            // became content-sized and the column usually fits. It appears when there is
+            // something below the fold, which is the only time it means anything.
+            ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
             ColumnLayout {
                 width: leftPane.availableWidth
@@ -545,7 +563,7 @@ Pane {
                         model: ["HEALPix", "long-lat"]
                         font.pointSize: root.fontPt - 1
                         // long-lat is offered so the choice is visible, and disabled because it is
-                        // not wired: `create_star` builds it, but every regulariser and every
+                        // not wired: `create_star` builds it, but every regularizer and every
                         // shape gradient is written against the HEALPix neighbour structure.
                         delegate: ItemDelegate {
                             width: tesselBox.width

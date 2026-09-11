@@ -224,9 +224,11 @@ SHOT 06b_param_freed
 # RE-READ after the parameter form stopped being a fixed-height scrolling box: it is now as
 # tall as its content, so the whole of an ellipsoid's thirteen parameters is on the page and
 # everything below the form has moved DOWN — Fit from y=504 to y=767 in window fractions.
-CL "$(FX 294)" "$(FY 767)" 4          # Fit: enabled only when something is free
+# RE-READ again after the console began collapsed by default: the panel gained the console's
+# ~120 px, so everything below the parameter form moved UP — Fit from y=767 to y=741.
+CL "$(FX 294)" "$(FY 741)" 4          # Fit: enabled only when something is free
 SHOT 06c_fit_started
-CL "$(FX 357)" "$(FY 767)" 3          # Stop, so the rest of the run is not racing a job
+CL "$(FX 356)" "$(FY 741)" 3          # Stop, so the rest of the run is not racing a job
 
 CL "$(FX 491)" "$(FY 89)" 3           # Mollweide
 SHOT 07_view_mollweide
@@ -306,7 +308,8 @@ KEY Return 2
 SHOT 18b_orbit_free
 # The star model: analytic 2-D profiles or ROTIR's tessellated 3-D components. Another popup,
 # and the one place the two frames of this tab are chosen between.
-CL "$(FX 230)" "$(FY 475)" 2
+# Also re-read: the Star model frame sits lower now that the console is collapsed.
+CL "$(FX 232)" "$(FY 612)" 2
 SHOT 18c_star_model_popup
 KEY Down 1
 KEY Return 3

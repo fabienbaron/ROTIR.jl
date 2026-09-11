@@ -30,7 +30,8 @@ using Nautilus                       # "Nested sampling" in the Model tab
 using Zygote                         # the gradient fit
 using AdvancedHMC, LogDensityProblems # "NUTS"
 using Pigeons, Distributions, ADTypes # "Tempering"
-using LoopVectorization              # the :turbo polygon-FT kernel
+# No LoopVectorization: the `:turbo` kernel cannot be built into a multiversioned
+# sysimage — see the note in app/Project.toml. The default `:nufft` kernel is unaffected.
 
 const GUI = Base.get_extension(ROTIR, :ROTIRGUIExt)
 

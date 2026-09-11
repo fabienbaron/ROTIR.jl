@@ -5,12 +5,19 @@
 # PackageCompiler records every method this script compiles and bakes those specialisations
 # into the image, so what belongs here is exactly the work a user waits for on a cold start.
 #
-# THIS TRACE OPENS THE WINDOW, and that is the difference from OITOOLS' equivalent. Over there
-# the trace stops below `gui()` because its event loop never returns and would hang the build.
-# ROTIR's `gui` takes `autoquit_ms` — the headless suite and the click test both rely on it —
-# so the whole real startup path is traceable here: `loadqml`, the QML engine, the Qt/GLMakie
-# bridge and the first frame, which are otherwise compiled on the user's first launch and are
-# the part they actually sit through.
+# THIS TRACE DOES NOT OPEN THE WINDOW, and that is deliberate — the same choice OITOOLS makes.
+#
+# It used to. ROTIR's `gui` takes `autoquit_ms`, so unlike OITOOLS' event loop it does return,
+# and tracing the real startup path looked like a free win. It is not: the window runs Makie on
+# Qt's own render thread, and when that thread dies the whole build dies with it. MEASURED —
+# `QSGRenderThread::syncAndRender -> JuliaRenderer::render -> QMLMakie renderfunction` took
+# SIGSEGV under `--compile=all`, after twenty minutes, with the bundle already half written. A
+# segfault in another thread cannot be caught, so there is no way to make it survivable here.
+#
+# What the window would have contributed — `loadqml`, the QML engine, the Qt/GLMakie bridge and
+# the first frame — comes from `app/precompile_statements.jl` instead, which is generated from
+# a REAL session (see its header) and therefore covers those paths better than one scripted
+# launch ever did.
 #
 # NEEDS A DISPLAY. Xvfb is enough; `app/build.jl` says so and does not supply one itself.
 #
@@ -121,17 +128,14 @@ traced("plots") do
     end
 end
 
-# ── the window ───────────────────────────────────────────────────────────────
+# ── everything below the window ───────────────────────────────────────────────
 #
-# The real path, not a reconstruction of it: the canvases, `loadqml`, the QML engine, the first
-# frame and the teardown. `autoquit_ms` is what makes this returnable — see the header.
-#
-# Files are given to the Session up front so the trace covers a POPULATED start (epoch table,
-# per-epoch χ², the model form) rather than the empty one, which compiles less.
-traced("the window") do
+# The canvases and both tab refreshes: the work `gui()` does BEFORE `loadqml`, which is the
+# part a user waits through on a cold start and the part that can be traced without handing a
+# thread to Qt. The window itself is not opened here — see the header.
+traced("the canvases") do
     session = GUI.Session()
     GUI.load_dataset!(session, FILES)
-    ROTIR.gui(session; autoquit_ms = 20_000)
 end
 
 @info "trace complete"

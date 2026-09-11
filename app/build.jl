@@ -185,8 +185,48 @@ function stage_qmlmakie()
     return treesize(to)
 end
 
+"""
+    stage_x11_locale() -> Int
+
+Ship the X11 locale data the bundled libxkbcommon needs, and say how big it was.
+
+**`xkbcommon_jll` has a build-sandbox path compiled into it.** Its default locale directory is
+`/workspace/destdir/share/X11/locale`, which is where BinaryBuilder built it and which exists
+on no real machine — so it never finds the Compose file for the user's locale, and every launch
+prints
+
+    xkbcommon: ERROR: [XKB-679] No Compose file for locale "en_US.UTF-8"
+    GLFW.GLFWError(GLFW.PLATFORM_ERROR, "Wayland: Failed to create XKB compose table")
+
+with dead keys and compose sequences dead thereafter. Installing the host's X11 data does NOT
+fix it: the baked path is not where the library looks. Same shape as the QML import path
+QMLMakie bakes at precompile time — see `register_qml_modules!`.
+
+The library cannot simply be dropped: GLFW_jll, Qt6Base_jll, Vulkan_Loader_jll and libdecor_jll
+all require it. So the data comes with us and `launcher.sh` points `XLOCALEDIR` at it, which
+makes the bundle self-contained rather than dependent on the host having libx11 installed.
+
+1.9 MB, MIT/X11 licensed. Taken from this machine, which is the same compromise the rest of
+the bundle makes; a host without it is exactly the case this solves.
+"""
+function stage_x11_locale()
+    for src in ("/usr/share/X11/locale", "/usr/local/share/X11/locale")
+        isfile(joinpath(src, "compose.dir")) || continue
+        dst = joinpath(OUT, "share", "X11", "locale")
+        mkpath(dirname(dst))
+        cp(src, dst; force = true)
+        return treesize(dst)
+    end
+    @warn """
+          no X11 locale data found to stage; the bundle will fall back to the host's, and on a
+          machine that has none the xkbcommon Compose warning returns (dead keys stop working)
+          """
+    return 0
+end
+
 staged = 0
 staged += stage_qmlmakie()
+staged += stage_x11_locale()
 staged += stage("src", "gui", "qml")       # FATAL if missing: loadqml has no fallback
 staged += stage("demos", "data")           # the picker's "ROTIR data" place, and gui()'s default dir
 staged += stage("demos", "orbits")         # the beta Lyrae and Spica presets orbit_dir() seeds

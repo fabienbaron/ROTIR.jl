@@ -330,8 +330,7 @@ ApplicationWindow {
             else if (f[0] === "ui_font")     win.uiFontFamily  = f[1]
             else if (f[0] === "controls_style") win.controlsStyle = f[1]
             else if (f[0] === "ui_font_pt")  win.baseFontPt    = parseFloat(f[1])
-            else if (f[0] === "marker_size") { win.markerSizeUser = parseFloat(f[1])
-                                               Julia.shell_set_marker_size(win.markerSizeUser) }
+            else if (f[0] === "marker_size") win.markerSizeUser = parseFloat(f[1])
             else if (f[0] === "plot_scale")  win.plotScaleUser = parseFloat(f[1])
             else if (f[0] === "zoom_step")   { var z = parseFloat(f[1])
                                                if (z > 1) { win.zoomStepUser = z
@@ -340,7 +339,14 @@ ApplicationWindow {
             else if (f[0] === "precision")   precisionBox.currentIndex =
                                                  (f[1] === "Float64" ? 1 : 0)
         }
-        if (win.plotScaleUser > 0) Julia.shell_set_plot_scale(win.plotScaleUser)
+        // DEFERRED, every one of them. These setters redraw, and this function runs inside
+        // `Component.onCompleted` — before the first frame, with the render thread waiting on
+        // the Julia lock. Called directly they deadlock the window black. `Qt.callLater` puts
+        // them after the event loop is turning, which is also when a redraw can succeed.
+        Qt.callLater(function () {
+            if (win.plotScaleUser > 0) Julia.shell_set_plot_scale(win.plotScaleUser)
+            if (win.markerSizeUser > 0) Julia.shell_set_marker_size(win.markerSizeUser)
+        })
     }
 
     // Plot scale, marker size and zoom step live in Julia, so ask it rather than trusting the

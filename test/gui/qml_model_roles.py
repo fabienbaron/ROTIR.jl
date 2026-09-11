@@ -60,6 +60,13 @@ for f in sorted(pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "src/gui/qml"
             continue
         model = mm.group(1)
         text = comps.get(dm.group(1), body) if dm else body
+        # COMMENTS DO NOT COUNT AS USAGE. `roles_of` already strips them from the append
+        # block; this scan did not, so a comment that merely NAMED a role — quoting an error
+        # message, say — was read as the delegate using it, and the role was then reported
+        # missing from every model that does not happen to supply it. Three false failures
+        # from one explanatory comment.
+        text = re.sub(r"//[^\n]*", "", text)
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
         used = set(re.findall(r"(?<![\w.])(\w+)(?![\w(])", text)) & known
         for s in appended[model]:
             missing = sorted(used - s)
