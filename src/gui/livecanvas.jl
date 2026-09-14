@@ -138,9 +138,15 @@ function build_sky_canvas(fig)
                            strokewidth = 0.35)
 
     limb  = Makie.Observable(Makie.Point2f[])
+    # 2.2 AND `overdraw`. The limb traces the outline of the polygon set it sits on, so it
+    # shares a depth with those tessels and z-fighting ate most of it — the thickness was not
+    # the whole problem, it was that half of every segment lost the depth test and the rest
+    # read as a hairline. `overdraw` is what the graticule and the spin axis already use for
+    # the same reason. At 1.3 without it the outline was invisible against a dark map.
+    #
     # 1.3, not 0.8: the limb is the star's OUTLINE and at 0.8 it was the same weight as the
     # tessel strokes it sits on top of, so the edge of the disc read as one more mesh line.
-    limbp = Makie.lines!(ax, limb; color = :black, linewidth = 1.3)
+    limbp = Makie.lines!(ax, limb; color = :black, linewidth = 2.2, overdraw = true)
     grat  = Makie.Observable(Makie.Point2f[])
     # `overdraw`: the graticule shares a depth with the tessel polygons, and without it the
     # depth test drops it in patches — a solid curve that renders dashed. The hidden half is
@@ -253,14 +259,12 @@ function show_map!(c::SkyCanvas, star, values;
     c.cbarlimits[] = (Float32(cr[1]), Float32(cr[2]))
 
     amax = sky_axis_max(star; pad)
-    if limb
-        vis = star.index_quads_visible
-        hx, hy = convex_hull_2d(vec(-star.proj_west[vis, :] .- offset_west),
-                                vec( star.proj_north[vis, :] .+ offset_north))
-        c.limb[] = _closed_ring(hx, hy)
-    else
-        c.limb[] = Makie.Point2f[]
-    end
+    # THE SILHOUETTE, computed whether or not the limb is drawn: the spin axis needs it too, to
+    # decide which part of a far-side pole's stub the star is actually covering.
+    vis = star.index_quads_visible
+    hull = convex_hull_2d(vec(-star.proj_west[vis, :] .- offset_west),
+                          vec( star.proj_north[vis, :] .+ offset_north))
+    c.limb[] = limb ? _closed_ring(hull[1], hull[2]) : Makie.Point2f[]
     c.grat[] = graticules ?
         _flatten_segments(graticule_segments(star; star_params = star_params,
                                              dlat = graticule_dlat, dlon = graticule_dlon,
@@ -270,7 +274,8 @@ function show_map!(c::SkyCanvas, star, values;
     # The spin axis and the rotation arrow, from the same geometry the offline layer uses —
     # `_spin_axis` is in the shared core, so the two cannot draw different axes.
     c.axis3d[] = rotation_axis ?
-        _axis_polyline(star, star_params, offset_west, offset_north) : Makie.Point2f[]
+        _axis_polyline(star, star_params, offset_west, offset_north; hull = hull) :
+        Makie.Point2f[]
     c.spin[] = rotation_arrow ?
         _spin_polyline(star, star_params, offset_west, offset_north) : Makie.Point2f[]
 
@@ -360,15 +365,21 @@ function show_binary_map!(c::SkyCanvas, star1, values1, star2, values2, offset;
     c.cbarlimits[] = (Float32(cr[1]), Float32(cr[2]))
 
     # BOTH STARS, in every decoration. `_break` is what keeps each one a single polyline.
-    function limb_of(st, ow, on)
+    #
+    # The silhouette is computed once per component and shared by the limb and the spin axis,
+    # which needs it to tell "behind the star" from "past the star" along a far-side pole's
+    # stub. Empty when a component has no visible tessels — during an eclipse — and both
+    # consumers treat that as "nothing to hide behind".
+    function hull_of(st, ow, on)
         vis = st.index_quads_visible
-        isempty(vis) && return Makie.Point2f[]
-        hx, hy = convex_hull_2d(vec(-st.proj_west[vis, :] .- ow),
-                                vec( st.proj_north[vis, :] .+ on))
-        return _closed_ring(hx, hy)
+        isempty(vis) && return nothing
+        return convex_hull_2d(vec(-st.proj_west[vis, :] .- ow),
+                              vec( st.proj_north[vis, :] .+ on))
     end
-    c.limb[] = limb ? _break(limb_of(star1, offset_west, offset_north),
-                             limb_of(star2, ow2, on2)) : Makie.Point2f[]
+    h1 = hull_of(star1, offset_west, offset_north)
+    h2 = hull_of(star2, ow2, on2)
+    ring(h) = h === nothing ? Makie.Point2f[] : _closed_ring(h[1], h[2])
+    c.limb[] = limb ? _break(ring(h1), ring(h2)) : Makie.Point2f[]
     grat_of(st, sp, ow, on) =
         _flatten_segments(graticule_segments(st; star_params = sp,
                                              dlat = graticule_dlat, dlon = graticule_dlon,
@@ -378,8 +389,8 @@ function show_binary_map!(c::SkyCanvas, star1, values1, star2, values2, offset;
                grat_of(star2, star_params2, ow2, on2)) : Makie.Point2f[]
     c.gratplot.color[] = (graticule_color, 0.55)
     c.axis3d[] = rotation_axis ?
-        _break(_axis_polyline(star1, star_params, offset_west, offset_north),
-               _axis_polyline(star2, star_params2, ow2, on2)) : Makie.Point2f[]
+        _break(_axis_polyline(star1, star_params, offset_west, offset_north; hull = h1),
+               _axis_polyline(star2, star_params2, ow2, on2; hull = h2)) : Makie.Point2f[]
     c.spin[] = rotation_arrow ?
         _break(_spin_polyline(star1, star_params, offset_west, offset_north),
                _spin_polyline(star2, star_params2, ow2, on2)) : Makie.Point2f[]
@@ -652,17 +663,67 @@ end
 # ONE polyline still, with a NaN break between the halves: this canvas may not insert a plot
 # after the window exists (see the note at the top of this file), so lifting the pen is how it
 # draws two disjoint pieces. `_spin_polyline` uses the same device.
-function _axis_polyline(star, star_params, ow, on; arrow_frac = 0.3)
+# Is the projected point inside the star's silhouette? Even-odd crossing test against the
+# convex hull of the visible tessel corners — the same hull the limb is drawn from, so the two
+# agree by construction.
+function _inside_hull(px, py, hx, hy)
+    n = length(hx)
+    n >= 3 || return false
+    inside = false
+    j = n
+    @inbounds for i in 1:n
+        if ((hy[i] > py) != (hy[j] > py)) &&
+           (px < (hx[j] - hx[i]) * (py - hy[i]) / (hy[j] - hy[i]) + hx[i])
+            inside = !inside
+        end
+        j = i
+    end
+    return inside
+end
+
+"""
+    _axis_polyline(star, star_params, ow, on; arrow_frac, hull) -> Vector{Point2f}
+
+The spin axis as two stubs, one poking out past each pole, with the parts hidden BEHIND the
+star lifted out by NaN breaks.
+
+WHAT THIS USED TO DO, AND WHY IT WAS WRONG. Each stub was drawn only if its own pole had sky
+`z >= 0`, i.e. only for a pole on the near side. But a stub points radially OUTWARD from its
+pole, so it leaves the silhouette after a short distance and the rest of it is in clear sky —
+visible whichever side the pole is on. At the default rapid rotator's inclination of 60° the
+south pole is on the far side, so the whole southern stub was suppressed and the axis appeared
+to stop at the star. Nothing was hidden by the star there; the test was simply too strong.
+
+A sample is hidden only when BOTH hold: it is behind the sky plane (`z < 0`) and it projects
+inside the silhouette. `hull` is the limb's own convex hull; without it the geometric test
+cannot be made and the old pole-visibility rule is used, which is what the offline plotting
+layer passes.
+"""
+function _axis_polyline(star, star_params, ow, on; arrow_frac = 0.45, hull = nothing,
+                        nsamples = 24)
     north, south = _spin_axis(star, star_params, NaN, NaN)
     d = north .- south
     P(p) = Makie.Point2f(-(p[1] + ow), p[2] + on)
+    # ONE LONGER STUB EACH, sampled rather than drawn end to end: a two-point line cannot have
+    # its middle removed, and the hidden part is in the middle. 0.45 rather than 0.3 because
+    # the far-side stub spends its first third behind the star, so at the old length what
+    # emerged was too short to see.
     out = Makie.Point2f[]
-    if north[3] >= 0
-        push!(out, P(north), P(north .+ arrow_frac .* d))
-    end
-    if south[3] >= 0
+    for (base, dir) in ((north, d), (south, -d))
+        seg = Makie.Point2f[]
+        for k in 0:nsamples
+            p = base .+ (k / nsamples) * arrow_frac .* dir
+            q = P(p)
+            vis = if hull === nothing
+                base[3] >= 0                      # the old rule, for callers with no hull
+            else
+                p[3] >= 0 || !_inside_hull(q[1], q[2], hull[1], hull[2])
+            end
+            push!(seg, vis ? q : Makie.Point2f(NaN, NaN))
+        end
+        all(p -> isnan(p[1]), seg) && continue
         isempty(out) || push!(out, Makie.Point2f(NaN, NaN))
-        push!(out, P(south), P(south .- arrow_frac .* d))
+        append!(out, seg)
     end
     return out
 end

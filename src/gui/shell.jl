@@ -3567,7 +3567,8 @@ map: `shape_chi2_fg!` also returns a gradient with respect to the map, and letti
 `joint_reconstruct_oi`, which is a reconstruction rather than a parameter fit and belongs on
 the Imaging tab.
 """
-function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxiter)
+function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxiter;
+                       verb::Bool = true)
     layout = SHAPE_THETA[snap.surface_type]
     n = maximum(values(layout))
     inv = Dict(v => k for (k, v) in layout)
@@ -3621,7 +3622,12 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
         c = shape_chi2_fg!(gθ, gx, xmap, collect(T, x), data, tess, base, teps;
                            parametric_map = true)
         g .= gθ ./ npts
-        calls[] % 10 == 1 && Printf.@printf("  it %3d   χ²ᵣ = %.6f\n", calls[], c / npts)
+        # `verb` exists for the PRECOMPILE WORKLOAD, which drives this function to compile it
+        # and has nowhere for a trace to go: the lines landed in the package build log, twelve
+        # of them, between Pkg's own output. During a real fit `start_job!` has redirected
+        # stdout into the job's file and the GUI console streams it, which is the point.
+        verb && calls[] % 10 == 1 &&
+            Printf.@printf("  it %3d   χ²ᵣ = %.6f\n", calls[], c / npts)
         return c / npts
     end
     # ITERATIONS AS ASKED. This divided by 50, which was right while the panel's box said

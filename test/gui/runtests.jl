@@ -1702,7 +1702,7 @@ end
     @test o2.rpole2 ≈ 0.5
 end
 
-@testset "the spin axis emerges from the pole that is visible" begin
+@testset "the spin axis emerges from behind the star, at both poles" begin
     # It was ONE line, tip to tip, drawn after the polygons and so straight across the disk.
     # That reads as an axis passing THROUGH the star, and it draws the hidden pole's half as
     # confidently as the visible one — which is also why the axis looked as though its pole
@@ -1714,40 +1714,67 @@ end
     # branch, `_spin_axis`'s analytic branch and `_mesh_rotation`'s `R[3,:]` all agree at
     # inclinations 60, 30 and 120 on a rapid rotator and on a Roche component. There was
     # never a geometry error to fix here; see the note in plans/gui_todo.md.
+    # AND A SECOND CORRECTION on top of that one. The stub for each pole was drawn only if
+    # THAT pole had sky z >= 0, so at the default rapid rotator's 60 degrees the southern one
+    # was suppressed entirely and the axis looked as though it stopped at the star. But a stub
+    # points radially OUTWARD from its pole: it leaves the silhouette after a short distance
+    # and the rest is in clear sky, visible whichever side the pole is on. Nothing was hiding
+    # it — the test was too strong. A sample is hidden only when it is behind the sky plane
+    # AND projects inside the silhouette, which needs the limb's own hull to decide.
     tess = tessellation_healpix(3)
-    function stub(inc)
+    function stub(inc; hull = true)
         p = merge(default_star_params(2),
                   (inclination = inc, position_angle = 0.0))
         star = create_star(tess, p, 0.0)
         n, s = ROTIR._spin_axis(star, p, NaN, NaN)
-        return (G._axis_polyline(star, p, 0.0, 0.0), n, s)
+        h = if hull
+            vis = star.index_quads_visible
+            ROTIR.convex_hull_2d(vec(-star.proj_west[vis, :]), vec(star.proj_north[vis, :]))
+        else
+            nothing
+        end
+        return (G._axis_polyline(star, p, 0.0, 0.0; hull = h), n, s)
+    end
+    # How many separate visible pieces a polyline has, and how far they reach.
+    function runs_of(pts)
+        r = 0; live = false; ys = Float64[]
+        for q in pts
+            if isnan(q[1]); live = false
+            else; live || (r += 1); live = true; push!(ys, q[2]); end
+        end
+        return r, ys
     end
 
-    # Below 90 the NORTH pole faces us: one stub, starting AT the north pole — not at the
-    # south, and not at the centre — and running outward from it.
+    # AT 60 DEGREES — the default — the north pole faces us and the south does not, and BOTH
+    # stubs draw: two pieces, reaching symmetrically above and below.
     pts, north, south = stub(60.0)
     @test north[3] > 0 && south[3] < 0
-    @test length(pts) == 2
-    @test !any(q -> isnan(q[1]), pts)
-    @test pts[1][1] ≈ -north[1] atol = 1e-4          # the plot negates west
-    @test pts[1][2] ≈ north[2] atol = 1e-4
-    @test hypot(pts[2]...) > hypot(pts[1]...)
+    nr, ys = runs_of(pts)
+    @test nr == 2
+    @test maximum(ys) > 0 && minimum(ys) < 0
+    @test maximum(ys) ≈ -minimum(ys) rtol = 0.05     # the axis is symmetric about the centre
+    # Each piece reaches OUTSIDE the star, which is the point of drawing it at all.
+    @test maximum(ys) > north[2]
 
-    # Past 90 the south pole is the visible one and the stub swaps ends, with no rule to keep
-    # in step with the geometry: the test is the pole's own sky z.
+    # Past 90 the roles swap and it stays symmetric, with no rule to keep in step: the
+    # geometry decides, not a branch on which pole is nearer.
     pts2, n2, s2 = stub(120.0)
     @test n2[3] < 0 && s2[3] > 0
-    @test length(pts2) == 2
-    @test pts2[1][1] ≈ -s2[1] atol = 1e-4
-    @test pts2[1][2] ≈ s2[2] atol = 1e-4
-    @test hypot(pts2[2]...) > hypot(pts2[1]...)
+    nr2, ys2 = runs_of(pts2)
+    @test nr2 == 2
+    @test maximum(ys2) ≈ -minimum(ys2) rtol = 0.05
 
-    # Never both, away from edge-on. (AT 90 degrees both poles sit on the limb and which one
-    # the mesh calls nearer is Float32 noise, so that case is not asserted either way — the
-    # NaN break exists to draw two pieces from one polyline if it comes up.)
-    for inc in (5.0, 45.0, 89.0, 91.0, 135.0, 175.0)
-        q, _, _ = stub(inc)
-        @test length(q) == 2
+    # NEARLY POLE-ON is the case where one stub really is hidden: at 30 degrees the axis points
+    # almost along the line of sight, so the far stub stays inside the silhouette for its whole
+    # length and correctly draws nothing.
+    n30, _ = runs_of(first(stub(30.0)))
+    @test n30 == 1
+
+    # Without a hull the old pole-visibility rule still applies, which is what the offline
+    # plotting layer gets — one stub below 90, never two.
+    for inc in (45.0, 135.0)
+        q, _, _ = stub(inc; hull = false)
+        @test first(runs_of(q)) == 1
     end
 
     # And the tick reaches the canvas the Model tab draws on.
@@ -1755,7 +1782,7 @@ end
     G.shell_open(LAM[1], "0")
     G.shell_add_model(2)
     G.shell_set_decoration("spin", "1")
-    @test length(sh.msky.axis3d[]) == 2
+    @test first(runs_of(sh.msky.axis3d[])) >= 1
     G.shell_set_decoration("spin", "0")
     @test isempty(sh.msky.axis3d[])
 
@@ -1768,6 +1795,12 @@ end
     @test sh.msky.spinplot.linewidth[] > sh.msky.gratplot.linewidth[]
     @test sh.msky.axisplot.overdraw[] && sh.msky.spinplot.overdraw[]
     @test sh.msky.gratplot.overdraw[]
+    # THE LIMB, for the same two reasons. It traces the outline of the polygon set it sits on,
+    # so it shares a depth with those tessels and z-fighting ate most of every segment — what
+    # survived read as a hairline, and thickening alone would not have fixed it.
+    @test sh.msky.limbplot.overdraw[]
+    @test sh.msky.limbplot.linewidth[] > sh.msky.gratplot.linewidth[]
+    @test sh.msky.limbplot.linewidth[] >= sh.msky.axisplot.linewidth[]
 end
 
 @testset "decorations cover both components of a binary" begin

@@ -956,6 +956,15 @@ Pane {
                         // only counts when a fixed offset places the secondary — counting rows
                         // here would be a second answer that could disagree.
                         enabled: !root.jobRunning && root.freeCount > 0
+                        // AND IT HAS TO LOOK IT. Qt Quick Controls renders a disabled button by
+                        // greying its text alone, and how far depends on the style's disabled
+                        // palette — under Fusion that is a mid-grey on an unchanged frame, which
+                        // reads as "enabled" at a glance. The clicks were already being
+                        // swallowed (verified by clicking Fit again mid-job and watching for
+                        // Julia's "a job is already running", which never came); this is so the
+                        // button says so. Applied to the whole control, so the frame fades with
+                        // the label and it works under any style.
+                        opacity: enabled ? 1.0 : 0.4
                         font.pointSize: root.fontPt
                         ToolTip.text: root.freeCount > 0
                             ? "fit the " + root.freeCount + " free parameter" +
@@ -971,6 +980,7 @@ Pane {
                     Button {
                         text: "Stop"
                         enabled: root.jobRunning
+                        opacity: enabled ? 1.0 : 0.4
                         font.pointSize: root.fontPt
                         onClicked: root.statusChanged(Julia.shell_job_stop())
                     }
@@ -1103,6 +1113,7 @@ Pane {
                     Button {
                         text: "Posterior"
                         enabled: root.hasPosterior
+                        opacity: enabled ? 1.0 : 0.4
                         font.pointSize: root.fontPt - 1
                         ToolTip.text: root.hasPosterior
                             ? "show this fit's parameter posterior in the view above"
@@ -1119,6 +1130,7 @@ Pane {
                     Button {
                         text: "Adopt"
                         enabled: root.hasFit
+                        opacity: enabled ? 1.0 : 0.4
                         font.pointSize: root.fontPt - 1
                         ToolTip.text: "copy these values into the model's parameters"
                         ToolTip.visible: hovered

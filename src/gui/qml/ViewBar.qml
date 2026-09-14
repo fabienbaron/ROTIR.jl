@@ -142,6 +142,7 @@ Pane {
                 checkable: true
                 checked: root.viewIndex === index
                 enabled: index !== 3
+                opacity: enabled ? 1.0 : 0.4
                 font.pointSize: root.fontPt
                 ToolTip.text: "not implemented yet — a per-tessel uncertainty map from the " +
                               "posterior draws. For the parameter posterior, use Posterior " +

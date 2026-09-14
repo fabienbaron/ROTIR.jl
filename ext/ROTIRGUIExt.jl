@@ -260,7 +260,7 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
                     _run_shape_fit(_sm, _dd.data, _dd.tepochs, _free,
                                    Float64[_sm.params[n] for n in _free],
                                    Float64[0.5 for _ in _free], Float64[2.0 for _ in _free],
-                                   2, _T, 10)
+                                   2, _T, 10; verb = false)
                 end
             end
             SHELL[] = nothing
