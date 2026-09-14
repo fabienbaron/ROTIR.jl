@@ -315,13 +315,24 @@ largely degenerate with it. They are fittable in the parametric path
   1 (Ellipsoid): θ = [rx, ry, rz, inc, PA]
   2 (Rapid Rot): θ = [rpole, ω, inc, PA]
 
+`parametric_map = true` makes the map a FUNCTION of θ rather than a free field: it is
+recomputed from θ on entry (overwriting `xmap`) and its derivative is contracted into
+`grad_θ`. That is what a parametric shape fit needs and what a joint reconstruction must not
+have — there the map is an independent variable, which is why the default is `false`.
+
+Only surface types 0 and 1 support it: a sphere's uniform map depends on nothing in θ (so the
+flag is a no-op, and holding the map fixed was always exact there), an ellipsoid's depends on
+its three radii but not on its orientation, and a rapid rotator's is differentiated by Zygote
+in the parametric path instead. See `shape_map_and_derivs`.
+
 Returns chi2 (scalar). Modifies grad_θ and grad_xmap in place.
 """
 function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
                          xmap::Vector{T}, θ::Vector{T},
                          data_epochs, tessels::tessellation{T},
                          star_params_base, tepochs;
-                         κ=T(50), verbose::Bool=false) where T
+                         κ=T(50), verbose::Bool=false,
+                         parametric_map::Bool=false) where T
 
     nparams = length(θ)
     npix = tessels.npix
@@ -347,6 +358,23 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
     ldtype = hasproperty(star_params, :ldtype) ? Int(star_params.ldtype) : 1
     ld1    = hasproperty(star_params, :ld1) ? T(star_params.ld1) : zero(T)  # ldtype 1, ld1=0 ⇒ ld ≡ 1
     ld2    = hasproperty(star_params, :ld2) ? T(star_params.ld2) : zero(T)
+
+    # A PARAMETRIC MAP is a function of θ, so it is recomputed here and its derivative is
+    # contracted into `grad_θ` after the epoch loop. Without this the map is whatever the
+    # caller last put in `xmap` while θ moves underneath it — exact for a sphere (a uniform
+    # map depends on nothing in θ) and WRONG for an ellipsoid, whose von Zeipel map depends on
+    # all three radii. That mismatch is what `gradient_fit_kind` refused surface type 1 for.
+    #
+    # `xmap` is OVERWRITTEN in this mode: it is an output as much as an input, and the caller
+    # reads the final map back from it.
+    mapderivs = nothing
+    if parametric_map
+        md = shape_map_and_derivs(star_params, tessels, stype)
+        if md !== nothing
+            mapderivs = md[2]
+            xmap .= md[1]
+        end
+    end
 
     grad_θ .= zero(T)
     grad_xmap .= zero(T)
@@ -491,6 +519,15 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
             printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
             printstyled(@sprintf("T3P: %.4f ", chi2_t3phi/data.nt3phi), color=:green)
             printstyled(@sprintf("Flux: %.4f\n", flux), color=:normal)
+        end
+    end
+
+    # THE MAP'S OWN CONTRIBUTION: ∂χ²/∂θ_j += Σ_p (∂χ²/∂xmap_p)·(∂xmap_p/∂θ_j). `grad_xmap`
+    # has accumulated ∂χ²/∂xmap over every epoch by now, which is exactly the factor wanted,
+    # so this is one contraction rather than a per-epoch term.
+    if mapderivs !== nothing
+        @inbounds for j in 1:nparams, p in 1:npix
+            grad_θ[j] += grad_xmap[p] * mapderivs[p, j]
         end
     end
 

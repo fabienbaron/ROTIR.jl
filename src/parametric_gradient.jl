@@ -386,22 +386,35 @@ end
 """
     build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                           intensity_model=:linear, band=nothing, κ=50, GM=1,
-                          tpole_free=false, logprior=nothing) -> logπ(θ)
+                          tpole_free=false, gravity_law=nothing,
+                          logprior=nothing) -> logπ(θ)
 
 Return a Zygote-differentiable closure `θ -> -0.5·χ²(θ) + logprior(θ)` for the
 rapid-rotator parametric model. θ = [rpole, ω, inc, PA, β, ld1, ld2]
 (+ tpole if `tpole_free`). All epoch/data constants are captured once.
+
+`gravity_law` selects the gravity-darkening law — `:vonzeipel` or `:elr`, see
+[`gravity_law_spec`](@ref). The default `nothing` takes it from `base_params.gravity_law`,
+so the law is a property of the MODEL and a caller who set it there need not repeat it here;
+pass it explicitly only to override. β is θ[5] under either law, and holding it at 1/4 to
+recover Espinosa Lara & Rieutord's published exponent is done by leaving `beta` out of the
+fit's `free` set, not by changing the law.
 
 Compute the gradient with `Zygote.gradient(logπ, θ)` (load Zygote yourself).
 """
 function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                intensity_model::Symbol = :linear, band = nothing,
                                κ = 50, GM = 1, tpole_free::Bool = false,
-                               logprior = nothing)
+                               gravity_law = nothing, logprior = nothing)
     T = eltype(tessels.unit_xyz)
     colat = tessels.unit_spherical[:, 5, 2]
     sinθ = T.(sin.(colat)); cosθ = T.(cos.(colat))
     ldtype = base_params.ldtype
+    # THE LAW AS A `Val`, resolved once out here. Both laws have the same signature and the
+    # same rrule shape, so all the closure needs is which primitive to call — and as a type
+    # parameter rather than a captured Symbol, so the call stays statically dispatched and
+    # Zygote sees one concrete primitive per closure rather than a branch.
+    lawv = Val(gravity_law_name(gravity_law === nothing ? base_params : gravity_law))
     # Claret's third and fourth coefficients, from the model rather than from θ: the θ vector
     # carries two LD coefficients and widening it would change every caller of
     # `fit_parametric`. They are still part of the FORWARD law, so the gradient path evaluates
@@ -426,10 +439,405 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
         R = eltype(θ)
         rpole = θ[1]; fev = θ[2]; inc = θ[3]; PA = θ[4]; β = θ[5]; ld1 = θ[6]; ld2 = θ[7]
         tpole = tpole_free ? θ[8] : R(tpole_base)
-        x = vonzeipel_map(rpole, fev, β, tpole, sinθ, cosθ; GM = GMT)
+        x = gravity_map(lawv, rpole, fev, β, tpole, sinθ, cosθ; GM = GMT)
         Imap = intensity(x, intensity_model, band)
         chi2 = sum(1:nepochs) do ep
             pw, pn, nz = project_geometry(rpole, fev, inc, PA, tessels, ts[ep], base_params)
+            ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
+            vw = visibility_weight(nz, κT)
+            xw = Imap .* vw .* ld
+            interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+        end
+        val = -R(0.5) * chi2
+        return logprior === nothing ? val : val + logprior(θ)
+    end
+end
+
+# ===========================================================================
+# The SPHERE's log-posterior  ─ NUTS on a limb-darkened uniform disc
+# ===========================================================================
+# The parametric log-posterior above IS the rapid rotator: its θ starts `[rpole,
+# frac_escapevel, …]` and it calls `vonzeipel_map` directly. A sphere needs its own, and
+# crucially a SHORTER θ, because most of the rapid rotator's parameters are not identifiable
+# on a sphere at all:
+#
+#   * `inclination` and `position_angle` — a uniform limb-darkened sphere looks the same from
+#     every direction. MEASURED on six lam And epochs at HEALPix 3: swinging the inclination
+#     55 degrees moves V² by 4.8e-4 in relative terms and a 137-degree position-angle swing by
+#     4.6e-4, against 1.7e-2 for a 2 % change in radius — 36x smaller, and it is HEALPix
+#     FACETING rather than physics: the 60->120 degree reflection maps the mesh onto itself and
+#     gives 3.9e-7. Sampling these would be sampling discretisation noise over a flat prior.
+#   * `tpole` — a uniform map is a constant, and `cvis = F/flux` divides a constant out. It is
+#     a pure scale on the visibilities and carries no information in them.
+#   * `beta` — gravity darkening on a sphere has nothing to act on.
+#
+# What is left is what `fit_sphere_ld` has always fitted, and what an interferometer actually
+# measures for a single star: the ANGULAR RADIUS and the LIMB DARKENING. So
+#
+#     θ = [radius, ld…]      with as many LD coefficients as the law reads
+#
+# and the map is `ones`: not an approximation, but the statement that the temperature cancels.
+
+"""
+    project_sphere_geometry(radius, tessels, t, base_params) -> (pw, pn, nz)
+
+Projected vertices and face normals of a SPHERE of angular radius `radius`, differentiable in
+`radius`.
+
+`projected_vertices_and_derivs` already carries the sphere's own θ layout —
+`[radius, inclination, position_angle]`, `nparams = 3` — so only the wrapper and its pullback
+are new. The orientation comes from `base_params` and is NOT differentiated: it is flat to
+within the mesh's faceting (see the note above), and a gradient through a flat direction is
+numerical noise the sampler would chase.
+"""
+function project_sphere_geometry(radius, tessels, t, base_params)
+    sp = merge(base_params, (radius = radius,))
+    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 3)
+    return pw, pn, nz
+end
+
+function ChainRulesCore.rrule(::typeof(project_sphere_geometry), radius,
+                              tessels, t, base_params)
+    sp = merge(base_params, (radius = radius,))
+    pw, pn, dpw, dpn, nz, dnz = projected_vertices_and_derivs(tessels, sp, t; nparams = 3)
+    _active(z) = !(z === nothing || z isa ChainRulesCore.AbstractZero)
+    function sphere_geom_pullback(Δ)
+        p̄w = unthunk(Δ[1]); p̄n = unthunk(Δ[2]); n̄z = unthunk(Δ[3])
+        T = eltype(dnz)
+        s = zero(T)
+        # Column 1 of the sphere layout is `radius`; columns 2 and 3 are the orientation, which
+        # is held fixed here and so contributes nothing.
+        if _active(p̄w)
+            @inbounds for p in axes(dpw, 1), v in 1:4
+                s += p̄w[p, v] * dpw[p, v, 1]
+            end
+        end
+        if _active(p̄n)
+            @inbounds for p in axes(dpn, 1), v in 1:4
+                s += p̄n[p, v] * dpn[p, v, 1]
+            end
+        end
+        if _active(n̄z)
+            @inbounds for p in axes(dnz, 1)
+                s += n̄z[p] * dnz[p, 1]
+            end
+        end
+        return (NoTangent(), s, NoTangent(), NoTangent(), NoTangent())
+    end
+    return (pw, pn, nz), sphere_geom_pullback
+end
+
+"""
+    sphere_param_names(ldtype) -> Vector{String}
+    default_sphere_bounds(ldtype) -> (lb, ub)
+
+The sphere's θ layout: `radius` followed by exactly the limb-darkening coefficients the law
+reads (`ld_coefficients_used`). A coefficient the law ignores is perfectly unconstrained, so
+it is not in the vector — the same rule the panel applies when it greys those fields.
+
+`radius` is bounded strictly away from zero: the visibilities are normalised by the total flux,
+so a zero radius is 0/0 and the objective is NaN exactly at the bound.
+"""
+# The limb-darkening coefficients the sphere's θ can carry: those the law reads AND that have
+# a derivative. `ld_and_derivs` differentiates `ld1` and `ld2`; the rrule returns
+# `ZeroTangent()` for Claret's `ld3`/`ld4`, so they stay in the forward law and out of θ.
+_sphere_nld(ldtype::Integer) = min(length(ld_coefficients_used(ldtype)), 2)
+
+sphere_param_names(ldtype::Integer) =
+    ["radius"; [String(s) for s in ld_coefficients_used(ldtype)[1:_sphere_nld(ldtype)]]]
+
+function default_sphere_bounds(ldtype::Integer)
+    nld = _sphere_nld(ldtype)
+    lb = Float64[1e-3]; append!(lb, fill(-1.0, nld))
+    # The schema's LD bounds: `ld1` spans -1..2, because Hestroffer's exponent runs past 1;
+    # the remaining coefficients are -1..1.
+    ub = Float64[Inf]
+    nld >= 1 && push!(ub, 2.0)
+    append!(ub, fill(1.0, max(nld - 1, 0)))
+    return lb, ub
+end
+
+"""
+    sphere_free_indices(free, ldtype) -> Vector{Int}
+
+Which entries of the sphere's θ a fit may move, from a list of NAMES (`"radius"`, `"ld1"`, …).
+
+`nothing` means all of them. A name the law does not use — or that has no derivative, which is
+`ld3`/`ld4` — is not in θ at all, so asking for it is an error rather than a silent no-op: a
+parameter you believe is being sampled and is not is the worst of the three outcomes.
+"""
+function sphere_free_indices(free, ldtype::Integer)
+    names = sphere_param_names(ldtype)
+    free === nothing && return collect(1:length(names))
+    idx = Int[]
+    for f in free
+        s = String(f)
+        i = findfirst(==(s), names)
+        i === nothing && error("sphere_free_indices: `$(s)` is not a sphere parameter; " *
+                               "θ is $(names) for ldtype $(ldtype)")
+        push!(idx, i)
+    end
+    return sort!(unique(idx))
+end
+
+"""
+    build_sphere_logπ(data_epochs, tessels, tepochs, base_params; kwargs...) -> logπ(θ)
+
+The log-posterior of a limb-darkened SPHERE, differentiable by Zygote.
+
+`θ = [radius, ld…]`; see [`sphere_param_names`](@ref) for why it is that short. The
+temperature map is `ones` because a uniform map cancels in `cvis = F/flux`, so this returns
+the same value for every `tpole` — which is the honest statement, not a shortcut.
+"""
+function build_sphere_logπ(data_epochs, tessels, tepochs, base_params;
+                           κ = 50, logprior = nothing)
+    T = eltype(tessels.unit_xyz)
+    ldtype = base_params.ldtype
+    nld = _sphere_nld(ldtype)
+    ld3_base = T(hasproperty(base_params, :ld3) ? base_params.ld3 : 0)
+    ld4_base = T(hasproperty(base_params, :ld4) ? base_params.ld4 : 0)
+    ld1_base = T(hasproperty(base_params, :ld1) ? base_params.ld1 : 0)
+    ld2_base = T(hasproperty(base_params, :ld2) ? base_params.ld2 : 0)
+    κT = T(κ)
+    nepochs = length(data_epochs)
+    kxs = Vector{Vector{T}}(undef, nepochs)
+    kys = Vector{Vector{T}}(undef, nepochs)
+    k2s = Vector{Vector{Complex{T}}}(undef, nepochs)
+    ts  = T.(tepochs)
+    for ep in 1:nepochs
+        d = data_epochs[ep]
+        kx = T.(d.uv[1, :] .* T(-π/(180*3600000)))
+        ky = T.(d.uv[2, :] .* T( π/(180*3600000)))
+        kxs[ep] = kx; kys[ep] = ky; k2s[ep] = precompute_k2_inv_im(kx, ky)
+    end
+
+    return function logπ(θ)
+        R = eltype(θ)
+        radius = θ[1]
+        # ld1 AND ld2 ONLY, and `nld` is capped to match. Claret's law reads four
+        # coefficients, but `ld_and_derivs` computes `dld/dld1` and `dld/dld2` and the rrule
+        # returns `ZeroTangent()` for the other two — so `ld3` and `ld4` are part of the
+        # FORWARD law and have no derivative. Putting them in θ made them flat directions,
+        # and that passes a finite-difference check silently because FD finds the same zero.
+        # `build_parametric_logπ` takes them from the model for exactly this reason.
+        ld1 = nld >= 1 ? θ[2] : R(ld1_base)
+        ld2 = nld >= 2 ? θ[3] : R(ld2_base)
+        chi2 = sum(1:nepochs) do ep
+            pw, pn, nz = project_sphere_geometry(radius, tessels, ts[ep], base_params)
+            ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
+            vw = visibility_weight(nz, κT)
+            # UNIFORM map, hence no `Imap` factor: a constant divides out of the normalised
+            # visibility, so `tpole` is not a parameter of this problem at all.
+            xw = vw .* ld
+            interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+        end
+        val = -R(0.5) * chi2
+        return logprior === nothing ? val : val + logprior(θ)
+    end
+end
+
+# ===========================================================================
+# The ELLIPSOID's log-posterior  ─ NUTS on a triaxial von Zeipel star
+# ===========================================================================
+# The third of three. Where the sphere's θ is short because almost nothing about a sphere is
+# identifiable, an ellipsoid's is the longest of the three, because both halves of the model
+# respond to it: the projected GEOMETRY depends on the three radii and the orientation, and the
+# temperature MAP depends on the three radii, on β and — only under a non-linear intensity law
+# — on `tpole`.
+#
+#     θ = [rx, ry, rz, inc, PA, β, ld1, ld2]      (+ tpole when `tpole_free`)
+#
+# A FIXED layout, like the rapid rotator's and unlike the sphere's, because at eight entries an
+# ldtype-dependent length buys nothing: `ellipsoid_free_indices` refuses `ld2` when the law does
+# not read it, which is where that protection belongs (the panel's `_set_state!` refuses the
+# same thing for the same reason).
+#
+# `tpole` IS A PURE SCALE under `:linear`. The map is `tpole·f_i` with `f` independent of it,
+# every step to the visibility is linear, and `cvis = F/flux` divides it out — so freeing it
+# there is a flat direction. Under `:planck` the map's CONTRAST changes with `tpole` and it
+# becomes identifiable, so `tpole_free` is allowed only there, and refused otherwise rather
+# than silently sampled.
+
+"""
+    project_ellipsoid_geometry(rx, ry, rz, inc, PA, tessels, t, base_params) -> (pw, pn, nz)
+
+Projected vertices and face normals of a triaxial ellipsoid, differentiable in all five.
+
+`projected_vertices_and_derivs` already carries the ellipsoid's θ layout —
+`[rx, ry, rz, inc, PA]`, `nparams = 5` — so this is the wrapper and its pullback only.
+"""
+function project_ellipsoid_geometry(rx, ry, rz, inc, PA, tessels, t, base_params)
+    sp = merge(base_params, (radius_x = rx, radius_y = ry, radius_z = rz,
+                             inclination = inc, position_angle = PA))
+    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 5)
+    return pw, pn, nz
+end
+
+function ChainRulesCore.rrule(::typeof(project_ellipsoid_geometry), rx, ry, rz, inc, PA,
+                              tessels, t, base_params)
+    sp = merge(base_params, (radius_x = rx, radius_y = ry, radius_z = rz,
+                             inclination = inc, position_angle = PA))
+    pw, pn, dpw, dpn, nz, dnz = projected_vertices_and_derivs(tessels, sp, t; nparams = 5)
+    _active(z) = !(z === nothing || z isa ChainRulesCore.AbstractZero)
+    function ellipsoid_geom_pullback(Δ)
+        p̄w = unthunk(Δ[1]); p̄n = unthunk(Δ[2]); n̄z = unthunk(Δ[3])
+        T = eltype(dnz)
+        usew = _active(p̄w); usen = _active(p̄n); usez = _active(n̄z)
+        g = ntuple(5) do j
+            s = zero(T)
+            if usew
+                @inbounds for p in axes(dpw, 1), v in 1:4
+                    s += p̄w[p, v] * dpw[p, v, j]
+                end
+            end
+            if usen
+                @inbounds for p in axes(dpn, 1), v in 1:4
+                    s += p̄n[p, v] * dpn[p, v, j]
+                end
+            end
+            if usez
+                @inbounds for p in axes(dnz, 1)
+                    s += n̄z[p] * dnz[p, j]
+                end
+            end
+            s
+        end
+        return (NoTangent(), g[1], g[2], g[3], g[4], g[5],
+                NoTangent(), NoTangent(), NoTangent())
+    end
+    return (pw, pn, nz), ellipsoid_geom_pullback
+end
+
+"""
+    ellipsoid_map(rx, ry, rz, β, tpole, tessels, base_params) -> Vector
+
+The ellipsoid's von Zeipel temperature map, differentiable in all five arguments.
+
+The forward value is `temperature_map_vonZeipel_ellipsoid`'s, and the pullback is the closed
+form in [`temperature_map_vonZeipel_ellipsoid_derivs`](@ref) — which is why that function
+exists. The map does NOT depend on the orientation (`r_i` is a norm), so `inc` and `PA` are
+not arguments here at all rather than arguments with a zero derivative.
+"""
+function ellipsoid_map(rx, ry, rz, β, tpole, tessels, base_params)
+    sp = merge(base_params, (radius_x = rx, radius_y = ry, radius_z = rz,
+                             beta = β, tpole = tpole))
+    Tmap, = temperature_map_vonZeipel_ellipsoid_derivs(sp, tessels)
+    return Tmap
+end
+
+function ChainRulesCore.rrule(::typeof(ellipsoid_map), rx, ry, rz, β, tpole,
+                              tessels, base_params)
+    sp = merge(base_params, (radius_x = rx, radius_y = ry, radius_z = rz,
+                             beta = β, tpole = tpole))
+    Tmap, drx, dry, drz, dβ, dtp = temperature_map_vonZeipel_ellipsoid_derivs(sp, tessels)
+    function ellipsoid_map_pullback(T̄)
+        t̄ = unthunk(T̄)
+        return (NoTangent(), dot(t̄, drx), dot(t̄, dry), dot(t̄, drz),
+                dot(t̄, dβ), dot(t̄, dtp), NoTangent(), NoTangent())
+    end
+    return Tmap, ellipsoid_map_pullback
+end
+
+"""
+    ellipsoid_param_names(; tpole_free = false) -> Vector{String}
+    default_ellipsoid_bounds(; tpole_free = false) -> (lb, ub)
+    ellipsoid_free_indices(free, ldtype; tpole_free = false) -> Vector{Int}
+
+The ellipsoid's θ layout, its box, and the mapping from names to positions.
+
+The radii are bounded strictly away from zero for the reason
+`default_parametric_bounds` gives: the visibilities are normalised by the total flux, so a
+zero radius is 0/0 and the objective is NaN exactly at the bound.
+
+`ellipsoid_free_indices` REFUSES a limb-darkening coefficient the current law does not read —
+`ld_and_derivs` differentiates only `ld1` and `ld2`, and a coefficient nothing reads is
+perfectly unconstrained, so freeing it would add a direction the posterior is flat along.
+"""
+ellipsoid_param_names(; tpole_free::Bool = false) =
+    tpole_free ?
+    ["radius_x", "radius_y", "radius_z", "inclination", "position_angle",
+     "beta", "ld1", "ld2", "tpole"] :
+    ["radius_x", "radius_y", "radius_z", "inclination", "position_angle",
+     "beta", "ld1", "ld2"]
+
+function default_ellipsoid_bounds(; tpole_free::Bool = false)
+    lb = [1e-3, 1e-3, 1e-3,   0.0, -180.0, 0.0,  -1.0, -1.0]
+    ub = [Inf,  Inf,  Inf,  180.0,  180.0, 1.0,   2.0,  1.0]
+    if tpole_free
+        push!(lb, 0.0); push!(ub, Inf)
+    end
+    return lb, ub
+end
+
+function ellipsoid_free_indices(free, ldtype::Integer; tpole_free::Bool = false)
+    names = ellipsoid_param_names(; tpole_free = tpole_free)
+    free === nothing && return collect(1:length(names))
+    used = ld_coefficients_used(ldtype)
+    idx = Int[]
+    for f in free
+        s = String(f)
+        i = findfirst(==(s), names)
+        i === nothing && error("ellipsoid_free_indices: `$(s)` is not an ellipsoid " *
+                               "parameter; θ is $(names)")
+        (s in ("ld1", "ld2") && !(Symbol(s) in used)) &&
+            error("ellipsoid_free_indices: `$(s)` is not read by limb-darkening law " *
+                  "$(ldtype), so it is perfectly unconstrained; do not free it")
+        push!(idx, i)
+    end
+    return sort!(unique(idx))
+end
+
+"""
+    build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params; kwargs...) -> logπ(θ)
+
+The log-posterior of a triaxial von Zeipel ellipsoid, differentiable by Zygote.
+
+`θ = [rx, ry, rz, inc, PA, β, ld1, ld2]`, plus `tpole` when `tpole_free`. Both halves of the
+model are differentiated: the geometry through
+[`project_ellipsoid_geometry`](@ref) and the temperature map through
+[`ellipsoid_map`](@ref), whose pullbacks wrap the analytic derivatives rather than asking
+Zygote to trace the mesh construction.
+
+`tpole_free = true` requires `intensity_model = :planck`: under `:linear` the temperature is a
+pure multiplicative scale that `cvis = F/flux` divides out, and sampling it would be sampling a
+flat direction.
+"""
+function build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params;
+                              intensity_model::Symbol = :linear, band = nothing,
+                              κ = 50, tpole_free::Bool = false, logprior = nothing)
+    (tpole_free && intensity_model !== :planck) &&
+        error("build_ellipsoid_logπ: `tpole` is a pure scale under intensity_model = " *
+              ":$(intensity_model) and divides out of the normalised visibility — it is only " *
+              "identifiable under :planck. Either pass intensity_model = :planck or leave " *
+              "tpole_free = false.")
+    T = eltype(tessels.unit_xyz)
+    ldtype = base_params.ldtype
+    ld3_base = T(hasproperty(base_params, :ld3) ? base_params.ld3 : 0)
+    ld4_base = T(hasproperty(base_params, :ld4) ? base_params.ld4 : 0)
+    tpole_base = T(base_params.tpole)
+    κT = T(κ)
+    nepochs = length(data_epochs)
+    kxs = Vector{Vector{T}}(undef, nepochs)
+    kys = Vector{Vector{T}}(undef, nepochs)
+    k2s = Vector{Vector{Complex{T}}}(undef, nepochs)
+    ts  = T.(tepochs)
+    for ep in 1:nepochs
+        d = data_epochs[ep]
+        kx = T.(d.uv[1, :] .* T(-π/(180*3600000)))
+        ky = T.(d.uv[2, :] .* T( π/(180*3600000)))
+        kxs[ep] = kx; kys[ep] = ky; k2s[ep] = precompute_k2_inv_im(kx, ky)
+    end
+
+    return function logπ(θ)
+        R = eltype(θ)
+        rx = θ[1]; ry = θ[2]; rz = θ[3]; inc = θ[4]; PA = θ[5]
+        β  = θ[6]; ld1 = θ[7]; ld2 = θ[8]
+        tpole = tpole_free ? θ[9] : R(tpole_base)
+        x = ellipsoid_map(rx, ry, rz, β, tpole, tessels, base_params)
+        Imap = intensity(x, intensity_model, band)
+        chi2 = sum(1:nepochs) do ep
+            pw, pn, nz = project_ellipsoid_geometry(rx, ry, rz, inc, PA, tessels,
+                                                    ts[ep], base_params)
             ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
             vw = visibility_weight(nz, κT)
             xw = Imap .* vw .* ld

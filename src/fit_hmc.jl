@@ -67,18 +67,48 @@ settle on a smooth posterior, and 400 draws is enough to see the shape.
 function _fit_hmc(data_epochs, tessels, tepochs, base_params;
                   θ0, free = nothing, lb = nothing, ub = nothing,
                   tpole_free::Bool = false, intensity_model::Symbol = :linear, band = nothing,
-                  κ = 50, GM = 1, n_samples::Int = 400, n_adapt::Int = 300,
-                  target_accept::Real = 0.8, verb::Bool = false)
+                  κ = 50, GM = 1, gravity_law = nothing,
+                  n_samples::Int = 400, n_adapt::Int = 300,
+                  target_accept::Real = 0.8, verb::Bool = false,
+                  model::Symbol = :rapid_rotator)
+    model in (:rapid_rotator, :sphere, :ellipsoid) ||
+        error("_fit_hmc: model must be :rapid_rotator, :sphere or :ellipsoid (got $(model))")
     T = eltype(tessels.unit_xyz)
     θfull = collect(T, θ0)
-    dlb, dub = default_parametric_bounds(; tpole_free = tpole_free)
+    # THE θ LAYOUT IS THE MODEL'S, and everything below it is not. The box transform, the free
+    # subspace, the diagonal metric and the sampling loop do not care what the parameters mean
+    # — only the log-posterior and the bounds do, so those are the only two things that change.
+    #
+    # A SPHERE's θ is `[radius, ld…]` and deliberately short: its orientation and its polar
+    # temperature carry no information in normalised visibilities (measured — see
+    # `build_sphere_logπ`), so they are not parameters here at all.
+    logπ, dlb, dub, idx = if model === :sphere
+        lbs, ubs = default_sphere_bounds(base_params.ldtype)
+        nθ = length(lbs)
+        (build_sphere_logπ(data_epochs, tessels, tepochs, base_params; κ = κ),
+         lbs, ubs,
+         free === nothing ? collect(1:nθ) : sphere_free_indices(free, base_params.ldtype))
+    elseif model === :ellipsoid
+        # An ELLIPSOID's θ is the longest of the three: both the projected geometry and the
+        # temperature map respond to it. `tpole` is only in it under `:planck`, where the map's
+        # contrast depends on it — under `:linear` it is a scale the normalisation divides out,
+        # and `build_ellipsoid_logπ` refuses to pretend otherwise.
+        lbe, ube = default_ellipsoid_bounds(; tpole_free = tpole_free)
+        (build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params;
+                              intensity_model = intensity_model, band = band,
+                              κ = κ, tpole_free = tpole_free, logprior = nothing),
+         lbe, ube,
+         ellipsoid_free_indices(free, base_params.ldtype; tpole_free = tpole_free))
+    else
+        (build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
+                               intensity_model = intensity_model, band = band,
+                               κ = κ, GM = GM, tpole_free = tpole_free,
+                               gravity_law = gravity_law, logprior = nothing),
+         default_parametric_bounds(; tpole_free = tpole_free)...,
+         parametric_free_indices(free; tpole_free = tpole_free))
+    end
     lower = collect(T, lb === nothing ? dlb : lb)
     upper = collect(T, ub === nothing ? dub : ub)
-    idx = parametric_free_indices(free; tpole_free = tpole_free)
-
-    logπ = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
-                                 intensity_model = intensity_model, band = band,
-                                 κ = κ, GM = GM, tpole_free = tpole_free, logprior = nothing)
 
     # The reduced problem: θ = θ_frozen + S·θ_free, a constant scatter matrix, so Zygote
     # differentiates through it with no special handling and the frozen entries contribute

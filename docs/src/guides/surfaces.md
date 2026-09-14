@@ -122,6 +122,83 @@ function of effective temperature and evolutionary stage.
 
 ![Rapid rotator surface](../assets/surface_rapid_rotator.png)
 
+### Choosing a gravity-darkening law
+
+von Zeipel's law follows from assuming the star is barotropic, which is incompatible with
+radiative equilibrium in a rotating star. It is a slow-rotation law, and for a fast rotator it
+predicts too large a pole-to-equator contrast. Espinosa Lara & Rieutord (2011, A&A 533, A43)
+replace barotropy with the assumption that the radiative flux is anti-parallel to the local
+effective gravity, which holds to better than half a degree even near break-up, and add a
+latitudinal flux factor to the same expression. Set `gravity_law` to pick between them:
+
+```julia
+rapid_rotator = (
+    surface_type    = 2,
+    frac_escapevel  = 0.95,
+    beta            = 0.25,
+    gravity_law     = :elr,    # or :vonzeipel (the default), or the codes 2 and 1
+    # ... the rest as above
+)
+```
+
+The two agree at slow rotation and diverge as the star spins up:
+
+| frac_escapevel | omega | R_eq/R_p | T_eq/T_p von Zeipel | T_eq/T_p ELR | ELR warmer |
+|------|-------|------|-------|-------|-------|
+| 0.00 | 0.000 | 1.00 | 1.000 | 1.000 |  0.0 % |
+| 0.50 | 0.289 | 1.04 | 0.958 | 0.961 |  0.2 % |
+| 0.70 | 0.437 | 1.10 | 0.906 | 0.916 |  1.1 % |
+| 0.90 | 0.657 | 1.22 | 0.788 | 0.831 |  5.5 % |
+| 0.95 | 0.750 | 1.28 | 0.719 | 0.789 |  9.8 % |
+| 0.99 | 0.883 | 1.39 | 0.581 | 0.713 | 22.6 % |
+
+Use von Zeipel below about `frac_escapevel = 0.5`, where the difference is smaller than any
+interferometer can measure, and ELR above it. In the middle, fit both and compare the
+evidence: the two laws have the same parameters, so the log-evidence difference from
+`fit_parametric_nested` or `fit_parametric_ultranest` is a Bayes factor between them directly.
+
+`beta` stays free under both laws. Espinosa Lara & Rieutord derive their law with the exponent
+pinned at 1/4, which assumes a grey radiative atmosphere; a real atmosphere, a convective
+envelope, or a limb-darkening law absorbing part of the latitudinal profile all move it. To
+recover their published result exactly, leave `beta` out of the fit's free parameters with its
+value at 0.25.
+
+Which law you use interacts with limb darkening. Forcing von Zeipel onto a fast rotator asks
+the fit for more pole-to-equator contrast than the star has, and the limb-darkening
+coefficients are what absorb the difference — a fitted coefficient that comes out negative on
+a rapid rotator is a signal to try ELR before believing the star has inverted limb darkening.
+
+#### References
+
+The two implemented laws:
+
+- **von Zeipel, H. 1924**, *The radiative equilibrium of a rotating system of gaseous masses*,
+  MNRAS **84**, 665. [doi:10.1093/mnras/84.9.665](https://doi.org/10.1093/mnras/84.9.665)
+- **Espinosa Lara, F. & Rieutord, M. 2011**, *Gravity darkening in rotating stars*,
+  A&A **533**, A43.
+  [doi:10.1051/0004-6361/201117252](https://doi.org/10.1051/0004-6361/201117252) — their
+  eq. (31) is the law, eq. (24) defines the auxiliary angle it is built on, and eq. (32) is
+  the closed-form equator-to-pole ratio the implementation is checked against.
+
+Two further laws that ROTIR does **not** implement, recorded because they are the natural next
+questions rather than oversights:
+
+- **Espinosa Lara, F. & Rieutord, M. 2012**, *Gravity darkening in binary stars*,
+  A&A **547**, A32.
+  [doi:10.1051/0004-6361/201219942](https://doi.org/10.1051/0004-6361/201219942) — the same
+  construction where the effective gravity comes from the Roche potential of two bodies. It
+  belongs to `surface_type = 3`, not to the rapid rotator, so `gravity_law` does not offer it.
+- **Zorec, J., Rieutord, M., Espinosa Lara, F., et al. 2017**, *Gravity darkening in stars
+  with surface differential rotation*, A&A **606**, A32.
+  [doi:10.1051/0004-6361/201730818](https://doi.org/10.1051/0004-6361/201730818) — generalises
+  the 2011 law to a differentially rotating surface. Such a surface has no rotational
+  potential, so its *shape* no longer follows from the Roche model either, and adding it means
+  a new radius solve rather than a new temperature map.
+
+The exponent's reference values come from **Lucy, L. B. 1967** (Z. Astrophys. **65**, 89) for
+convective envelopes and **Claret, A. 2000** for the continuous dependence on effective
+temperature and evolutionary state.
+
 ### Oblateness progression
 
 Increasing `frac_escapevel` (omega) from 0 to near-critical rotation:

@@ -11,6 +11,15 @@ For a gravity-darkened rapid rotator see `fit_parametric` and
 properly; the wrappers here are deliberately simpler models for stars that do not rotate fast
 enough to be oblate.
 
+A rapid-rotator fit also has to choose a gravity-darkening law, and the choice is not free of
+consequences for the limb darkening it is fitted alongside: both take flux out of the limb, so
+a law that asks for too much equatorial cooling drives the limb-darkening coefficient down and
+can push it negative. Set `gravity_law` on the model to pick between von Zeipel (1924) and
+Espinosa Lara & Rieutord (2011, A&A 533, A43), and rank them by log-evidence when the data can
+tell. See [Choosing a gravity-darkening law](surfaces.md#Choosing-a-gravity-darkening-law) for
+the contrast tables and the references, and `demos/gravity_law_comparison.jl` for a worked
+comparison.
+
 ## The three functions
 
 | function | model | free parameters |

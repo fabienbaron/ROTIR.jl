@@ -535,7 +535,10 @@ function show_orbit!(c::OrbitCanvas, o::OrbitEntry, tepochs::AbstractVector;
     r = max(r, o.rpole1 + o.rpole2) * 1.15
     # Re-framed only when the extent actually changed — a different orbit, or stars of a
     # different size. A redraw that leaves the geometry alone keeps the user's zoom, as the
-    # sky view does (`_frame!` in src/gui/livecanvas.jl).
+    # sky view does (`_frame!` in src/gui/livecanvas.jl), and a DEGENERATE extent is refused
+    # there for the same reason: `xlims!` raises on a NaN and the exception escapes through
+    # `QML.julia_call`, freezing the window.
+    isfinite(r) && r > 0 || return c
     if !(c.homespan[] > 0 && isapprox(c.homespan[], 2r; rtol = 1e-9))
         Makie.xlims!(c.axis, r, -r); Makie.ylims!(c.axis, -r, r)   # East to the left
     end
@@ -756,8 +759,37 @@ The orbit form, one row per parameter:
 function shell_orbit_params()
     sh = _sh()
     o = sh.orbit
+    # THE NINE ELEMENTS, and only those. The flux ratio and the per-component profile
+    # parameters used to be appended here, which put analytic-only rows in the table that
+    # describes the ORBIT — so the table changed shape when the star model was switched, and
+    # switching back and forth moved every row under the reader. They live in the Star model
+    # frame now (`shell_orbit_component_params`), beside the control that decides whether they
+    # apply at all.
+    return _orbit_param_rows(o, collect(ORBIT_ELEMENTS))
+end
+
+"""
+    shell_orbit_component_params() -> String
+
+The ANALYTIC star model's own parameters — the flux ratio and each component's profile — in
+the same columns the elements use, so the Star model frame draws them with the same delegate.
+
+Empty under the tessellated model, which reads none of them: it sizes its components from
+`rpole1`/`rpole2` and takes their relative brightness from the temperatures.
+"""
+function shell_orbit_component_params()
+    o = _sh().orbit
+    o.model === :analytic || return ""
+    ns = Symbol[:f]
+    append!(ns, Symbol("c1_$(n)") for n in _kind_params(o.kind1))
+    append!(ns, Symbol("c2_$(n)") for n in _kind_params(o.kind2))
+    return _orbit_param_rows(o, ns)
+end
+
+"The shared row builder for both orbit tables: `name unit value state lo hi tie doc`."
+function _orbit_param_rows(o::OrbitEntry, names)
     rows = String[]
-    for n in orbit_param_names(o)
+    for n in names
         u, doc = _orbit_info(n)
         v  = get(o.params, n, 0.0)
         lo, hi = get(o.bounds, n, (-Inf, Inf))

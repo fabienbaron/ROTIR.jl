@@ -43,6 +43,10 @@ include("oichi2_spheroid.jl");
 include("oichi2_binary.jl");
 include("fused_polyft.jl");
 include("shape_gradient.jl");
+# Gravity darkening beyond von Zeipel (Espinosa Lara & Rieutord 2011). AFTER
+# shape_gradient.jl, which defines the Roche shape factor `f_rapid_rot_and_deriv` it
+# expresses ω and r̃ through.
+include("gravity_darkening.jl");
 include("parametric_gradient.jl");
 include("bootstrap.jl");
 include("parametric_fit.jl");
@@ -324,6 +328,25 @@ export project_geometry, interferometric_chi2, build_parametric_logπ
 # Bootstrap uncertainties for parametric fits (fit_parametric needs `using Zygote`)
 export epoch_blocks, resample_epochs, bootstrap_parametric, ParametricBootstrap
 export fit_parametric, default_parametric_bounds, parametric_param_names
+# The SPHERE's own differentiable forward model and log-posterior, for NUTS on the two
+# things an interferometer actually measures for a single star: its angular radius and
+# its limb darkening (src/parametric_gradient.jl).
+export build_sphere_logπ, project_sphere_geometry, sphere_param_names,
+       default_sphere_bounds, sphere_free_indices
+# The ellipsoid's von Zeipel map differentiated (src/geometry_ellipsoid.jl): what a
+# CONSISTENT gradient fit for surface type 1 was missing.
+export temperature_map_vonZeipel_ellipsoid_derivs, shape_map_and_derivs
+# The ELLIPSOID's differentiable forward model and log-posterior, for NUTS on a triaxial
+# von Zeipel star (src/parametric_gradient.jl).
+export build_ellipsoid_logπ, project_ellipsoid_geometry, ellipsoid_map,
+       ellipsoid_param_names, default_ellipsoid_bounds, ellipsoid_free_indices
+# The Espinosa Lara & Rieutord (2011) gravity-darkening law, with a free exponent
+# (src/gravity_darkening.jl). `papers/aa17252-11.pdf`, eq. 31.
+export elr_map, elr_map_and_derivs, elr_flux_factor, elr_flux_factor_and_dq,
+       elr_omega, elr_q_and_deriv, elr_temperature_ratio
+export GravityLawSpec, GRAVITY_LAWS, gravity_law_spec, gravity_law_code, gravity_law_name,
+       gravity_law_choices, gravity_map, gravity_map_and_derivs
+export temperature_map_rapid_rotator, temperature_map_ELR_rapid_rotator
 export parametric_chi2, fit_sphere_ld, fit_ellipsoid_ld
 # Generic orbit fitting from OIFITS (orbit_fit.jl)
 export OrbitComponent, PointSource, UniformDisk, LimbDarkenedDisk, GaussianDisk,

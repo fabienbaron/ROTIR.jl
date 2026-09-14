@@ -87,7 +87,22 @@ const _THERMAL = [
 
 # β enters every von Zeipel map. 0.25 is the radiative value, ~0.08 convective (Lucy 1967).
 const _BETA = ParamSpec(:beta, "Grav. darkening β", "", 0.25, 0.0, 0.5, :thermal,
-                        "T ∝ g^β. 0.25 radiative, ~0.08 convective.")
+                        "T ∝ g^β, and under the ELR law T ∝ (F·g)^β. 0.25 radiative, " *
+                        "~0.08 convective; set it fixed at 0.25 for ELR as published.")
+
+# WHICH gravity-darkening law, for the surface types that have a choice. Carried as an integer
+# code the way `ldtype` is, so a form renders it as a combo with no new machinery; the fit
+# functions take either the code or the symbol. β stays free under both laws — pinning it at
+# 1/4 to recover the published ELR result exactly is the ordinary free/fixed control.
+const _GRAVITY_LAW = ParamSpec(:gravity_law, "Gravity law", "", 1.0, 1.0, 2.0, :thermal,
+                               "1 von Zeipel, T ∝ g^β — derived for a barotropic star, so " *
+                               "the slow-rotation law; it overestimates the pole-to-equator " *
+                               "contrast for a fast rotator. 2 Espinosa Lara & Rieutord " *
+                               "(2011), which adds their latitudinal flux factor and is the " *
+                               "one to use for a fast rotator. Identical as the rotation " *
+                               "goes to zero.";
+                               kind = :choice,
+                               choices = [1 => "von Zeipel", 2 => "Espinosa Lara-Rieutord"])
 
 const _LIMBDARK = [
     ParamSpec(:ldtype, "LD law", "", 3.0, 1.0, 4.0, :limbdark,
@@ -199,11 +214,12 @@ const SURFACE_TYPES = Dict{Int,SurfaceSpec}(
               ParamSpec(:frac_escapevel, "v_eq / v_crit", "", 0.95, 0.0, 0.999, :geometry,
                         "Equatorial rotation as a fraction of critical. 1 is break-up: " *
                         "the equatorial radius diverges as it is approached.")],
-             _THERMAL, [_BETA], _LIMBDARK, _ORIENTATION),
+             _THERMAL, [_BETA, _GRAVITY_LAW], _LIMBDARK, _ORIENTATION),
         [ParamSpec(:B_rot, "Diff. rotation B", "", 0.0, -1.0, 1.0, :orientation,
                    "Carried by `starparameters` but NOT currently read: the " *
                    "differential-rotation path is not wired in (see rotate_star).")],
-        "Roche-model oblate rotator with von Zeipel gravity darkening."),
+        "Roche-model oblate rotator, gravity-darkened by von Zeipel or by Espinosa Lara & "  *
+        "Rieutord (2011) — see `gravity_law`."),
 
     3 => SurfaceSpec(3, :roche, "Roche lobe",
         vcat([ParamSpec(:rpole, "Polar radius", "mas", 0.5, 1e-4, 1e3, :geometry,
@@ -283,6 +299,14 @@ function default_star_params(x; T::Type = Float64, kwargs...)
     pairs_ = Pair{Symbol,Any}[:surface_type => s.code]
     for p in specs
         v = get(kwargs, p.name, p.default)
+        # A `:choice` field may be named rather than numbered — `gravity_law = :elr` as well
+        # as `gravity_law = 2` — because a bare integer code says nothing to a reader.
+        if p.kind === :choice && (v isa Symbol || v isa AbstractString)
+            p.name === :gravity_law ||
+                throw(ArgumentError("$(p.name) takes a number, not a name; the choices are " *
+                                    join(("$(k) = $(vv)" for (k, vv) in p.choices), ", ")))
+            v = gravity_law_code(v)
+        end
         push!(pairs_, p.name => p.kind === :float ? T(v) : Int(v))
     end
     return NamedTuple(pairs_)
@@ -322,6 +346,13 @@ function validate_star_params(p)
         push!(msgs, "ldtype = $(p.ldtype) is not one of 1 (linear), 2 (quadratic), " *
                     "3 (power law), 4 (Claret); `compute_ldmap` returns nothing for it and " *
                     "the failure surfaces much later, in the visibility model")
+    end
+    if hasproperty(p, :gravity_law)
+        try
+            gravity_law_spec(p.gravity_law)
+        catch e
+            push!(msgs, sprint(showerror, e))
+        end
     end
     for spec in vcat(s.required, s.optional)
         hasproperty(p, spec.name) || continue

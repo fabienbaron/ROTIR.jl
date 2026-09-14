@@ -481,7 +481,10 @@ function parametric_temperature_map(parameters, star; secondary=false) # dispatc
   if star.surface_type == 3
     return temperature_map_vonZeipel_roche_single(parameters, star, star.t, secondary=secondary);
   elseif star.surface_type == 2
-    return temperature_map_vonZeipel_rapid_rotator(parameters,star);
+    # Whichever gravity-darkening law `parameters.gravity_law` names; von Zeipel when the
+    # field is absent, which is what every model written before the laws became selectable
+    # means. See `gravity_law_spec`.
+    return temperature_map_rapid_rotator(parameters,star);
   elseif star.surface_type == 1
     return temperature_map_vonZeipel_ellipsoid(parameters,star);
   elseif star.surface_type == 0 # sphere

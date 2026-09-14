@@ -27,6 +27,7 @@ function __init__()
                      shell_orbit_component_kinds, shell_orbit_components,
                      shell_set_orbit_component, shell_orbit_options,
                      shell_orbit_star_models, shell_orbit_star_model,
+                     shell_orbit_component_params,
                      shell_set_orbit_star_model,
                      shell_save_map, shell_load_map, shell_save_figure,
                      shell_save_geometry, shell_load_geometry,

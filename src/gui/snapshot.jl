@@ -28,21 +28,60 @@ function _snapshot_figure(sh::ShellState, which::String, sz::Tuple{Int,Int})
 
     if which in ("sky", "mollweide", "star3d")
         got === nothing && return "! no model to draw — add one on the Model tab"
-        star, tmap = got
+        star, tmap = got[1], got[2]
+        # BOTH COMPONENTS OF A BINARY, exactly as the live canvases take it. This destructured
+        # `star, tmap = got` and always called the single-star path, so a binary saved as one
+        # star — framed on the primary, and on the primary's colour range. `build_epoch_star`
+        # returns five values for a pair, and the extra three are the whole companion.
+        bin2 = length(got) >= 5 ? (got[3], got[4], got[5]) : nothing
+        allv = surface_values(sh, tmap, star; visible_only = false)
         if which == "sky"
             c = build_sky_canvas(fig)
             c.cbarlabel[] = sh.intensity[] ? "I (arb.)" : "T (K)"
             ttl = d === nothing ? "" :
                   Printf.@sprintf("epoch %d — MJD %.4f", sh.session.current_epoch,
                                   d.mjd[clamp(sh.session.current_epoch, 1, length(d.mjd))])
-            show_map!(c, star, surface_values(sh, tmap, star; visible_only = true);
-                      title = ttl, star_params = star_params(m), _decor(sh)...)
+            if bin2 === nothing
+                show_map!(c, star, visible_values(sh, allv, star);
+                          title = ttl, star_params = star_params(m), _decor(sh)...)
+            else
+                star2, tmap2, off = bin2
+                show_binary_map!(c, star, visible_values(sh, allv, star), star2,
+                                 surface_values(sh, tmap2, star2; visible_only = true), off;
+                                 title = ttl, star_params = star_params(m),
+                                 star_params2 = star_params(m.companion), _decor(sh)...)
+            end
         elseif which == "mollweide"
+            # The PRIMARY, deliberately: a Mollweide is a map of one surface, and two of them
+            # in one frame is two pictures. The live view makes the same choice.
             c = build_moll_canvas(fig)
-            show_mollweide!(c, surface_values(sh, tmap, star; visible_only = false), star)
+            c.cbarlabel[] = whole_surface_label(sh)
+            show_mollweide!(c, allv, star)
         else
             c = build_star_canvas(fig)
-            show_star3d!(c, star, surface_values(sh, tmap, star; visible_only = false))
+            c.cbarlabel[] = whole_surface_label(sh)
+            if bin2 === nothing
+                show_star3d!(c, star, allv)
+            else
+                star2, tmap2, off = bin2
+                cc = m.companion
+                # The line-of-sight term the sky view drops, which is the reason to look at a
+                # pair in three dimensions at all.
+                zoff = cc === nothing ? 0.0 :
+                       (cc.place === :offset ? Float64(cc.offset[3]) : 0.0)
+                track = if cc !== nothing && cc.place === :orbit
+                    try
+                        relative_orbit_track(orbit_bparams(sh.orbit; binary = m))
+                    catch
+                        Makie.Point3f[]
+                    end
+                else
+                    Makie.Point3f[]
+                end
+                show_binary3d!(c, star, allv, star2,
+                               surface_values(sh, tmap2, star2; visible_only = false),
+                               (Float64(off[1]), Float64(off[2]), zoff); track = track)
+            end
         end
         return fig
     elseif which == "chi2"

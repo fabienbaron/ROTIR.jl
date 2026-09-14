@@ -51,6 +51,7 @@ function fit_parametric(data_epochs::AbstractVector, tessels, tepochs, base_para
     κ                        = 50,
     GM                       = 1,
     tpole_free      ::Bool   = false,
+    gravity_law              = nothing,
     logprior                 = nothing,
     maxiter         ::Int    = 200,
     gtol                     = (0.0, 1e-6),
@@ -73,7 +74,8 @@ function fit_parametric(data_epochs::AbstractVector, tessels, tepochs, base_para
     # Likelihood only: the prior (if any) is added to the objective, never to χ².
     logπ = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                  intensity_model=intensity_model, band=band,
-                                 κ=κ, GM=GM, tpole_free=tpole_free, logprior=nothing)
+                                 κ=κ, GM=GM, tpole_free=tpole_free,
+                                 gravity_law=gravity_law, logprior=nothing)
     # Scale the objective by 1/npoints. χ² here is O(10⁶) and its gradient O(10⁵); at that
     # magnitude vmlmb's bound-constrained line search trips its own `stp == ls.stp`
     # assertion. A uniform rescale moves neither the minimiser nor the relative gradient
@@ -148,6 +150,7 @@ function bootstrap_parametric(data_epochs::AbstractVector, tessels, tepochs, bas
     κ                        = 50,
     GM                       = 1,
     tpole_free      ::Bool   = false,
+    gravity_law              = nothing,
     logprior                 = nothing,
     maxiter         ::Int    = 200,
     gtol                     = (0.0, 1e-6),
@@ -162,7 +165,8 @@ function bootstrap_parametric(data_epochs::AbstractVector, tessels, tepochs, bas
     idx   = parametric_free_indices(free; tpole_free=tpole_free)
     names = parametric_param_names(; tpole_free=tpole_free)[idx]
     fitkw = (free=idx, lb=lower, ub=upper, intensity_model=intensity_model, band=band,
-             κ=κ, GM=GM, tpole_free=tpole_free, logprior=logprior, maxiter=maxiter,
+             κ=κ, GM=GM, tpole_free=tpole_free, gravity_law=gravity_law,
+             logprior=logprior, maxiter=maxiter,
              gtol=gtol, mem=mem)
 
     # Full-data fit first: it seeds every replicate and warms up Zygote's pullback

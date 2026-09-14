@@ -274,6 +274,49 @@ end
             @test length(c[2]) + (isempty(c[3]) ? 0 : length(c[3]) + 3) <= 20
         end
     end
+    # THE GRAVITY-DARKENING LAW, which only the rapid rotator offers: von Zeipel is the
+    # slow-rotation law and Espinosa Lara & Rieutord the fast one, and picking between them is
+    # the same discrete-choice row `ldtype` is, so the form draws it with no QML of its own.
+    G.shell_clear_model()
+    G.shell_add_model(2)
+    glrow() = only(filter(x -> cols(x)[1] == "gravity_law", rows(G.shell_params())))
+    @test cols(glrow())[10] == "choice"
+    @test cols(glrow())[11] == "1=von Zeipel|2=Espinosa Lara-Rieutord"
+    @test cols(glrow())[4] == "1"                        # von Zeipel by default
+    # A law index is not a coordinate an optimiser can walk, same as `ldtype`.
+    @test occursin("discrete choice", G.shell_set_param_state("gravity_law", "free"))
+    @test cols(glrow())[5] == "fixed"
+    # Selecting the other law reaches the model, and from there the map that is drawn and the
+    # posterior that is sampled — both read it off `star_params`.
+    @test G.shell_set_param("gravity_law", "2") == ""
+    @test G.current_model(sh.session).params[:gravity_law] == 2.0
+    p2 = G.star_params(G.current_model(sh.session))
+    @test p2.gravity_law == 2 && p2.gravity_law isa Int
+    @test gravity_law_name(p2) === :elr
+    tess = tessellation_healpix(3; T = Float64)
+    m2 = merge(p2, (frac_escapevel = 0.9, beta = 0.25))
+    star = create_star(tess, m2, 0.0)
+    hot = parametric_temperature_map(m2, star)
+    cool = parametric_temperature_map(merge(m2, (gravity_law = 1,)), star)
+    # The pole is the normalisation, so the two laws agree there — but only APPROXIMATELY on a
+    # mesh, because no HEALPix tessel sits exactly on the spin axis and the hottest one already
+    # carries a little of the flux factor (5994.2 against 5992.9 at fev = 0.9). The exact
+    # identity at θ = 0 is asserted in `test_gravity_darkening.jl`, where the colatitude is
+    # given directly rather than read off a tessellation.
+    @test maximum(hot) ≈ maximum(cool) rtol=1e-3
+    @test minimum(hot) > minimum(cool)                  # ELR's equator is the warmer one
+    # Which is the same thing as: ELR asks for LESS pole-to-equator contrast at the same β,
+    # and that is the whole reason the choice matters to a fit.
+    @test minimum(hot) / maximum(hot) > minimum(cool) / maximum(cool)
+    # The other surface types do not offer it: ELR for a Roche binary is a different paper and
+    # is not implemented, so a row there would promise something that does not exist.
+    for code in (0, 1, 3)
+        G.shell_clear_model(); G.shell_add_model(code)
+        @test !any(x -> cols(x)[1] == "gravity_law", rows(G.shell_params()))
+    end
+
+    G.shell_clear_model()
+    G.shell_add_model(last(SURFACE_TYPE_ORDER))
     # ONE model, however many were added: "+ model" REPLACES rather than appends, so that
     # nothing but the visible model can decide what the χ² column is about.
     @test length(rows(G.shell_models())) == 1
@@ -1123,6 +1166,77 @@ end
     @test length(GLMakie.ALL_SCREENS) <= before
 end
 
+@testset "a saved view holds both components of a binary" begin
+    # `_snapshot_figure` destructured `star, tmap = got` and always took the single-star path,
+    # so a binary SAVED as one star — framed on the primary and on the primary's colour range
+    # — while the live canvas drew the pair correctly. `build_epoch_star` returns five values
+    # for a pair and the extra three are the whole companion.
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+
+    axis_of(fig) = first(filter(x -> x isa Makie.Axis, fig.content))
+    span(fig) = Makie.widths(axis_of(fig).finallimits[])[2]
+
+    G.shell_add_model(3)                       # one Roche star
+    f1 = G._snapshot_figure(sh, "sky", (420, 340))
+    @test f1 isa Makie.Figure
+    solo = span(f1)
+    @test solo > 0
+
+    G.shell_add_model(G.BINARY_CODE)
+    G.shell_params()                           # the first refresh, which resolves the orbit
+    fb = G._snapshot_figure(sh, "sky", (420, 340))
+    @test fb isa Makie.Figure
+    # THE FRAME HAD TO GROW to hold the separation. On the single-star path it would be the
+    # primary's radius again, whatever the companion is doing.
+    @test span(fb) > 1.5 * solo
+
+    # The 3-D view takes the pair too, and does not raise on the orbit track it draws for an
+    # orbit-placed companion.
+    @test G._snapshot_figure(sh, "star3d", (420, 340)) isa Makie.Figure
+    # The Mollweide stays on the primary by design — a map of one surface — so it must still
+    # build, and its label follows the field like the live one.
+    @test G._snapshot_figure(sh, "mollweide", (420, 340)) isa Makie.Figure
+end
+
+@testset "an ellipsoid can use the gradient over its whole theta" begin
+    # `shape_chi2_fg!` used to hold the temperature map FIXED while θ moved, which is exact
+    # only when the map does not depend on what is being fitted. An ellipsoid's von Zeipel map
+    # depends on all three radii, and holding it fixed made the gradient 6.6 % wrong overall
+    # and 13 % wrong in `radius_y` — measured against finite differences of the objective
+    # itself. `parametric_map = true` recomputes the map from θ and contracts its analytic
+    # derivative into the gradient, which then agrees with FD to 1e-9
+    # (test/test_ellipsoid_map_derivs.jl). So the whole θ is available now, not just the
+    # orientation.
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    G.shell_add_model(1)
+    m = G.current_model(sh.session)
+    meths() = Set(cols(r)[1] for r in rows(G.shell_fit_methods()))
+
+    @test G.gradient_fit_kind(m) === :shape
+    @test "gradient" in meths()
+
+    for n in ("radius_x", "radius_y", "radius_z", "inclination", "position_angle")
+        G.shell_set_param_state(n, "free")
+    end
+    @test G.gradient_fit_kind(m) === :shape       # every one of them, not just the angles
+    @test G.shell_free_count() == "5"
+    for n in ("radius_x", "radius_y", "radius_z")
+        G.shell_set_bound(n, "0.7", "2.0")
+    end
+    G.shell_set_bound("inclination", "20", "160")
+    G.shell_set_bound("position_angle", "-90", "90")
+    before = [m.params[n] for n in (:radius_x, :radius_y, :radius_z)]
+    G.shell_fit("gradient", 400); drain!()
+    @test length(rows(G.shell_fits())) == 1
+    # The RADII move, which is what the map derivative unlocked: with the map held fixed the
+    # gradient pointed the wrong way in `radius_y` by 13 %.
+    after = [m.params[n] for n in (:radius_x, :radius_y, :radius_z)]
+    @test after != before
+    @test all(0.7 .<= after .<= 2.0)
+end
+
 @testset "the polyft kernel is selectable" begin
     sh = fresh_shell()
     rows_ = rows(G.shell_polyft_backends())
@@ -1323,22 +1437,34 @@ end
     # them: it sizes its components from `rpole1`/`rpole2` and takes their relative brightness
     # from the temperatures.
     sh = fresh_shell()
-    names() = [cols(r)[1] for r in rows(G.shell_orbit_params())]
+    elems() = [cols(r)[1] for r in rows(G.shell_orbit_params())]
+    comps() = [cols(r)[1] for r in rows(G.shell_orbit_component_params())]
     @test G.shell_orbit_star_model() == "analytic"
-    @test "c1_diameter" in names() && "c2_diameter" in names() && "f" in names()
+
+    # TWO TABLES. The elements describe the ORBIT and are the same nine whatever sits at the
+    # two positions; the flux ratio and the per-component profile parameters belong to the
+    # ANALYTIC star model and live in its frame, beside the control that decides whether they
+    # apply at all. They used to be appended to the elements, so that table changed shape when
+    # the star model was switched and every row moved under the reader.
+    @test Set(elems()) == Set(ORBIT_ELEMENTS_NAMES)
+    @test "c1_diameter" in comps() && "c2_diameter" in comps() && "f" in comps()
+    @test !("c1_diameter" in elems()) && !("f" in elems())
 
     # The 3-D components ARE the Model tab's binary, so one has to exist first.
     G.shell_add_model(G.BINARY_CODE)
     @test occursin("tessellated", G.shell_set_orbit_star_model("tessellated"))
-    n2 = names()
-    @test !("c1_diameter" in n2) && !("c2_diameter" in n2) && !("f" in n2)
-    @test "a" in n2 && "i" in n2 && "Omega" in n2 && "P" in n2     # the elements stay
+    # THE ELEMENTS TABLE IS UNTOUCHED by the switch, which is the point of the split.
+    @test Set(elems()) == Set(ORBIT_ELEMENTS_NAMES)
+    # And the component table empties: the tessellated path reads none of it, sizing from
+    # `rpole1`/`rpole2` and taking brightness from the temperatures.
+    @test isempty(comps())
 
     # UNLISTED, not deleted: switching back brings them as they were, which is what makes the
     # two star models comparable at all.
     @test haskey(sh.orbit.params, :c1_diameter)
     G.shell_set_orbit_star_model("analytic")
-    @test "c1_diameter" in names()
+    @test "c1_diameter" in comps()
+    @test Set(elems()) == Set(ORBIT_ELEMENTS_NAMES)
 end
 
 @testset "the epoch marks fall on the orbit" begin

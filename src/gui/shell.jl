@@ -228,9 +228,9 @@ function shell_open_many(paths, add = "0", dosplit = "1")
                 if !isempty(strip(p))]
     isempty(ps) && return sh.status
     length(ps) == 1 && return shell_open(ps[1], add, dosplit)
-    append = String(add) == "1" && current_dataset(sh.session) !== nothing
+    append = _qmlstr(add) == "1" && current_dataset(sh.session) !== nothing
     try
-        e = load_dataset!(sh.session, ps; add = append, split = String(dosplit) == "1")
+        e = load_dataset!(sh.session, ps; add = append, split = _qmlstr(dosplit) == "1")
         _log_dataset!(sh, e)
         console!(sh, "$(append ? "add" : "load") $(length(ps)) files — $(e.name) now has " *
                      "$(length(e.data)) epoch(s), $(sum(e.nv2)) V², $(sum(e.nt3)) T3")
@@ -316,9 +316,9 @@ function shell_open(path, add = "0", dosplit = "1")
     sh = _sh()
     p = String(path)
     startswith(p, "file://") && (p = p[8:end])
-    append = String(add) == "1" && current_dataset(sh.session) !== nothing
+    append = _qmlstr(add) == "1" && current_dataset(sh.session) !== nothing
     try
-        e = load_dataset!(sh.session, p; add = append, split = String(dosplit) == "1")
+        e = load_dataset!(sh.session, p; add = append, split = _qmlstr(dosplit) == "1")
         _log_dataset!(sh, e)
         console!(sh, "$(append ? "add" : "load"): $(basename(p)) — $(e.name) now has " *
                      "$(length(e.data)) epoch(s), $(sum(e.nv2)) V², $(sum(e.nt3)) T3")
@@ -487,6 +487,22 @@ function shell_add_model(surface_type)
         # instantaneous separation, so this entry already has an orbit in it, and placing the
         # pair by a hand-typed offset while shaping it from an orbit says two things at once.
         m.companion.place = :orbit
+        # AND THE ORBIT TAB TAKES ITS ELEMENTS FROM THE MODEL, not the other way round.
+        #
+        # This direction is the whole difference between a usable default and a broken one.
+        # The Roche schema's defaults are SELF-CONSISTENT — rpole 0.5 mas against a = 3 mas at
+        # q = 0.5 puts each component at 38% of its Roche lobe — while the Orbit tab's default
+        # is a generic two-disk orbit at a = 1 mas that knows nothing about them. Seeding the
+        # other way let the first refresh overwrite a = 3 with a = 1, which is rpole/a = 0.5
+        # against a lobe of 0.44: **114% of the Roche lobe**. Past L1 the radii diverge toward
+        # the Lagrange point rather than failing — measured max |r| = 2.09 mas for rpole = 0.5
+        # — so the two components merged into one blob, and the degenerate geometry reached
+        # Makie as `(NaN, NaN)` axis limits, whose exception escapes `QML.julia_call` and
+        # freezes the window.
+        #
+        # After this the Orbit tab IS the owner and `_sync_orbit_from_tab!` is correct; it just
+        # must not be the one to decide what a brand-new Roche pair looks like.
+        _seed_orbit_from_model!(sh, m)
         console!(sh, "model $(m.name): binary, two roche components")
         sh.status = "model $(m.name) (binary)"
         refresh_model_tab!(sh)
@@ -1084,6 +1100,31 @@ COMPONENT that `create_binary_geometry` derives from the orbit and would overwri
 const ORBIT_ORIENTED = (:inclination, :position_angle)
 
 """
+    _seed_orbit_from_model!(sh, m) -> sh
+
+Copy a model's orbital elements INTO the Orbit tab — the reverse of
+[`_sync_orbit_from_tab!`](@ref), and used once, when a Roche binary is created.
+
+The two sets of defaults are independent and only one can win. A component's come from the
+surface schema and are chosen to sit comfortably inside the Roche lobe; the Orbit tab's
+describe a generic pair of discs. For a model that is being built right now, the model's are
+the ones that were asked for.
+"""
+function _seed_orbit_from_model!(sh::ShellState, m)
+    for (n, e) in ORBIT_ELEMENT_OF
+        haskey(m.params, n) || continue
+        sh.orbit.params[e] = Float64(m.params[n])
+        # A tie on an element would immediately overwrite what was just seeded.
+        delete!(sh.orbit.ties, e)
+    end
+    # `q` is not an element (a relative astrometric orbit does not constrain a mass ratio), but
+    # the tab keeps one for rendering when there is no model; keep it in step anyway.
+    haskey(m.params, :q) && (sh.orbit.q = Float64(m.params[:q]))
+    refresh_orbit!(sh)
+    return sh
+end
+
+"""
     _derived_names(m) -> Set{Symbol}
 
 The parameter names a component frame must show INERT, because something else owns them.
@@ -1476,7 +1517,7 @@ function shell_set_tessellation(kind, nside_exp, precision)
     k === :healpix || return "only :healpix is wired; :longlat has no regularizers or gradients"
     sh.tessel[] = k
     sh.nside_exp[] = clamp(Int(nside_exp), 2, 6)
-    p = String(precision)
+    p = _qmlstr(precision)
     sh.precision[] = p == "Float64" ? Float64 : Float32
     sh.chi2key[] = nothing                    # the mesh changed, so the χ² did
     refresh_both!(sh)
@@ -1698,7 +1739,7 @@ current dataset", which is almost always what is wanted and is one fewer number 
 """
 function shell_set_surface_field(intensity, model, band_um)
     sh = _sh()
-    sh.intensity[] = String(intensity) == "1"
+    sh.intensity[] = _qmlstr(intensity) == "1"
     m = Symbol(_qmlstr(model))
     m in (:linear, :planck) || return "unknown intensity model $(model)"
     sh.intensity_model[] = m
@@ -2704,7 +2745,10 @@ function shell_fit_methods()
             continue
         # NUTS needs the analytic gradient, so it is offered exactly where the gradient path
         # is: the rapid rotator, with Zygote loaded.
-        k == "hmc" && !(hmc_available() && m !== nothing && m.surface_type == 2) && continue
+        # All three non-Roche surfaces have a differentiable log-posterior now:
+        # `build_sphere_logπ`, `build_ellipsoid_logπ` and `build_parametric_logπ`.
+        k == "hmc" && !(hmc_available() && m !== nothing &&
+                        m.surface_type in (0, 1, 2)) && continue
         # Offered only where the gradient is CONSISTENT with the objective being minimised.
         # See `gradient_fit_kind` — this is not the same set as "has analytic shape
         # derivatives", and the difference is measurable.
@@ -2746,6 +2790,12 @@ function gradient_fit_kind(m)
     m === nothing && return :none
     m.surface_type == 2 && fit_parametric_available() && return :parametric
     m.surface_type == 0 && return :shape
+    # THE ELLIPSOID, now over its whole θ. `shape_chi2_fg!` used to hold the temperature map
+    # fixed while the radii moved, which is the inconsistency this used to refuse — measured
+    # at 6.6 % against finite differences of the objective, and 13 % in `radius_y`. The map's
+    # analytic derivatives now go into the gradient
+    # (`temperature_map_vonZeipel_ellipsoid_derivs`), and the whole θ agrees with FD to 1e-9.
+    m.surface_type == 1 && return :shape
     return :none
 end
 
@@ -2966,10 +3016,42 @@ function shell_fit(method, maxeval)
     if meth === :hmc
         hmc_available() ||
             return "NUTS needs AdvancedHMC, LogDensityProblems and Zygote in this session"
-        m.surface_type == 2 ||
-            return "NUTS runs on the parametric rapid-rotator model (surface_type 2)"
-        bad = filter(n -> !haskey(PARAMETRIC_THETA, n), names)
-        isempty(bad) || return "not parameters of the NUTS path: " * join(bad, ", ")
+        # TWO MODELS, each with its own θ. The rapid rotator samples the parametric vector;
+        # a SPHERE samples `[radius, ld…]` and nothing else, because that is all a sphere puts
+        # into normalised visibilities — its orientation is flat to within the mesh's faceting
+        # and its temperature is a scale the normalisation divides out (both measured; see
+        # `build_sphere_logπ`). Refused here rather than dropped silently: a parameter you
+        # believe is being sampled and is not is worse than being told you cannot sample it.
+        if m.surface_type == 0
+            θn = ROTIR.sphere_param_names(round(Int, get(m.params, :ldtype, 3.0)))
+            bad = filter(n -> !(String(n) in θn), names)
+            isempty(bad) ||
+                return "NUTS on a sphere samples " * join(θn, ", ") * " — " *
+                       join(bad, ", ") * " carries no information in the visibilities"
+        elseif m.surface_type == 1
+            ldt = round(Int, get(m.params, :ldtype, 3.0))
+            # `tpole` only under `:planck`: a uniform scale on the map divides out of the
+            # normalised visibility, so under `:linear` it is a flat direction. The panel's
+            # intensity law decides, which is why this is checked here and not in the layout.
+            tpf = :tpole in names && sh.intensity_model[] === :planck
+            try
+                ROTIR.ellipsoid_free_indices([String(n) for n in names], ldt;
+                                             tpole_free = tpf)
+            catch err
+                return "NUTS on an ellipsoid: " *
+                       first(split(sprint(showerror, err), '\n'))
+            end
+            (:tpole in names && !tpf) &&
+                return "tpole is a pure scale under a linear intensity law and divides out " *
+                       "of the normalised visibility — switch the intensity model to planck " *
+                       "or fix tpole"
+        elseif m.surface_type == 2
+            bad = filter(n -> !haskey(PARAMETRIC_THETA, n), names)
+            isempty(bad) || return "not parameters of the NUTS path: " * join(bad, ", ")
+        else
+            return "NUTS runs on a sphere, an ellipsoid or a rapid rotator; " *
+                   "surface type $(m.surface_type) has no differentiable log-posterior"
+        end
     end
     if meth === :gradient
         kind = gradient_fit_kind(m)
@@ -3140,7 +3222,16 @@ skewed one is not the number to quote beside a symmetric error bar. `maxeval` is
 adaptation and draws in the usual 3:4 ratio — adaptation is where the step size and the mass
 matrix are set, and starving it is the commonest way to get divergences.
 """
+
 function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval)
+    # A SPHERE has its own, much shorter θ, so it takes its own route. Its orientation and its
+    # polar temperature carry no information in normalised visibilities — MEASURED, see
+    # `build_sphere_logπ` — so what is sampled is the angular radius and the limb darkening,
+    # which is exactly what an interferometer measures for a single star.
+    snap.surface_type == 0 &&
+        return _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+    snap.surface_type == 1 &&
+        return _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
     θnames = ROTIR.parametric_param_names(; tpole_free = true)
     getp(k) = Float64(get(snap.params, k, 0.0))
     θfull = Float64[getp(:rpole), getp(:frac_escapevel), getp(:inclination),
@@ -3169,6 +3260,90 @@ function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxev
     end
     # `invperm`, not `order`: `order` maps a panel slot to a sampler column, and the columns
     # have to be permuted the other way to land in panel order.
+    return best, NaN, errs,
+           _posterior(r; order = invperm(order),
+                      diagnostics = Printf.@sprintf("%d draws, %d divergences",
+                                                    size(r.samples, 1), r.divergences)), 0
+end
+
+"""
+    _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+
+NUTS on a SPHERE: `θ = [radius, ld…]`, and nothing else.
+
+`names` is what the panel marked free, already checked against the sphere's θ by `shell_fit` —
+`inclination` and `position_angle` are flat to within the mesh's own faceting on a sphere, and
+`tpole` divides out of the normalised visibility, so neither reaches this far.
+"""
+function _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+    base = star_params(snap)
+    θnames = ROTIR.sphere_param_names(base.ldtype)
+    lo, hi = ROTIR.default_sphere_bounds(base.ldtype)
+    lo = collect(Float64, lo); hi = collect(Float64, hi)
+    θfull = Float64[get(snap.params, Symbol(n), 0.0) for n in θnames]
+    free = String[]
+    for (k, n) in enumerate(names)
+        j = findfirst(==(String(n)), θnames)
+        push!(free, θnames[j])
+        lo[j] = lb[k]; hi[j] = ub[k]
+    end
+    tess = tessellation_healpix(nexp; T = prec)
+    ndraw = clamp(maxeval ÷ 7, 100, 5000)
+    r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                       model = :sphere, n_samples = ndraw, n_adapt = 3ndraw ÷ 4, verb = true)
+    # Sampler columns come back in sorted-index order, not the order the panel listed them.
+    order = sortperm([findfirst(==(String(n)), θnames) for n in names])
+    best = zeros(length(names)); errs = Dict{Symbol,Float64}()
+    for (slot, k) in enumerate(order)
+        best[k] = r.median[slot]
+        errs[names[k]] = (r.q84[slot] - r.q16[slot]) / 2
+    end
+    return best, NaN, errs,
+           _posterior(r; order = invperm(order),
+                      diagnostics = Printf.@sprintf("%d draws, %d divergences",
+                                                    size(r.samples, 1), r.divergences)), 0
+end
+
+"""
+    _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+
+NUTS on a triaxial ellipsoid: `θ = [rx, ry, rz, inc, PA, β, ld1, ld2]`, plus `tpole` when the
+intensity law is Planck.
+
+The longest of the three θ vectors, because both halves of the model respond to it — the
+projected geometry through the radii and the orientation, the temperature map through the radii
+and β. `tpole` joins only under `:planck`: under `:linear` the map is `tpole·f` and
+`cvis = F/flux` divides the scale out, so it would be a flat direction (measured at 8.8e-16 —
+machine zero — against 1.1e-2 under Planck).
+"""
+function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+    sh = _sh()
+    base = star_params(snap)
+    tpf = :tpole in names && sh.intensity_model[] === :planck
+    θnames = ROTIR.ellipsoid_param_names(; tpole_free = tpf)
+    lo, hi = ROTIR.default_ellipsoid_bounds(; tpole_free = tpf)
+    lo = collect(Float64, lo); hi = collect(Float64, hi)
+    θfull = Float64[Float64(get(snap.params, Symbol(n), 0.0)) for n in θnames]
+    free = String[]
+    for (k, n) in enumerate(names)
+        j = findfirst(==(String(n)), θnames)
+        push!(free, θnames[j])
+        lo[j] = lb[k]; hi[j] = ub[k]
+        θfull[j] = clamp(θfull[j], lb[k], ub[k])
+    end
+    tess = tessellation_healpix(nexp; T = prec)
+    ndraw = clamp(maxeval ÷ 7, 100, 5000)
+    r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                       model = :ellipsoid, tpole_free = tpf,
+                       intensity_model = sh.intensity_model[],
+                       band = sh.band[] > 0 ? sh.band[] : nothing,
+                       n_samples = ndraw, n_adapt = 3ndraw ÷ 4, verb = true)
+    order = sortperm([findfirst(==(String(n)), θnames) for n in names])
+    best = zeros(length(names)); errs = Dict{Symbol,Float64}()
+    for (slot, k) in enumerate(order)
+        best[k] = r.median[slot]
+        errs[names[k]] = (r.q84[slot] - r.q16[slot]) / 2
+    end
     return best, NaN, errs,
            _posterior(r; order = invperm(order),
                       diagnostics = Printf.@sprintf("%d draws, %d divergences",
@@ -3268,7 +3443,14 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
     calls = Ref(0)
     function fg!(x, g)
         calls[] += 1
-        c = shape_chi2_fg!(gθ, gx, xmap, collect(Float64, x), data, tess, base, tepochs)
+        # `parametric_map`: the temperature map is a FUNCTION of θ here, not a free field, so
+        # it is recomputed from θ every call and its derivative enters the gradient. Held
+        # fixed — which is what this did — the gradient is 6.6 % wrong overall for an
+        # ellipsoid and 13 % wrong in `radius_y` (measured against finite differences of the
+        # objective itself), and that mismatch is what stalls the optimiser. A no-op for a
+        # sphere, whose uniform map depends on nothing in θ.
+        c = shape_chi2_fg!(gθ, gx, xmap, collect(Float64, x), data, tess, base, tepochs;
+                           parametric_map = true)
         g .= gθ ./ npts
         calls[] % 10 == 1 && Printf.@printf("  it %3d   χ²ᵣ = %.6f\n", calls[], c / npts)
         return c / npts
@@ -3276,7 +3458,7 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
     θ̂ = OptimPackNextGen.vmlmb(fg!, θ; lower = lo, upper = hi, maxiter = max(20, maxiter ÷ 50),
                                blmvm = false, verb = false)
     best = [θ̂[layout[nm]] for nm in names]
-    c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, tepochs)
+    c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, tepochs; parametric_map = true)
     return best, c, Dict{Symbol,Float64}(), nothing, 0
 end
 

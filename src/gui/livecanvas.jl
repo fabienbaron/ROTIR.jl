@@ -207,6 +207,16 @@ Right-click still resets on demand — see `reset_zoom!`, which sets the limits 
 rather than going through here.
 """
 function _frame!(c, amax::Real)
+    # A DEGENERATE EXTENT IS NOT A FRAME, and handing one to Makie is a frozen window: it
+    # raises `Invalid x-limits as xlims[1] <= xlims[2] is not met for (NaN, NaN)`, and an
+    # exception raised inside a QML callback escapes `QML.julia_call` and stops the whole GUI
+    # responding — no error on screen, nothing in the console.
+    #
+    # It is reachable from ordinary use. A Roche component pushed past its lobe has radii that
+    # diverge toward L1 rather than failing, and a half-typed radius passes through `0` on its
+    # way to `0.5`. Keeping the previous frame leaves the last good picture on screen, which is
+    # what every other transiently-invalid path here does.
+    isfinite(amax) && amax > 0 || return c
     span = 2amax
     unchanged = c.homespan[] > 0 && isapprox(c.homespan[], span; rtol = 1e-9)
     c.homespan[] = span

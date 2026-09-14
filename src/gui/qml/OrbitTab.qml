@@ -39,6 +39,11 @@ Pane {
     signal pickFile(string mode)          // the window owns the picker
 
     ListModel { id: paramModel }
+    // The analytic star model's own parameters — the flux ratio and each component's profile.
+    // A table of their own, inside the Star model frame, so switching 2-D to 3-D leaves the
+    // ELEMENTS table untouched: those describe the orbit and do not depend on what sits at
+    // the two positions.
+    ListModel { id: compParamModel }
     ListModel { id: kindModel }
     ListModel { id: optionModel }
     ListModel { id: starModelModel }
@@ -91,6 +96,18 @@ Pane {
                 if (f.length < 8) continue
                 paramModel.append({ pname: f[0], punit: f[1], pvalue: f[2], pstate: f[3],
                                     plo: f[4], phi: f[5], ptie: f[6], pdoc: f[7] })
+            }
+        }
+        var crows = Julia.shell_orbit_component_params()
+        compParamModel.clear()
+        if (crows.length > 0) {
+            var cl = crows.split("\n")
+            for (var ci = 0; ci < cl.length; ++ci) {
+                var cf = cl[ci].split("\t")
+                if (cf.length < 8) continue
+                compParamModel.append({ pname: cf[0], punit: cf[1], pvalue: cf[2],
+                                        pstate: cf[3], plo: cf[4], phi: cf[5],
+                                        ptie: cf[6], pdoc: cf[7] })
             }
         }
         var opts = Julia.shell_orbit_options()
@@ -148,6 +165,96 @@ Pane {
                                                  tStart.text, tStop.text, tStep.text))
         root.refresh()
         root.redraw()
+    }
+
+    // ONE row definition for BOTH orbit tables — the elements, and the analytic
+    // component parameters that moved into the Star model frame. Extracted from the
+    // elements ListView so the two cannot drift apart; `ListView.view.width` replaces the
+    // hard-coded `paramList.width` for the same reason.
+    Component {
+        id: orbitParamRow
+        RowLayout {
+                    width: ListView.view.width
+                    spacing: dp(4)
+                    Label {
+                        Layout.preferredWidth: root.wName
+                        Layout.alignment: Qt.AlignVCenter
+                        text: pname + (punit.length > 0 ? " (" + punit + ")" : "")
+                        elide: Text.ElideRight
+                        font.pointSize: root.fontPt
+                        ToolTip.text: pdoc
+                        ToolTip.visible: oma.containsMouse && pdoc.length > 0
+                        MouseArea { id: oma; anchors.fill: parent; hoverEnabled: true }
+                    }
+                    TextField {
+                        Layout.preferredWidth: root.wValue
+                        text: pvalue
+                        font.pointSize: root.fontPt
+                        selectByMouse: true
+                        enabled: pstate !== "tied"
+                        onEditingFinished: {
+                            var m = Julia.shell_set_orbit_param(pname, text)
+                            if (m.length > 0) root.statusChanged(m)
+                            root.refresh(); root.redraw()
+                        }
+                    }
+                    ComboBox {
+                        Layout.preferredWidth: root.wState
+                        model: ["fixed", "free", "tied"]
+                        font.pointSize: root.fontPt - 1
+                        currentIndex: pstate === "free" ? 1 : pstate === "tied" ? 2 : 0
+                        onActivated: {
+                            root.statusChanged(
+                                Julia.shell_set_orbit_state(pname, model[currentIndex]))
+                            root.refresh()
+                        }
+                    }
+                    // ANCHORED, not a nested RowLayout: a layout with only some of its
+                    // items visible redistributes the slack, so the upper bound drifted
+                    // right by fifty pixels and no two rows agreed on where it sat.
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: oLo.implicitHeight
+                        TextField {
+                            id: oLo
+                            visible: pstate === "free"
+                            anchors.left: parent.left
+                            width: root.wBound
+                            text: plo
+                            font.pointSize: root.fontPt - 2
+                            selectByMouse: true
+                            ToolTip.text: "lower bound"; ToolTip.visible: hovered
+                            onEditingFinished: root.statusChanged(
+                                Julia.shell_set_orbit_bound(pname, text, oHi.text))
+                        }
+                        TextField {
+                            id: oHi
+                            visible: pstate === "free"
+                            anchors.left: parent.left
+                            anchors.leftMargin: root.wBound + dp(4)
+                            width: root.wBound
+                            text: phi
+                            font.pointSize: root.fontPt - 2
+                            selectByMouse: true
+                            ToolTip.text: "upper bound"; ToolTip.visible: hovered
+                            onEditingFinished: root.statusChanged(
+                                Julia.shell_set_orbit_bound(pname, oLo.text, text))
+                        }
+                        TextField {
+                            visible: pstate === "tied"
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            text: ptie
+                            placeholderText: "expression, e.g. -Omega"
+                            font.pointSize: root.fontPt - 1
+                            selectByMouse: true
+                            onEditingFinished: {
+                                root.statusChanged(Julia.shell_set_orbit_tie(pname, text))
+                                root.refresh(); root.redraw()
+                            }
+                        }
+                    }
+                }
     }
 
     contentItem: RowLayout {
@@ -242,6 +349,31 @@ Pane {
                     // 3-D: the surface parameters, which no analytic profile has. These are
                     // star-model quantities — `q` above all, which the relative orbit does
                     // not constrain and which therefore cannot be an element.
+                    // The ANALYTIC model's own parameters, beside the control that decides
+                    // whether they apply. They used to be appended to the ELEMENTS table,
+                    // which made that table change shape when the star model was switched —
+                    // the elements describe the orbit and have nothing to do with what sits
+                    // at the two positions it puts things in.
+                    //
+                    // Sized to its content: at most five rows (the flux ratio, plus up to two
+                    // profile parameters per component), and none at all under the
+                    // tessellated model, where `shell_orbit_component_params` returns empty.
+                    Frame {
+                        visible: compParamModel.count > 0
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: compParamList.contentHeight
+                                                + topPadding + bottomPadding
+                        ListView {
+                            id: compParamList
+                            anchors.fill: parent
+                            interactive: false
+                            clip: true
+                            model: compParamModel
+                            spacing: dp(2)
+                            delegate: orbitParamRow
+                        }
+                    }
+
                     GridLayout {
                         columns: 6
                         Layout.fillWidth: true
@@ -334,88 +466,7 @@ Pane {
                     // Fixed columns: the trailing slot always occupies the same space, and
                     // swaps its CONTENTS between bounds and a tie expression, so nothing to
                     // its left ever moves.
-                    delegate: RowLayout {
-                        width: paramList.width
-                        spacing: dp(4)
-                        Label {
-                            Layout.preferredWidth: root.wName
-                            Layout.alignment: Qt.AlignVCenter
-                            text: pname + (punit.length > 0 ? " (" + punit + ")" : "")
-                            elide: Text.ElideRight
-                            font.pointSize: root.fontPt
-                            ToolTip.text: pdoc
-                            ToolTip.visible: oma.containsMouse && pdoc.length > 0
-                            MouseArea { id: oma; anchors.fill: parent; hoverEnabled: true }
-                        }
-                        TextField {
-                            Layout.preferredWidth: root.wValue
-                            text: pvalue
-                            font.pointSize: root.fontPt
-                            selectByMouse: true
-                            enabled: pstate !== "tied"
-                            onEditingFinished: {
-                                var m = Julia.shell_set_orbit_param(pname, text)
-                                if (m.length > 0) root.statusChanged(m)
-                                root.refresh(); root.redraw()
-                            }
-                        }
-                        ComboBox {
-                            Layout.preferredWidth: root.wState
-                            model: ["fixed", "free", "tied"]
-                            font.pointSize: root.fontPt - 1
-                            currentIndex: pstate === "free" ? 1 : pstate === "tied" ? 2 : 0
-                            onActivated: {
-                                root.statusChanged(
-                                    Julia.shell_set_orbit_state(pname, model[currentIndex]))
-                                root.refresh()
-                            }
-                        }
-                        // ANCHORED, not a nested RowLayout: a layout with only some of its
-                        // items visible redistributes the slack, so the upper bound drifted
-                        // right by fifty pixels and no two rows agreed on where it sat.
-                        Item {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: oLo.implicitHeight
-                            TextField {
-                                id: oLo
-                                visible: pstate === "free"
-                                anchors.left: parent.left
-                                width: root.wBound
-                                text: plo
-                                font.pointSize: root.fontPt - 2
-                                selectByMouse: true
-                                ToolTip.text: "lower bound"; ToolTip.visible: hovered
-                                onEditingFinished: root.statusChanged(
-                                    Julia.shell_set_orbit_bound(pname, text, oHi.text))
-                            }
-                            TextField {
-                                id: oHi
-                                visible: pstate === "free"
-                                anchors.left: parent.left
-                                anchors.leftMargin: root.wBound + dp(4)
-                                width: root.wBound
-                                text: phi
-                                font.pointSize: root.fontPt - 2
-                                selectByMouse: true
-                                ToolTip.text: "upper bound"; ToolTip.visible: hovered
-                                onEditingFinished: root.statusChanged(
-                                    Julia.shell_set_orbit_bound(pname, oLo.text, text))
-                            }
-                            TextField {
-                                visible: pstate === "tied"
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                text: ptie
-                                placeholderText: "expression, e.g. -Omega"
-                                font.pointSize: root.fontPt - 1
-                                selectByMouse: true
-                                onEditingFinished: {
-                                    root.statusChanged(Julia.shell_set_orbit_tie(pname, text))
-                                    root.refresh(); root.redraw()
-                                }
-                            }
-                        }
-                    }
+                    delegate: orbitParamRow
                 }
             }
 

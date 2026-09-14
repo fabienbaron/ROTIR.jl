@@ -122,7 +122,8 @@ mutable, so it is safe to evaluate in parallel.
 """
 function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
                       θ0, free = nothing, lb = nothing, ub = nothing,
-                      tpole_free::Bool = false, intensity_model::Symbol = :linear,
+                      tpole_free::Bool = false, gravity_law = nothing,
+                      intensity_model::Symbol = :linear,
                       band = nothing, κ = 50, GM = 1,
                       n_rounds::Int = 10, n_chains::Int = 10, explorer::Symbol = :slice,
                       multithreaded::Bool = true, reference_sigma::Real = 3.0,
@@ -139,7 +140,8 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
 
     logπ = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                  intensity_model = intensity_model, band = band,
-                                 κ = κ, GM = GM, tpole_free = tpole_free, logprior = nothing)
+                                 κ = κ, GM = GM, tpole_free = tpole_free,
+                                 gravity_law = gravity_law, logprior = nothing)
 
     # The reduced problem, exactly as `_fit_hmc` builds it: θ = θ_frozen + S·θ_free with a
     # constant scatter matrix, so Zygote differentiates through it with no special handling.

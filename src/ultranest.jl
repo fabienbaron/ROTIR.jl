@@ -53,6 +53,7 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     κ                        = 50,
     GM                       = 1,
     tpole_free      ::Bool   = false,
+    gravity_law              = nothing,
     logprior                 = nothing,
     min_num_live_points::Int = 400,
     frac_remain              = 1e-3,
@@ -78,7 +79,8 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
 
     logπ = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                  intensity_model=intensity_model, band=band,
-                                 κ=κ, GM=GM, tpole_free=tpole_free, logprior=logprior)
+                                 κ=κ, GM=GM, tpole_free=tpole_free,
+                                 gravity_law=gravity_law, logprior=logprior)
 
     # VECTORISED likelihood and transform, following OITOOLS' fit_model_ultranest. UltraNest
     # hands over a whole BATCH of points as an n x d numpy array and expects arrays back, so

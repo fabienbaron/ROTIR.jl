@@ -88,6 +88,25 @@ end
     # lets a Roche model's Unicode orbital elements into a FITS string column at all.
     include(joinpath(TESTDIR, "test_geometry_io.jl"))
 
+    # The SPHERE's log-posterior, which is what lets NUTS run on a single star: its gradient
+    # against FiniteDifferences, and — the part that matters — that every parameter in θ
+    # actually moves the posterior. Needs Zygote, so it is guarded like the other AD tests.
+    include(joinpath(TESTDIR, "test_sphere_logpi.jl"))
+
+    # The ELLIPSOID's von Zeipel map differentiated: the piece a consistent gradient fit for
+    # surface type 1 was missing, and the proof that its map does not depend on orientation —
+    # which is what makes a shape-only gradient exact when only the angles are free.
+    include(joinpath(TESTDIR, "test_ellipsoid_map_derivs.jl"))
+
+    # The ELLIPSOID's log-posterior: the two analytic rrules composed, and the measurement
+    # behind refusing to free `tpole` under a linear intensity law.
+    include(joinpath(TESTDIR, "test_ellipsoid_logpi.jl"))
+
+    # The two GRAVITY-DARKENING laws and the registry that selects between them: ELR against
+    # the closed forms in the paper, the equatorial symmetry a finite-difference check cannot
+    # see, and both laws through `build_parametric_logπ`.
+    include(joinpath(TESTDIR, "test_gravity_darkening.jl"))
+
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
             run_script("test_spot_euclidean.jl")   # contains its own @test assertions
