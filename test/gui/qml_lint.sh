@@ -72,6 +72,36 @@ if python3 "$(dirname "$0")/qml_model_roles.py" "$QMLDIR"; then :; else FAIL=1; 
 # arguments" at run time and the handler sees `undefined` — see the script's own header.
 if python3 "$(dirname "$0")/qml_signal_arity.py" "$QMLDIR"; then :; else FAIL=1; fi
 
+# WRITE-BACK CYCLES: a property-change handler that can reach an assignment to the property it
+# reacts to. That is what turned the fits list into "RangeError: Maximum call stack size
+# exceeded" at a synthetic line number, and left a half-filled ListModel drawing a blank row.
+# Neither qmllint nor the Julia-side suite can see it — the latter never evaluates the QML.
+if python3 "$(dirname "$0")/qml_handler_writeback.py" "$QMLDIR"; then :; else FAIL=1; fi
+
+# ...and the same self-check the qmllint filter gets, because a detector that has stopped
+# matching anything reports "ok" forever. The probe is the ORIGINAL bug, reduced.
+WBDIR="$(mktemp -d)"
+cat > "$WBDIR/Probe.qml" <<'PROBEQML'
+import QtQuick
+Item {
+    function refreshFits() {
+        fitModel.clear()
+        if (fitModel.count > 0) fitList.currentIndex = 0
+    }
+    ListView {
+        id: fitList
+        onCurrentIndexChanged: { if (currentIndex >= 0) root.refreshFits() }
+    }
+}
+PROBEQML
+if python3 "$(dirname "$0")/qml_handler_writeback.py" "$WBDIR" >/dev/null 2>&1; then
+    echo "FAIL  self-check: the write-back detector accepted the bug it was written for"
+    FAIL=1
+else
+    echo "  ok  self-check: the write-back detector still catches a handler cycle"
+fi
+rm -rf "$WBDIR"
+
 # The filter must not be able to hide a real problem: a file with a deliberate syntax error has
 # to fail. Without this the whole script degrades to "prints ok" the day the linter changes its
 # message format — which is the failure mode it exists to prevent.

@@ -32,6 +32,7 @@ function __init__()
                      shell_save_map, shell_load_map, shell_save_figure,
                      shell_save_geometry, shell_load_geometry,
                      shell_fits, shell_current_fit, shell_select_fit, shell_fit_params,
+                     shell_fit_has_posterior, shell_adopt_fit, shell_fit_budget,
                      shell_posterior_pair, shell_set_posterior_pair,
                      shell_set_orbit_option, shell_orbit_render_params,
                      shell_times, shell_set_times, shell_set_time_index,

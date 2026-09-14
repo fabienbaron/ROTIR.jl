@@ -379,10 +379,23 @@ if grep -qF "exception in render" "$JLOG"; then
 else
     ck "no swallowed render exception" 1
 fi
-if grep -qE "Qt Warning.*(unavailable|ReferenceError|Duplicate signal)" "$JLOG"; then
-    echo "  FAIL  QML errors:"; grep -E "Qt Warning" "$JLOG" | sort -u | head -5; FAIL=1
+# EVERY JavaScript error class Qt reports, not three of them. This pattern used to list
+# `unavailable|ReferenceError|Duplicate signal`, which let the one that actually happened
+# through: a handler that wrote back the property it reacted to recursed until the engine gave
+# up with
+#
+#     Qt Warning: file:///...ModelTab.qml:1455181072: RangeError: Maximum call stack size
+#     exceeded.
+#
+# — a "Qt Warning" line, matching none of the three alternatives, at a line number that does
+# not exist. `qml_handler_writeback.py` now catches that class statically; this is the net
+# under everything the clicks below reach, including whatever class comes next.
+if grep -qE "Qt Warning.*(unavailable|Duplicate signal|RangeError|TypeError|ReferenceError|SyntaxError|URIError|Unable to assign|is not a function|Cannot read property)" "$JLOG"; then
+    echo "  FAIL  QML errors:"
+    grep -E "Qt Warning.*(unavailable|Duplicate signal|RangeError|TypeError|ReferenceError|SyntaxError|URIError|Unable to assign|is not a function|Cannot read property)" "$JLOG" | sort -u | head -5
+    FAIL=1
 else
-    ck "no QML load errors" 1
+    ck "no QML load or JavaScript errors" 1
 fi
 grep -qE "failed|could not" "$DUMP" && { ck "no failure lines in the transcript" 0; \
     grep -E "failed|could not" "$DUMP" | head -3; } || ck "no failure lines in the transcript" 1

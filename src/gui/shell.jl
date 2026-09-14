@@ -116,6 +116,10 @@ Base.@kwdef mutable struct ShellState
     status::String = ""
     job::Any            = nothing   # GuiJob or nothing
     jobkind::Symbol = :none
+    # WHICH ENGINE the running fit is using. `jobkind` says what kind of job it is
+    # (:fit / :reconstruct / :orbit); this says which optimiser, which is what decides whether
+    # Stop can do anything at all — see `STOP_AWARE`.
+    jobmethod::Symbol = :none
     lastfit::String     = ""        # rendered result table of the last fit
     imaging_defaults::Dict{Symbol,Any} = Dict{Symbol,Any}()
     # Cache for `epoch_chi2`, keyed on what it actually depends on. Recomputing it is seconds
@@ -517,8 +521,13 @@ function shell_add_model(surface_type)
     return sh.status
 end
 
-shell_models() = join(("$(m.name)\t$(m.surface_type)\t$(length(m.free))"
-                       for m in _sh().session.models), "\n")
+# FOUR fields: the numeric `surface_type` stays, because it is what every branch in the
+# geometry code compares against and what the command log has to write, and the LABEL is added
+# beside it for the header to show. A reader comparing models wants "Rapid rotator", not the
+# integer `compute_radii` dispatches on.
+shell_models() =
+    join(("$(m.name)\t$(m.surface_type)\t$(length(m.free))\t$(_fit_type_label(m.surface_type))"
+          for m in _sh().session.models), "\n")
 
 """
     shell_clear_model() -> String
@@ -2628,12 +2637,31 @@ end
 
 shell_job_running() = (sh = SHELL[]; sh !== nothing && sh.job !== nothing) ? "1" : "0"
 
+# WHICH ENGINES ACTUALLY CHECK THE STOP FLAG. `start_job!` hands its worker a `stop::Ref`, and
+# the only thing that reads it is the OBJECTIVE closure `_run_fit` is given — so the two NLopt
+# searches notice, and VMLMB, NUTS, Pigeons and the shape path never see the Ref at all:
+# `_run_gradient_fit`, `_run_hmc_fit`, `_run_pigeons_fit` and `_run_shape_fit` are called
+# without it. MEASURED in the GUI: Stop pressed during a VMLMB fit left the elapsed counter
+# climbing and the run went to its full budget.
+#
+# Even where it IS read it is a soft stop rather than an abort: the objective starts returning
+# 1e30, so NLopt keeps searching a now-constant function and burns the rest of its budget
+# quickly instead of returning at once.
+#
+# Until each runner threads the Ref into its optimiser this says what it can and cannot do,
+# rather than answering "stopping…" to every engine and leaving the user watching a counter.
+const STOP_AWARE = (:neldermead, :bobyqa)
+
 function shell_job_stop()
     sh = _sh()
     j = sh.job
     j === nothing && return "nothing running"
     j.stop[] = true
-    return "stopping…"
+    sh.jobkind === :fit || return "stopping…"
+    m = sh.jobmethod
+    m in STOP_AWARE &&
+        return "stopping $(fit_method_short(m)) — it checks between evaluations"
+    return "$(fit_method_short(m)) cannot be interrupted yet; it will run to its budget"
 end
 
 """
@@ -2709,13 +2737,81 @@ honest answer and the extra cost is the price of knowing that. `:pigeons` goes f
 the only one here that sees a MULTIMODAL posterior at all.
 """
 const FIT_METHODS = [
-    ("gradient",   "VMLMB + analytic gradient (fast)"),
-    ("neldermead", "Nelder–Mead (NLopt, local)"),
-    ("bobyqa",     "BOBYQA (NLopt, local, quadratic model)"),
-    ("hmc",        "NUTS (Hamiltonian, uses the analytic gradient)"),
-    ("nautilus",   "Nautilus (importance nested sampling, pure Julia)"),
-    ("pigeons",    "Pigeons (parallel tempering — for a multimodal posterior)"),
+    # key            short            what the combo shows
+    ("gradient",   "VMLMB",      "VMLMB (quasi-Newton, analytic gradient)"),
+    ("neldermead", "Nelder–Mead", "Nelder–Mead (NLopt, local)"),
+    ("bobyqa",     "BOBYQA",     "BOBYQA (NLopt, local, quadratic model)"),
+    ("hmc",        "NUTS",       "NUTS (Hamiltonian, uses the analytic gradient)"),
+    ("nautilus",   "Nautilus",   "Nautilus (importance nested sampling, with evidence)"),
+    ("pigeons",    "Pigeons",    "Pigeons (parallel tempering — for a multimodal posterior)"),
 ]
+
+"""
+    fit_method_short(method) -> String
+
+The ALGORITHM's name for a table column: `:gradient` reads "VMLMB", `:hmc` reads "NUTS".
+
+The fits history used to print the key, so a row said "gradient" — which names ROTIR's
+internal route to the optimiser rather than the optimiser, and is the one entry in the table
+whose key is not the algorithm's name. An unrecognised method falls back to its key, since a
+fit loaded from a newer session should still say something.
+"""
+function fit_method_short(method)
+    k = String(method)
+    i = findfirst(e -> e[1] == k, FIT_METHODS)
+    return i === nothing ? k : FIT_METHODS[i][2]
+end
+"""
+    FIT_BUDGETS
+
+What the one budget box means for each engine, and what a sensible value of it is.
+
+THE NUMBER IS THE ENGINE'S OWN UNIT. The box used to say "evaluations" whatever was selected,
+carry 2000 whatever was selected, and be divided down inside each runner — `÷50` for VMLMB
+iterations, `÷7` for NUTS draws, `log2(n) − 5` for Pigeons rounds. So one typed number meant
+five different things, none of them the one on the label, and switching engine silently
+changed the size of the run by two orders of magnitude in either direction. Each engine now
+names its own unit and carries its own default, and the runners take the number as given.
+
+`lo`/`hi`/`step` are what the spin box needs; `tip` is its tooltip.
+"""
+const FIT_BUDGETS = Dict{String,NamedTuple}(
+    # NLopt counts calls to the objective, and a derivative-free simplex needs thousands.
+    "neldermead" => (label = "evaluations", default = 2000, lo = 50, hi = 200_000, step = 100,
+                     tip = "objective evaluations (NLopt maxeval)"),
+    "bobyqa"     => (label = "evaluations", default = 2000, lo = 50, hi = 200_000, step = 100,
+                     tip = "objective evaluations (NLopt maxeval)"),
+    # A gradient step is worth ~50 simplex evaluations, which is why this default is small.
+    "gradient"   => (label = "iterations", default = 200, lo = 10, hi = 5000, step = 10,
+                     tip = "VMLMB iterations; each one costs a value and a gradient"),
+    # Kept after warm-up. A quarter again are spent adapting on top of this.
+    "hmc"        => (label = "draws", default = 400, lo = 50, hi = 20_000, step = 50,
+                     tip = "posterior draws kept; adaptation adds 75% more on top"),
+    # The effective sample size, which is what a nested run's cost actually scales with.
+    "nautilus"   => (label = "eff. samples", default = 2000, lo = 200, hi = 50_000, step = 200,
+                     tip = "effective posterior sample size; the live population follows it"),
+    # 2^rounds scans, so this is a small number and every increment doubles the run.
+    "pigeons"    => (label = "rounds", default = 8, lo = 6, hi = 12, step = 1,
+                     tip = "2^rounds scans — each extra round DOUBLES the run"),
+)
+
+"The budget spec for one method, falling back to the NLopt one for anything unlisted."
+fit_budget(method) =
+    get(FIT_BUDGETS, String(method),
+        (label = "evaluations", default = 2000, lo = 50, hi = 200_000, step = 100,
+         tip = "objective evaluations"))
+
+"""
+    shell_fit_budget(method) -> String
+
+`label\tdefault\tlo\thi\tstep\ttip` for the budget box, so the panel relabels and
+re-ranges it when the engine changes instead of carrying one unit across all of them.
+"""
+function shell_fit_budget(method)
+    b = fit_budget(_qmlstr(method, "neldermead"))
+    return join((b.label, b.default, b.lo, b.hi, b.step, b.tip), "\t")
+end
+
 # NO `:ultranest`. It is not gated here, it is absent: the GUI is Python-free by construction,
 # and a listed method is a method something in this process can load PythonCall to satisfy.
 # `:nautilus` is the same kind of sampler in pure Julia — importance nested sampling, an
@@ -2737,7 +2833,7 @@ function shell_fit_methods()
     sh = SHELL[]
     m = sh === nothing ? nothing : current_model(sh.session)
     rows = String[]
-    for (k, v) in FIT_METHODS
+    for (k, _short, v) in FIT_METHODS
         k == "nautilus" && !nautilus_available() && continue
         # Tempering runs on the same parametric log-posterior NUTS does, so it is offered in
         # the same place: the rapid rotator, with the gradient stack loaded.
@@ -2884,6 +2980,42 @@ end
 "How a `(component, name)` pair reads in the results table."
 fit_label(comp::Int, n::Symbol) = comp == 2 ? "2:" * String(n) : String(n)
 
+"""
+    _fit_adopt!(m, label, v) -> Bool
+
+Write one of a recorded fit's values back into model `m`, returning whether it landed.
+
+The label is what the results table shows, which is [`fit_label`](@ref)'s output: a bare name
+for the primary, `"2:name"` for a companion, and one of `POSITION_PARAMS` for the offset. So
+this is `fit_label` inverted, plus the check that makes it safe — the field has to EXIST on the
+target. Adopting a sphere's fit into a rapid rotator must not invent `radius` on a model whose
+`surface_type` never reads it; it reports that name as skipped instead.
+"""
+function _fit_adopt!(m, label::Symbol, v::Real)
+    str = String(label)
+    if startswith(str, "2:")
+        n = Symbol(str[3:end])
+        m.companion === nothing && return false
+        haskey(m.companion.params, n) || return false
+        m.companion.params[n] = Float64(v)
+        return true
+    end
+    n = Symbol(str)
+    if haskey(m.params, n)
+        m.params[n] = Float64(v)
+        return true
+    end
+    # The companion's PLACEMENT, which is neither star's parameter but a property of the pair.
+    i = findfirst(q -> q[1] === n, POSITION_PARAMS)
+    if i !== nothing && m.companion !== nothing
+        o = collect(m.companion.offset)
+        o[POSITION_PARAMS[i][3]] = Float64(v)
+        m.companion.offset = (o[1], o[2], o[3])
+        return true
+    end
+    return false
+end
+
 "Current value, lower and upper bound of one `(component, name)` pair."
 function _fit_triple(m, (comp, n))
     if comp == 1
@@ -2973,7 +3105,7 @@ function shell_free_count()
 end
 
 """
-    shell_fit(method, maxeval) -> String
+    shell_fit(method, budget) -> String
 
 Fit the FREE parameters of the current model against every epoch of the current dataset.
 
@@ -2981,6 +3113,13 @@ Generic over `parametric_chi2` rather than routed to `fit_sphere_ld` / `fit_elli
 those take their own fixed parameter orders per shape, while the GUI's model is "whichever
 fields the user marked free", which is exactly what this walks. Tied parameters are re-derived
 inside the objective, so a tie holds at every trial point rather than only at the start.
+
+`budget` is in the ENGINE's own unit — evaluations for NLopt, iterations for VMLMB, draws for
+NUTS, effective samples for Nautilus, rounds for Pigeons. See [`FIT_BUDGETS`](@ref), which is
+also what tells the panel how to label the box.
+
+THE MODEL IS NOT MODIFIED. The result is recorded as a fit and shown in the panel;
+[`shell_adopt_fit`](@ref) is what copies it into the model's parameters.
 """
 function shell_fit(method, maxeval)
     sh = _sh()
@@ -3098,7 +3237,11 @@ function shell_fit(method, maxeval)
     data = d.data
     tepochs = copy(d.tepochs)
     nd = sum(dd.nv2 + dd.nt3amp + dd.nt3phi for dd in data)
-    it = max(10, Int(maxeval))
+    # THE ENGINE'S OWN UNIT, floored at 1 and not at 10: each runner clamps to its own range
+    # (see `FIT_BUDGETS`), and a central floor of 10 would have turned a Pigeons budget of 8
+    # ROUNDS into 10 — four times the run the panel asked for.
+    it = max(1, Int(maxeval))
+    unit = fit_budget(meth).label
 
     # THE PANEL'S MESH, not a hardcoded one. This built `tessellation_healpix(4)` — nside 16,
     # 3072 tessels — while the mesh box above it read "n = 3, 768 tessels", so every fit did
@@ -3107,7 +3250,8 @@ function shell_fit(method, maxeval)
     # not read a Ref the GUI thread can change under it.
     nexp = sh.nside_exp[]
     prec = sh.precision[]
-    console!(sh, "fit $(join(names, ", ")) by $(meth), $(it) evaluations, " *
+    sh.jobmethod = meth
+    console!(sh, "fit $(join(names, ", ")) by $(meth), $(it) $(unit), " *
                  "HEALPix level $(nexp) ($(12 * (2^nexp)^2) tessels, $(prec))"; kind = :cmd)
     return start_job!(sh, :fit, function (stop)
         tess = tessellation_healpix(nexp; T = prec)
@@ -3204,7 +3348,7 @@ function _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, 
     base = star_params(snap)
     θ̂, chi2r, info = ROTIR.fit_parametric(data, tess, tepochs, base;
                                           θ0 = θfull, free = free, lb = lo, ub = hi,
-                                          tpole_free = true, maxiter = max(20, maxeval ÷ 50),
+                                          tpole_free = true, maxiter = max(10, maxeval),
                                           verb = true)
     best = [θ̂[findfirst(==(PARAMETRIC_THETA[n]), θnames)] for n in names]
     nd = sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data)
@@ -3218,9 +3362,10 @@ NUTS over the free parametric parameters, returning the posterior MEDIAN as the 
 and half the 16–84 interval as the error.
 
 The median, not the maximum: a Hamiltonian sampler is run for the posterior, and the mode of a
-skewed one is not the number to quote beside a symmetric error bar. `maxeval` is split into
-adaptation and draws in the usual 3:4 ratio — adaptation is where the step size and the mass
-matrix are set, and starving it is the commonest way to get divergences.
+skewed one is not the number to quote beside a symmetric error bar. The panel's budget is the
+number of DRAWS TO KEEP; adaptation is three quarters as many again on top, because that is
+where the step size and the mass matrix are set and starving it is the commonest way to get
+divergences.
 """
 
 function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval)
@@ -3246,9 +3391,9 @@ function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxev
     end
     tess = tessellation_healpix(nexp; T = prec)
     base = star_params(snap)
-    ndraw = clamp(maxeval ÷ 7, 100, 5000)
+    ndraw = clamp(Int(maxeval), 50, 20_000)
     r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
-                       tpole_free = true, n_samples = 4ndraw ÷ 4, n_adapt = 3ndraw ÷ 4,
+                       tpole_free = true, n_samples = ndraw, n_adapt = 3ndraw ÷ 4,
                        verb = true)
     # `_fit_hmc` returns the free parameters in the order `parametric_free_indices` sorts them,
     # which is not the order the panel listed them in.
@@ -3288,7 +3433,7 @@ function _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, max
         lo[j] = lb[k]; hi[j] = ub[k]
     end
     tess = tessellation_healpix(nexp; T = prec)
-    ndraw = clamp(maxeval ÷ 7, 100, 5000)
+    ndraw = clamp(Int(maxeval), 50, 20_000)
     r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
                        model = :sphere, n_samples = ndraw, n_adapt = 3ndraw ÷ 4, verb = true)
     # Sampler columns come back in sorted-index order, not the order the panel listed them.
@@ -3332,7 +3477,7 @@ function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, 
         θfull[j] = clamp(θfull[j], lb[k], ub[k])
     end
     tess = tessellation_healpix(nexp; T = prec)
-    ndraw = clamp(maxeval ÷ 7, 100, 5000)
+    ndraw = clamp(Int(maxeval), 50, 20_000)
     r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
                        model = :ellipsoid, tpole_free = tpf,
                        intensity_model = sh.intensity_model[],
@@ -3382,9 +3527,10 @@ function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, m
     end
     tess = tessellation_healpix(nexp; T = prec)
     base = star_params(snap)
-    # 2^n_rounds scans. Clamped to 6..12: below six the ladder has not tuned itself and the
-    # answer is noise, above twelve one run is longer than a working session.
-    nr = clamp(round(Int, log2(max(maxeval, 64))) - 5, 6, 12)
+    # 2^n_rounds scans, and the panel asks for the ROUNDS directly now. Still clamped to
+    # 6..12: below six the ladder has not tuned itself and the answer is noise, above twelve
+    # one run is longer than a working session.
+    nr = clamp(Int(maxeval), 6, 12)
     r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
                            tpole_free = true, n_rounds = nr, n_chains = 8,
                            explorer = :slice, multithreaded = Threads.nthreads() > 1,
@@ -3455,7 +3601,11 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
         calls[] % 10 == 1 && Printf.@printf("  it %3d   χ²ᵣ = %.6f\n", calls[], c / npts)
         return c / npts
     end
-    θ̂ = OptimPackNextGen.vmlmb(fg!, θ; lower = lo, upper = hi, maxiter = max(20, maxiter ÷ 50),
+    # ITERATIONS AS ASKED. This divided by 50, which was right while the panel's box said
+    # "evaluations" and carried 2000 — and wrong the moment each engine started naming its own
+    # unit (`FIT_BUDGETS`): a box reading "iterations 200" ran twenty. `_run_gradient_fit` was
+    # converted with the budget table; this path was missed.
+    θ̂ = OptimPackNextGen.vmlmb(fg!, θ; lower = lo, upper = hi, maxiter = max(10, maxiter),
                                blmvm = false, verb = false)
     best = [θ̂[layout[nm]] for nm in names]
     c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, tepochs; parametric_map = true)
@@ -3848,20 +3998,19 @@ function job_succeeded!(sh::ShellState, kind::Symbol, result)
         sh.lastfit = result.table
         sh.status = result.status
         console!(sh, sh.status)
-        _record_fit!(sh, result)
-        m = current_model(sh.session)
-        if m !== nothing
-            bn = hasproperty(result, :binary) ? result.binary : nothing
-            if bn === nothing
-                for (k, v) in result.params; m.params[k] = v; end
-            else
-                # Each value back onto the component it belongs to. `result.params` is keyed by
-                # the bare name, which is ambiguous across two stars, so the pairs decide.
-                for (k, nm) in enumerate(bn); _fit_put!(m, nm, result.best[k]); end
-            end
-            refresh_model_tab!(sh)
-            refresh_data_tab!(sh)
-        end
+        e = _record_fit!(sh, result)
+        # THE MODEL IS NOT TOUCHED. A finished fit used to write its parameters straight into
+        # the form, which meant the starting point was gone the moment the fit returned: there
+        # was no way to compare the two, to re-run from where you began, or to decline a result
+        # that had walked to a bound. The numbers live on the fit — the row in the history and
+        # the "Optimized parameters" frame — and `shell_adopt_fit` is what moves them into the
+        # model, when and if the user asks.
+        current_model(sh.session) === nothing ||
+            console!(sh, "$(e.name): the model is unchanged — press Adopt to take these values")
+        # The tables still refresh: the history gained a row and the parameter frame follows
+        # the selection, even though no parameter moved.
+        refresh_model_tab!(sh)
+        refresh_data_tab!(sh)
         refresh_posterior!(sh)
     end
     return sh
@@ -4040,7 +4189,8 @@ function shell_fits()
     sh = _sh()
     rows = String[]
     for f in sh.session.fits
-        push!(rows, join((f.name, String(f.method), f.model, string(f.surface_type),
+        push!(rows, join((f.name, fit_method_short(f.method), f.model,
+                          _fit_type_label(f.surface_type),
                           f.ndata > 0 ? Printf.@sprintf("%.4f", f.chi2 / f.ndata) : "—",
                           isfinite(f.logz) ? Printf.@sprintf("%.3f", f.logz) : "—",
                           isfinite(f.logzerr) ? Printf.@sprintf("%.3f", f.logzerr) : "—",
@@ -4049,8 +4199,79 @@ function shell_fits()
     return join(rows, "\n")
 end
 
+"""
+    _fit_type_label(code) -> String
+
+The surface type's NAME for the fits table, not its integer code.
+
+The column used to print `2`, which is the number `compute_radii` branches on and means
+nothing to a reader comparing a sphere against a rapid rotator — which is the entire purpose
+of the table. An unknown code still prints as a number rather than raising: a fit recorded by
+a newer ROTIR and reloaded here should show something.
+"""
+_fit_type_label(code::Integer) =
+    haskey(SURFACE_TYPES, Int(code)) ? surface_spec(Int(code)).label : string(code)
+
 "Which fit the posterior panel is showing, 1-based; `0` when there is none."
 shell_current_fit() = string(_sh().session.current_fit)
+
+"""
+    shell_fit_has_posterior() -> "1" | "0"
+
+Whether the SELECTED fit kept draws, so the panel can disable a posterior button rather than
+offer a view that would come up empty. An optimiser reports a point and no distribution.
+"""
+function shell_fit_has_posterior()
+    f = current_fit(_sh().session)
+    return (f !== nothing && size(f.samples, 1) > 0) ? "1" : "0"
+end
+
+"""
+    shell_adopt_fit() -> String
+
+Copy the SELECTED fit's parameters into the current model, and report what moved.
+
+A fit already writes its own result back when it finishes, so this is for the OTHER direction
+in time: pick an earlier row out of the history and put those numbers back in the form, after
+a later fit has overwritten them or after the form has been edited by hand.
+
+Only parameters the current model actually has are written. A fit of a sphere selected while a
+rapid rotator is loaded shares `radius` with nothing, and silently inventing fields is how a
+model ends up with parameters its `surface_type` never reads.
+"""
+function shell_adopt_fit()
+    sh = _sh()
+    f = current_fit(sh.session)
+    f === nothing && return "no fit selected"
+    m = current_model(sh.session)
+    m === nothing && return "no model to adopt into"
+    took = String[]; skipped = String[]
+    for (k, n) in enumerate(f.names)
+        isfinite(f.best[k]) || continue
+        # `_fit_put!` resolves a component-qualified label ("2:rpole") onto the right star of a
+        # binary, and a bare name onto the primary — the same routing the fit itself uses when
+        # it writes its result back, so adopting cannot disagree with fitting.
+        if _fit_adopt!(m, n, f.best[k])
+            push!(took, String(n))
+        else
+            push!(skipped, String(n))
+        end
+    end
+    isempty(took) && return "$(f.name): none of its parameters belong to $(m.name)"
+    # THE EXPORTED SCRIPT has to end up at the same model. `shell_add_model` logs the
+    # parameters as they were when the model was created, and a fit does not move them any
+    # more — so adopting is the point at which the script's model has to be rewritten, or the
+    # replay would reproduce the starting guess and not the answer.
+    log!(sh.session, "$(m.name) = " * _namedtuple_literal(star_params(m));
+         note = "adopt $(f.name)", binding = m.name)
+    refresh_model_tab!(sh)
+    refresh_data_tab!(sh)
+    msg = "adopted $(length(took)) parameter$(length(took) == 1 ? "" : "s") from $(f.name)"
+    isempty(skipped) || (msg *= "; $(join(skipped, ", ")) not in this model")
+    sh.status = msg
+    console!(sh, msg)
+    return msg
+end
 
 function shell_select_fit(i)
     sh = _sh()
@@ -4058,6 +4279,15 @@ function shell_select_fit(i)
     n in eachindex(sh.session.fits) || return sh.status
     sh.session.current_fit = n
     refresh_posterior!(sh)
+    # REPORT THE FIT THAT WAS SELECTED. This used to hand back `sh.status`, which is whatever
+    # the last thing to run put there — so clicking an older row in the history answered with
+    # the NEWEST fit's χ², next to a parameter table that had just switched to the older one.
+    f = sh.session.fits[n]
+    sh.status = f.ndata > 0 ?
+        Printf.@sprintf("%s (%s, %s): χ²ᵣ = %.4f over %d points%s", f.name, f.model,
+                        _fit_type_label(f.surface_type), f.chi2 / f.ndata, f.ndata,
+                        isfinite(f.logz) ? Printf.@sprintf(", log(Z) = %.3f", f.logz) : "") :
+        "$(f.name) ($(f.model))"
     return sh.status
 end
 

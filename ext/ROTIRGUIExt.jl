@@ -217,19 +217,46 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
                 _g = zeros(length(_x0))
                 spheroid_regularization(_x0, _g; regularizers = _regs, verbose = false)
             end
-            # The analytic shape fit, in the Float64 specialisation the GUI uses. Measured at
-            # 9.6 s on first call against ~1 s of actual work, all of it compiling
-            # `shape_chi2_fg!` for this element type — which happens while the user is
-            # watching a Fit button that has not done anything yet.
-            let _t64 = tessellation_healpix(2; T = Float64),
-                _p64 = star_params(_m),
-                _s64 = create_star(_t64, _p64, 0.0),
-                _d1  = _s.datasets[1].data[1]
-                _x64 = Float64.(parametric_temperature_map(_p64, _s64))
-                _gθ  = zeros(Float64, 4); _gx = zeros(Float64, length(_x64))
-                _θ   = Float64[_p64.rpole, _p64.frac_escapevel, _p64.inclination,
-                               _p64.position_angle]
-                shape_chi2_fg!(_gθ, _gx, _x64, _θ, [_d1], _t64, _p64, [0.0])
+            # THE ANALYTIC SHAPE FIT, once per surface type it serves.
+            #
+            # `shape_chi2_fg!` specialises on the TYPE of `star_params_base`, which is a
+            # NamedTuple whose field set comes from the surface type — so a sphere, an
+            # ellipsoid and a rapid rotator are three different specialisations of the same
+            # method, and each costs its own first-call compile. MEASURED, all with the mesh at
+            # Float64 (which is what `_run_shape_fit` forces regardless of the precision box):
+            #
+            #     sphere         4.5 s        ellipsoid      5.2 s
+            #     steady state   6.3 ms per evaluation, and vmlmb needs about a dozen
+            #
+            # This block used to build ONE of them, from `_m` — a rapid rotator — so fitting a
+            # sphere's diameter sat for 4.5 s before the optimiser started, on a solve that
+            # takes 0.08 s. That is the whole of "VMLMB doesn't seem fast": none of it is the
+            # optimiser, and the second fit in a session is instant.
+            #
+            # The keyword is NOT part of it — `parametric_map = true` measured at 0.010 s
+            # against the positional call's 4.481 s, so kwargs reuse the specialisation.
+            # Float32 is not part of it either: `_run_shape_fit` ignores `prec` and builds the
+            # mesh at Float64, because `shape_chi2_fg!` shares one element type across θ, the
+            # gradients, the map and the tessellation.
+            # THROUGH `_run_shape_fit` ITSELF, not through `shape_chi2_fg!` directly. The
+            # objective is a closure defined inside that function, and `vmlmb` specialises on
+            # the closure's type — so calling the kernel by hand leaves vmlmb to compile at
+            # first use anyway (measured at 0.92 s of the remaining cost). Going through the
+            # runner covers the kernel, the closure and the optimiser in one go.
+            #
+            # TYPES 0 AND 1 ONLY, which is exactly what the shape path serves:
+            # `gradient_fit_kind` sends a rapid rotator to `:parametric` when Zygote is there
+            # and to `:none` when it is not, so `_run_shape_fit` never sees one — and
+            # `shape_map_and_derivs` refuses it outright, since that map is differentiated
+            # through `vonzeipel_map` instead.
+            let _dd = _s.datasets[1]
+                for (_code, _free) in ((0, [:radius]), (1, [:radius_x, :radius_y]))
+                    _sm = add_model!(Session(), _code)
+                    _run_shape_fit(_sm, _dd.data, _dd.tepochs, _free,
+                                   Float64[_sm.params[n] for n in _free],
+                                   Float64[0.5 for _ in _free], Float64[2.0 for _ in _free],
+                                   2, Float64, 10)
+                end
             end
             SHELL[] = nothing
         end

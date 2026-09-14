@@ -274,6 +274,63 @@ end
             @test length(c[2]) + (isempty(c[3]) ? 0 : length(c[3]) + 3) <= 20
         end
     end
+    # THE FITS HISTORY names the surface TYPE rather than printing the integer the geometry
+    # code branches on. Same for the model header line, which is the other place a reader met
+    # a bare "type 2".
+    G.shell_clear_model(); G.shell_add_model(2)
+    mrow = cols(rows(G.shell_models())[1])
+    @test length(mrow) == 4
+    @test mrow[2] == "2"                              # the code is still there for the log
+    @test mrow[4] == "Rapid rotator"                  # and the label is what the header shows
+    for (code, label) in ((0, "Sphere"), (1, "Triaxial ellipsoid"), (3, "Roche lobe"))
+        G.shell_clear_model(); G.shell_add_model(code)
+        @test cols(rows(G.shell_models())[1])[4] == label
+    end
+    @test G._fit_type_label(2) == "Rapid rotator"
+    @test G._fit_type_label(97) == "97"               # a code from a newer ROTIR still prints
+
+    # THE METHOD COLUMN names the ALGORITHM, not ROTIR's route to it. `:gradient` is the one
+    # key in the table that is not an algorithm name, so a row used to read "gradient" where
+    # every other row read the optimiser it ran.
+    @test G.fit_method_short(:gradient) == "VMLMB"
+    @test G.fit_method_short("hmc") == "NUTS"
+    @test G.fit_method_short(:neldermead) == "Nelder–Mead"
+    @test G.fit_method_short(:nosuchengine) == "nosuchengine"   # falls back, does not raise
+    # Every offered engine has a short name, and none of them is a sentence: the column is
+    # dp(84) wide and elides.
+    for (k, short, label) in G.FIT_METHODS
+        @test !isempty(short) && length(short) <= 12
+        @test occursin(short, label)      # the short name opens the label it abbreviates
+    end
+    # The combo still reads `key⇥label`, so adding the short field did not shift what QML
+    # parses out of it.
+    for r in rows(G.shell_fit_methods())
+        c = cols(r)
+        @test length(c) == 2
+        @test any(e -> e[1] == c[1] && e[3] == c[2], G.FIT_METHODS)
+    end
+
+    # EVERY ENGINE NAMES ITS OWN BUDGET. One box labelled "evaluations" carrying 2000 was
+    # divided down by a different factor in each runner, so the number on screen was the
+    # number none of them used.
+    for (k, label, dflt) in (("neldermead", "evaluations", 2000), ("bobyqa", "evaluations", 2000),
+                             ("gradient", "iterations", 200), ("hmc", "draws", 400),
+                             ("nautilus", "eff. samples", 2000), ("pigeons", "rounds", 8))
+        b = cols(G.shell_fit_budget(k))
+        @test length(b) == 6
+        @test b[1] == label
+        @test parse(Int, b[2]) == dflt
+        lo, hi, step = parse.(Int, b[3:5])
+        @test lo <= dflt <= hi && step >= 1
+        @test !isempty(b[6])
+    end
+    # An unlisted method falls back rather than raising: the panel asks about whatever is
+    # selected, and a method added to the shell must not break the box before it gains a row.
+    @test cols(G.shell_fit_budget("nosuchengine"))[1] == "evaluations"
+    # Pigeons' default must survive the floor the fit path applies. It used to be `max(10, n)`,
+    # which turned 8 rounds into 10 — four times the run that was asked for.
+    @test parse(Int, cols(G.shell_fit_budget("pigeons"))[2]) < 10
+
     # THE GRAVITY-DARKENING LAW, which only the rapid rotator offers: von Zeipel is the
     # slow-rotation law and Espinosa Lara & Rieutord the fast one, and picking between them is
     # the same discrete-choice row `ldtype` is, so the form draws it with no QML of its own.
@@ -510,9 +567,68 @@ end
     drain!()
     @test occursin("χ²", sh.status)
     @test occursin("radius", sh.lastfit)
-    @test G.current_model(sh.session).params[:radius] != 1.2
+    # THE MODEL IS LEFT ALONE. A finished fit used to write itself into the form, which threw
+    # away the starting point: there was then no way to compare the two, to re-run from where
+    # you began, or to refuse a result that had walked to a bound. The numbers live on the fit
+    # until `shell_adopt_fit` is asked for them.
+    @test G.current_model(sh.session).params[:radius] == 1.2
+    @test G.shell_fits() != ""                        # but the fit was recorded
+    # The FIT's own stored value, not the table's — `shell_fit_params` formats to six
+    # significant figures for display, and comparing a rounded string against the number it
+    # was rounded from fails at the seventh digit.
+    fe = G.current_fit(sh.session)
+    fitted = fe.best[findfirst(==(:radius), fe.names)]
+    @test fitted != 1.2
+    @test occursin("adopted", G.shell_adopt_fit())
+    @test G.current_model(sh.session).params[:radius] == fitted
+    # A parameter the current model does not have is reported, not invented — a sphere's
+    # `radius` is not a field of a rapid rotator, whose geometry is `rpole`.
+    G.shell_add_model(2)
+    @test occursin("none of its parameters", G.shell_adopt_fit())
+    @test !haskey(G.current_model(sh.session).params, :radius)
+    G.shell_clear_model(); G.shell_add_model(0)
+    G.shell_set_param("radius", "1.2"); G.shell_set_param_state("radius", "free")
 
     @test occursin("unknown method", G.shell_fit("nosuchmethod", 10))
+
+    # STOP SAYS WHAT IT CAN DO. `start_job!` gives its worker a `stop::Ref`, and the only thing
+    # that reads it is the objective closure `_run_fit` receives — so the NLopt searches notice
+    # and VMLMB, NUTS, Pigeons and the shape path never see the Ref at all. It used to answer
+    # "stopping…" to every engine, which is a promise it cannot keep: pressing Stop during a
+    # VMLMB fit left the elapsed counter climbing to the end of the budget.
+    @test G.shell_job_stop() == "nothing running"
+    @test :neldermead in G.STOP_AWARE && !(:gradient in G.STOP_AWARE)
+    G.shell_fit("neldermead", 300)
+    @test occursin("checks between evaluations", G.shell_job_stop())
+    drain!()
+    if "gradient" in Set(cols(r)[1] for r in rows(G.shell_fit_methods()))
+        G.shell_fit("gradient", 50)
+        msg = G.shell_job_stop()
+        @test occursin("cannot be interrupted", msg) && occursin("VMLMB", msg)
+        drain!()
+    end
+
+    # THE ENGINE LIST DEPENDS ON THE MODEL, which is why the panel may not cache it. With no
+    # model at all `shell_fit_methods` can only offer the two derivative-free searches — and
+    # the Model tab used to build its combo ONCE, on the first refresh, which happens when the
+    # window opens and before any model exists. So VMLMB, NUTS and Pigeons were filtered out
+    # and never came back, whatever model was added afterwards: unreachable from the GUI for
+    # the whole session, with the combo showing the NLopt pair as if they were all there was.
+    G.shell_clear_model()
+    @test Set(cols(r)[1] for r in rows(G.shell_fit_methods())) == Set(["neldermead", "bobyqa"])
+    # Types 0 and 1 use the SHAPE gradient, which needs nothing beyond ROTIR; type 2 goes
+    # through `fit_parametric` and so needs Zygote, which this harness does not load. Both
+    # cases are asserted against `gradient_fit_kind`, which is the predicate the list uses, so
+    # the test says "the list agrees with the rule" rather than assuming an environment.
+    for code in (0, 1, 2)
+        G.shell_add_model(code)
+        offered = "gradient" in Set(cols(r)[1] for r in rows(G.shell_fit_methods()))
+        @test offered == (G.gradient_fit_kind(G.current_model(sh.session)) !== :none)
+        code in (0, 1) && @test offered
+        G.shell_clear_model()
+    end
+    G.shell_add_model(0)
+    G.shell_set_param("radius", "1.2"); G.shell_set_param_state("radius", "free")
 
     # The gradient path is offered only where the gradient is CONSISTENT with the objective.
     ms = Set(cols(r)[1] for r in rows(G.shell_fit_methods()))
@@ -1080,7 +1196,10 @@ end
     @test length(frows) == 1
     f1 = cols(frows[1])
     @test length(f1) == 9
-    @test f1[2] == "neldermead" && f1[6] == "—"                   # no evidence
+    # The method column carries the ALGORITHM's name, not the key that selected it: the one
+    # row where those differ used to read "gradient" instead of "VMLMB".
+    @test f1[2] == G.fit_method_short(:neldermead) && f1[6] == "—"   # no evidence
+    @test f1[2] != "neldermead"                                      # i.e. it is the label
     # The draws/evals column holds whichever number the METHOD produced: a sampler reports
     # draws, a local optimiser reports how many times it evaluated the criterion. It used to
     # read "0" here, which said nothing — an optimiser has no draws, and the count it does
@@ -1230,11 +1349,18 @@ end
     before = [m.params[n] for n in (:radius_x, :radius_y, :radius_z)]
     G.shell_fit("gradient", 400); drain!()
     @test length(rows(G.shell_fits())) == 1
+    # A FIT NO LONGER TOUCHES THE MODEL — the numbers are on the fit until Adopt is pressed —
+    # so the radii are read off the recorded fit, and the model is checked to have stayed put.
+    @test [m.params[n] for n in (:radius_x, :radius_y, :radius_z)] == before
+    fe = G.current_fit(sh.session)
+    after = [fe.best[findfirst(==(n), fe.names)] for n in (:radius_x, :radius_y, :radius_z)]
     # The RADII move, which is what the map derivative unlocked: with the map held fixed the
     # gradient pointed the wrong way in `radius_y` by 13 %.
-    after = [m.params[n] for n in (:radius_x, :radius_y, :radius_z)]
     @test after != before
     @test all(0.7 .<= after .<= 2.0)
+    # And Adopt is what puts them in the form.
+    @test occursin("adopted", G.shell_adopt_fit())
+    @test [m.params[n] for n in (:radius_x, :radius_y, :radius_z)] == after
 end
 
 @testset "the polyft kernel is selectable" begin

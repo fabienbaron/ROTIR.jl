@@ -66,12 +66,33 @@ Pane {
     // The COMPANION's form, for a binary. Same twelve columns as the primary's — both come
     // from `_params_table`, so a column added there appears in both without touching this.
     ListModel { id: param2Model }
-    // The last fit's parameters: name, value, and the uncertainty when the method produced
-    // one. Filled from `shell_last_fit`, which returns one `name⇥value⇥error` line each.
+    // The SELECTED fit's parameters: name, value, and the uncertainty when the method produced
+    // one. Filled by `refreshSelectedFit()` from `shell_fit_params`, which follows the row
+    // picked in the history — not `shell_last_fit`, which is always the newest fit.
     ListModel { id: resultModel }
     ListModel { id: posModel }
 
     property bool isBinary: false
+    // RE-ENTRANCY GUARD for the fits list. `refreshFits()` rebuilds `fitModel` and then puts
+    // `currentIndex` back where Julia says it belongs — and `fitList.onCurrentIndexChanged`
+    // reacts to selection changes. Without this flag the restore looks like a user selection,
+    // the handler calls `refreshFits()` again, its `fitModel.clear()` resets the index to -1
+    // so the next restore is another real change, and the two recurse until Qt gives up with
+    // "RangeError: Maximum call stack size exceeded". The aborted pass leaves the ListModel
+    // half-filled, which is what drew a blank row above the newest fit.
+    property bool syncingFits: false
+    // Whether the SELECTED fit kept draws, and whether there is any fit at all. Both come from
+    // Julia rather than being inferred here, so a method added to the shell does not need this
+    // file to learn about it.
+    property bool hasPosterior: false
+    property bool hasFit: false
+    // The budget box's current unit, its tooltip, and the values typed for each engine so far.
+    property string budgetKey: ""
+    property string budgetTip: "objective evaluations"
+    // The last `shell_fit_methods` reply, so the engine combo is rebuilt only when the set of
+    // engines actually changed rather than on every refresh.
+    property string methodsRaw: ""
+    property var budgetMemory: ({})
     // How many parameters a fit would move. Refreshed with the form, so the Fit button
     // follows every change of state without the panel recounting anything.
     property int freeCount: 0
@@ -96,7 +117,39 @@ Pane {
                 typeModel.append({ code: f[0], name: f[1], label: f[2], doc: f[3] })
             }
         }
+        // A ComboBox whose model was EMPTY at construction keeps currentIndex = -1 and renders
+        // blank when rows arrive later; it only defaults to 0 for a model that already had
+        // rows. Setting it explicitly is the whole fix.
+        if (typeBox.currentIndex < 0 && typeModel.count > 0) typeBox.currentIndex = 0
+        viewBar.loadColormaps()
+        viewBar.loadDecorations()
+        viewBar.loadField()
+    }
+
+    // WHICH ENGINES ARE OFFERED DEPENDS ON THE MODEL, so this is rebuilt on every refresh and
+    // not cached beside the surface types.
+    //
+    // `shell_fit_methods` drops `gradient`, `hmc` and `pigeons` when there is no model, and
+    // `gradient`/`hmc` again when the model's surface type has no consistent gradient. The
+    // list used to be built once, on the first refresh — which happens when the window opens,
+    // BEFORE any model exists — so all three were filtered out and never came back. VMLMB,
+    // NUTS and Pigeons were unreachable from this panel for the whole session, whatever model
+    // was added afterwards, and the combo showed the two NLopt searches as if they were all
+    // ROTIR had.
+    //
+    // The selection is restored BY KEY, not by index: the row set changes with the surface
+    // type, so index 2 is a different engine before and after.
+    function refreshMethods() {
         var mrows = Julia.shell_fit_methods()
+        // ONLY WHEN IT CHANGED. `refresh()` runs on every keystroke in the parameter form, and
+        // clearing a live ComboBox's model that often closes its popup and drops the highlight
+        // under the pointer. The engine set changes when the MODEL does, which is rare, so the
+        // raw reply is compared against the last one and an identical list is left alone.
+        if (mrows === root.methodsRaw && methodModel.count > 0) return
+        root.methodsRaw = mrows
+        var keep = (methodBox.currentIndex >= 0 && methodBox.currentIndex < methodModel.count)
+                   ? methodModel.get(methodBox.currentIndex).key : ""
+        methodModel.clear()
         if (mrows.length > 0) {
             var mlines = mrows.split("\n")
             for (var j = 0; j < mlines.length; ++j) {
@@ -105,14 +158,14 @@ Pane {
                 methodModel.append({ key: g[0], label: g[1] })
             }
         }
-        // A ComboBox whose model was EMPTY at construction keeps currentIndex = -1 and renders
-        // blank when rows arrive later; it only defaults to 0 for a model that already had
-        // rows. Setting it explicitly is the whole fix.
-        if (typeBox.currentIndex < 0 && typeModel.count > 0) typeBox.currentIndex = 0
-        if (methodBox.currentIndex < 0 && methodModel.count > 0) methodBox.currentIndex = 0
-        viewBar.loadColormaps()
-        viewBar.loadDecorations()
-        viewBar.loadField()
+        var want = -1
+        for (var k = 0; k < methodModel.count; ++k)
+            if (methodModel.get(k).key === keep) { want = k; break }
+        methodBox.currentIndex = want >= 0 ? want : (methodModel.count > 0 ? 0 : -1)
+        // The budget box has to be labelled for whatever the combo landed on, not left on the
+        // "evaluations" default it was declared with. `applyBudget` reads the engine's own
+        // unit and restores whatever was last typed for it.
+        root.applyBudget()
     }
 
     function pushTessellation() {
@@ -134,7 +187,8 @@ Pane {
             for (var k = 0; k < mlines.length; ++k) {
                 var h = mlines[k].split("\t")
                 if (h.length < 3) continue
-                modelListModel.append({ mname: h[0], mtype: h[1], mfree: h[2] })
+                modelListModel.append({ mname: h[0], mtype: h[1], mfree: h[2],
+                                        mlabel: h.length > 3 ? h[3] : h[1] })
             }
         }
         var rows = Julia.shell_params()
@@ -208,19 +262,13 @@ Pane {
         }
         var pl = Julia.shell_binary_placement()
         if (pl.length > 0) placeBox.currentIndex = pl.split("\t")[0] === "offset" ? 1 : 0
+        root.refreshMethods()
         root.freeCount = parseInt(Julia.shell_free_count())
         warnLabel.text = Julia.shell_validate_model()
-        var res = Julia.shell_last_fit()
-        resultModel.clear()
-        if (res.length > 0) {
-            var rl = res.split("\n")
-            for (var k = 0; k < rl.length; ++k) {
-                var h = rl[k].split("\t")
-                if (h.length < 2) continue
-                resultModel.append({ rname: h[0], rvalue: h[1],
-                                     rerr: h.length > 2 ? h[2] : "" })
-            }
-        }
+        // `resultModel` belongs to `refreshSelectedFit()` now. It used to be refilled here
+        // from `shell_last_fit`, which is always the NEWEST fit — so selecting an older row in
+        // the history showed its numbers until the next keystroke in the form silently put the
+        // newest one's back.
         var ep = Julia.shell_epochs()
         root.epochCount = ep.length > 0 ? ep.split("\n").length : 0
     }
@@ -487,8 +535,9 @@ Pane {
                     font.pointSize: root.fontPt
                     color: modelListModel.count > 0 ? "#333" : "#7f8c98"
                     text: modelListModel.count === 0 ? "no model — pick a surface type below"
-                        : "model: " + modelListModel.get(0).mname + "  (type " +
-                          modelListModel.get(0).mtype + ", " + modelListModel.get(0).mfree + " free)"
+                        : "model: " + modelListModel.get(0).mname + "  (" +
+                          modelListModel.get(0).mlabel + ", " +
+                          modelListModel.get(0).mfree + " free)"
                 }
 
                 RowLayout {
@@ -839,30 +888,67 @@ Pane {
                 }
 
                 // ── the fit launcher ─────────────────────────────────────────────
-                // Two rows, not one: the method labels are sentences ("VMLMB + Zygote gradient
-                // (fast; rapid rotator only)"), and four controls across this column squeezed the
-                // combo to a width that showed none of it.
+                // Two rows, not one: the method labels are sentences ("Pigeons (parallel
+                // tempering — for a multimodal posterior)"), and four controls across this
+                // column squeezed the combo to a width that showed none of it.
                 ComboBox {
                     id: methodBox
                     Layout.fillWidth: true
                     model: methodModel
                     textRole: "label"
                     font.pointSize: root.fontPt
+                    // THE BUDGET FOLLOWS THE ENGINE. One box served all six methods with the
+                    // label "evaluations" and the value 2000, and each runner divided it down
+                    // by its own factor — so the same 2000 meant 2000 simplex evaluations, 40
+                    // VMLMB iterations, 285 NUTS draws and 5 Pigeons rounds, none of which the
+                    // label said. `shell_fit_budget` names the unit and the range, and the
+                    // runners now take the number as given.
+                    onActivated: root.applyBudget()
                 }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: dp(6)
-                    Label { text: "evaluations"; font.pointSize: root.fontPt - 1; color: "#7f8c98" }
+                    Label { id: budgetLabel; text: "evaluations"
+                            font.pointSize: root.fontPt - 1; color: "#7f8c98" }
                     SpinBox {
                         id: evalBox
                         Layout.preferredWidth: dp(120)
                         from: 10; to: 200000; stepSize: 100; value: 2000
                         editable: true
                         font.pointSize: root.fontPt - 1
-                        ToolTip.text: "objective evaluations (gradient path: /50 -> iterations)"
+                        ToolTip.text: root.budgetTip
                         ToolTip.visible: hovered
+                        // Remembered PER ENGINE while the panel is open, so switching away to
+                        // compare and switching back does not throw away a value that was
+                        // deliberately typed.
+                        onValueModified: if (root.budgetKey.length > 0)
+                            root.budgetMemory[root.budgetKey] = value
                     }
-                    Item { Layout.fillWidth: true }
+                    // THE RUNNING READOUT, in the spacer's place rather than on a row of its
+                    // own below. Two reasons: it is the Fit button's own state, so it belongs
+                    // beside it and reads as one control; and a label on its own row appears
+                    // and disappears with the job, which moved everything below it by a row
+                    // twice per fit. Right-aligned so it grows leftwards into empty space
+                    // instead of pushing the buttons around.
+                    //
+                    // A sampler can run for minutes and a spinner alone does not say whether
+                    // it is getting anywhere, which is what the elapsed time is for.
+                    Label {
+                        Layout.fillWidth: true
+                        // EMPTY TEXT rather than `visible: false`: an invisible item is
+                        // dropped from a RowLayout entirely, so the label would take the
+                        // spacer's slot only while a job ran and Fit and Stop would slide
+                        // left and right around every fit. This way it always holds the slack.
+                        text: !root.jobRunning ? ""
+                              : root.jobProgress.length > 0
+                                ? "running — " + root.jobProgress + "   (" +
+                                  root.jobElapsed.toFixed(0) + " s)"
+                                : "running — " + root.jobElapsed.toFixed(0) + " s"
+                        horizontalAlignment: Text.AlignRight
+                        color: "#7f8c98"
+                        font.pointSize: root.fontPt - 1
+                        elide: Text.ElideLeft
+                    }
                     Button {
                         text: "Fit"
                         // Nothing free is nothing to fit. The count comes from Julia because for
@@ -890,19 +976,105 @@ Pane {
                     }
                 }
 
-                // The same running readout the Imaging tab has. A sampler can run for minutes and
-                // a spinner alone does not say whether it is getting anywhere; the elapsed time is
-                // what tells you a fit is worth waiting for or worth stopping.
-                Label {
+                // ── every fit so far, and the evidence that compares them ────────
+                //
+                // Δχ² CANNOT compare a sphere with a rapid rotator: more parameters always fit
+                // better, and χ²ᵣ ≫ 1 here anyway. log(Z) can, because the prior volume a model
+                // spends is already in it — and every nested sampler and Pigeons was computing it
+                // all along while the panel showed two numbers per parameter and dropped the rest.
+                //
+                // Fits ACCUMULATE where models do not: fit a sphere, switch surface type, fit
+                // again, and the two rows are the comparison.
+                Label { text: "Fits history"; font.bold: true; font.pointSize: root.fontPt }
+                // The header sits INSIDE the frame, above the list, and the rows carry no padding
+                // of their own. With the header outside it, the two were offset by the Frame's
+                // padding plus the ItemDelegate's — a couple of dozen pixels of style-dependent
+                // inset that no width here could have compensated for, since neither number is
+                // fixed by this file.
+                Frame {
                     Layout.fillWidth: true
-                    visible: root.jobRunning
-                    text: root.jobProgress.length > 0
-                          ? "running — " + root.jobProgress + "   (" +
-                            root.jobElapsed.toFixed(0) + " s)"
-                          : "running — " + root.jobElapsed.toFixed(0) + " s"
-                    color: "#7f8c98"
-                    font.pointSize: root.fontPt - 1
-                    elide: Text.ElideRight
+                    // A FIXED height, because this is no longer the last frame in the column.
+                    // It scrolls, so a long history is reachable either way, and giving the
+                    // slack to the frame BELOW is what keeps the parameter table — which grows
+                    // with the number of free parameters — from being the one that is squeezed.
+                    Layout.preferredHeight: dp(118)
+                    Layout.minimumHeight: dp(72)
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: dp(2)
+                        RowLayout {
+                            Layout.fillWidth: true
+                            // The rows lose their right edge to the vertical scrollbar and the
+                            // header does not, so the last column drifted by exactly its width.
+                            // Reserved here rather than subtracted from a column, because the bar
+                            // only appears once the list overflows.
+                            Layout.rightMargin: fitScroll.visible ? fitScroll.width : 0
+                            spacing: dp(4)
+                            Label { Layout.preferredWidth: dp(84); text: "method"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
+                            // Wide enough for "Rapid rotator": the column used to show the
+                            // integer `surface_type` and dp(34) was sized for one digit.
+                            Label { Layout.preferredWidth: dp(104); text: "type"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
+                            Label { Layout.preferredWidth: dp(62); text: "χ²ᵣ"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
+                                    horizontalAlignment: Text.AlignRight }
+                            Label { Layout.fillWidth: true; text: "log(Z)"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
+                                    horizontalAlignment: Text.AlignRight }
+                            Label { Layout.preferredWidth: dp(76); text: "draws/evals"
+                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
+                                    horizontalAlignment: Text.AlignRight }
+                        }
+                        ListView {
+                            id: fitList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: fitModel
+                            ScrollBar.vertical: ScrollBar { id: fitScroll }
+                        // A REAL selection only, and it refreshes what depends on the
+                        // selection rather than rebuilding the list it was made in.
+                        onCurrentIndexChanged: {
+                            if (root.syncingFits || currentIndex < 0) return
+                            root.statusChanged(Julia.shell_select_fit(currentIndex + 1))
+                            root.refreshSelectedFit()
+                            postArea.update()
+                        }
+                            delegate: ItemDelegate {
+                            width: fitList.width
+                            // Zero horizontal padding: the header above has none either, and the
+                            // default inset is what put the columns out of line with it.
+                            leftPadding: 0
+                            rightPadding: 0
+                            highlighted: ListView.isCurrentItem
+                            onClicked: fitList.currentIndex = index
+                            ToolTip.text: fdiag.length > 0 ? fname + " — " + fdiag : fname
+                            ToolTip.visible: hovered && fname.length > 0
+                            contentItem: RowLayout {
+                                spacing: dp(4)
+                                Label { Layout.preferredWidth: dp(84); text: fmethod
+                                        font.pointSize: root.fontPt - 1; elide: Text.ElideRight }
+                                Label { Layout.preferredWidth: dp(104); text: ftype
+                                        font.pointSize: root.fontPt - 1
+                                        elide: Text.ElideRight }
+                                Label { Layout.preferredWidth: dp(62); text: fchi2r
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                                Label { Layout.fillWidth: true
+                                        // The error beside it, because a log(Z) difference smaller
+                                        // than the error is not a preference for either model.
+                                        text: flogz === "—" ? "—" : flogz + " ± " + flogzerr
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                                Label { Layout.preferredWidth: dp(76); text: fns
+                                        color: fns === "0" ? "#a0a6ac" : "#333"
+                                        font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight }
+                            }
+                        }
+                        }
+                    }
                 }
 
                 // The last fit's numbers. A TABLE rather than the monospace blob this was: the
@@ -911,9 +1083,61 @@ Pane {
                 // the font. The error column is empty for a local search — Nelder-Mead makes no
                 // uncertainty claim, and an empty cell says that where a 0 would have claimed
                 // precision it does not have.
-                Label { text: "Results"; font.bold: true; font.pointSize: root.fontPt }
+                // "Optimized parameters", not "Results": the frame holds the numbers a fit
+                // arrived at, and it follows the SELECTED row of the history below rather than
+                // only ever the newest one — clicking an earlier fit shows that fit's values.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: dp(6)
+                    Label { text: "Optimized parameters"; font.bold: true
+                            font.pointSize: root.fontPt }
+                    Item { Layout.fillWidth: true }
+                    // THE PARAMETER POSTERIOR, which belongs beside the numbers it is about
+                    // rather than in the view bar: that row holds pictures of the STAR, and a
+                    // marginal with a pair scatter is not one. It renders into the view stack's
+                    // fourth slot, whose view-bar button is the unimplemented uncertainty MAP
+                    // and is disabled — so this button is the way in.
+                    //
+                    // Disabled for an optimiser, which reports a point and keeps no draws: an
+                    // enabled button leading to an empty plot is worse than a disabled one.
+                    Button {
+                        text: "Posterior"
+                        enabled: root.hasPosterior
+                        font.pointSize: root.fontPt - 1
+                        ToolTip.text: root.hasPosterior
+                            ? "show this fit's parameter posterior in the view above"
+                            : "this fit is a point estimate — only a sampler keeps draws"
+                        ToolTip.visible: hovered
+                        // `viewIndex` drives the StackLayout by binding, so assigning it is the
+                        // whole switch; `redraw()` is what ViewBar's own onViewChanged would
+                        // have called, and Makie will not repaint on its own.
+                        onClicked: { viewBar.viewIndex = 3; root.redraw() }
+                    }
+                    // The other direction in time. A fit writes its own result back when it
+                    // finishes, so this is for putting an EARLIER fit's numbers into the form
+                    // again after a later one, or a hand edit, has replaced them.
+                    Button {
+                        text: "Adopt"
+                        enabled: root.hasFit
+                        font.pointSize: root.fontPt - 1
+                        ToolTip.text: "copy these values into the model's parameters"
+                        ToolTip.visible: hovered
+                        onClicked: {
+                            root.statusChanged(Julia.shell_adopt_fit())
+                            root.refresh(); root.redraw()
+                        }
+                    }
+                }
                 Frame {
                     Layout.fillWidth: true
+                    // THE LAST frame takes whatever slack the column has — which is where a
+                    // sphere's spare room goes, and where a binary's has run out. It can grow
+                    // but never shrink: the column is at least as tall as its contents, so
+                    // nothing above it is squeezed to make room for it. This used to be the
+                    // fits history; the two were swapped so a run is picked above the numbers
+                    // it produced, and the table that grows with the free-parameter count is
+                    // the one that gets the room.
+                    Layout.fillHeight: true
                     Layout.preferredHeight: dp(110)
                     ColumnLayout {
                         anchors.fill: parent
@@ -966,103 +1190,6 @@ Pane {
                                             horizontalAlignment: Text.AlignRight }
                                 }
                             }
-                        }
-                    }
-                }
-
-                // ── every fit so far, and the evidence that compares them ────────
-                //
-                // Δχ² CANNOT compare a sphere with a rapid rotator: more parameters always fit
-                // better, and χ²ᵣ ≫ 1 here anyway. log(Z) can, because the prior volume a model
-                // spends is already in it — and every nested sampler and Pigeons was computing it
-                // all along while the panel showed two numbers per parameter and dropped the rest.
-                //
-                // Fits ACCUMULATE where models do not: fit a sphere, switch surface type, fit
-                // again, and the two rows are the comparison.
-                Label { text: "Fits history"; font.bold: true; font.pointSize: root.fontPt }
-                // The header sits INSIDE the frame, above the list, and the rows carry no padding
-                // of their own. With the header outside it, the two were offset by the Frame's
-                // padding plus the ItemDelegate's — a couple of dozen pixels of style-dependent
-                // inset that no width here could have compensated for, since neither number is
-                // fixed by this file.
-                Frame {
-                    Layout.fillWidth: true
-                    // The LAST frame takes whatever slack the column has — which is where a
-                    // sphere's spare room goes, and where a binary's has run out. It can grow
-                    // but never shrink: the column is at least as tall as its contents, so
-                    // nothing above it is squeezed to make room for it.
-                    Layout.fillHeight: true
-                    Layout.preferredHeight: dp(118)
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: dp(2)
-                        RowLayout {
-                            Layout.fillWidth: true
-                            // The rows lose their right edge to the vertical scrollbar and the
-                            // header does not, so the last column drifted by exactly its width.
-                            // Reserved here rather than subtracted from a column, because the bar
-                            // only appears once the list overflows.
-                            Layout.rightMargin: fitScroll.visible ? fitScroll.width : 0
-                            spacing: dp(4)
-                            Label { Layout.preferredWidth: dp(96); text: "method"
-                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
-                            Label { Layout.preferredWidth: dp(34); text: "type"
-                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2 }
-                            Label { Layout.preferredWidth: dp(62); text: "χ²ᵣ"
-                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                    horizontalAlignment: Text.AlignRight }
-                            Label { Layout.fillWidth: true; text: "log(Z)"
-                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                    horizontalAlignment: Text.AlignRight }
-                            Label { Layout.preferredWidth: dp(76); text: "draws/evals"
-                                    color: "#7f8c98"; font.pointSize: root.fontPt - 2
-                                    horizontalAlignment: Text.AlignRight }
-                        }
-                        ListView {
-                            id: fitList
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            model: fitModel
-                            ScrollBar.vertical: ScrollBar { id: fitScroll }
-                        onCurrentIndexChanged: {
-                            if (currentIndex >= 0) {
-                                root.statusChanged(Julia.shell_select_fit(currentIndex + 1))
-                                root.refreshFits()
-                                postArea.update()
-                            }
-                        }
-                            delegate: ItemDelegate {
-                            width: fitList.width
-                            // Zero horizontal padding: the header above has none either, and the
-                            // default inset is what put the columns out of line with it.
-                            leftPadding: 0
-                            rightPadding: 0
-                            highlighted: ListView.isCurrentItem
-                            onClicked: fitList.currentIndex = index
-                            ToolTip.text: fdiag.length > 0 ? fname + " — " + fdiag : fname
-                            ToolTip.visible: hovered && fname.length > 0
-                            contentItem: RowLayout {
-                                spacing: dp(4)
-                                Label { Layout.preferredWidth: dp(96); text: fmethod
-                                        font.pointSize: root.fontPt - 1; elide: Text.ElideRight }
-                                Label { Layout.preferredWidth: dp(34); text: ftype
-                                        font.pointSize: root.fontPt - 1 }
-                                Label { Layout.preferredWidth: dp(62); text: fchi2r
-                                        font.pointSize: root.fontPt - 1
-                                        horizontalAlignment: Text.AlignRight }
-                                Label { Layout.fillWidth: true
-                                        // The error beside it, because a log(Z) difference smaller
-                                        // than the error is not a preference for either model.
-                                        text: flogz === "—" ? "—" : flogz + " ± " + flogzerr
-                                        font.pointSize: root.fontPt - 1
-                                        horizontalAlignment: Text.AlignRight }
-                                Label { Layout.preferredWidth: dp(76); text: fns
-                                        color: fns === "0" ? "#a0a6ac" : "#333"
-                                        font.pointSize: root.fontPt - 1
-                                        horizontalAlignment: Text.AlignRight }
-                            }
-                        }
                         }
                     }
                 }
@@ -1165,7 +1292,8 @@ Pane {
     // The fits table and the parameter selectors that read off it. Rebuilt whole rather than
     // patched: a fit is appended, never edited, so there is nothing to preserve.
     function refreshFits() {
-        var keepX = postX.currentIndex, keepY = postY.currentIndex
+        // The index restore is bracketed by the guard, not the whole function: a nested
+        // `refreshSelectedFit()` is harmless, an infinite `refreshFits()` is not.
         fitModel.clear()
         var rows = Julia.shell_fits()
         if (rows.length > 0) {
@@ -1179,9 +1307,19 @@ Pane {
             }
         }
         var cur = parseInt(Julia.shell_current_fit())
+        root.syncingFits = true
         if (cur >= 1 && cur <= fitModel.count) fitList.currentIndex = cur - 1
+        root.syncingFits = false
+        root.refreshSelectedFit()
+    }
 
+    // Everything that follows from WHICH fit is selected: its parameter table, the numbers in
+    // the "Optimized parameters" frame, and the posterior's two selectors. Separate from
+    // `refreshFits()` so selecting a row does not rebuild the list the row lives in.
+    function refreshSelectedFit() {
+        var keepX = postX.currentIndex, keepY = postY.currentIndex
         fitParamModel.clear()
+        resultModel.clear()
         var prows = Julia.shell_fit_params()
         if (prows.length > 0) {
             var pl = prows.split("\n")
@@ -1190,6 +1328,10 @@ Pane {
                 if (g.length < 5) continue
                 fitParamModel.append({ pname: g[0], pval: g[1], perr: g[2],
                                        pq16: g[3], pq84: g[4] })
+                // THE SAME NUMBERS drive the parameter frame, which used to show only the
+                // LAST fit and so disagreed with the history row the user had just clicked.
+                resultModel.append({ rname: g[0], rvalue: g[1],
+                                     rerr: g[2] === "—" ? "" : g[2] })
             }
         }
         var pair = Julia.shell_posterior_pair().split("\t")
@@ -1200,6 +1342,8 @@ Pane {
             postY.currentIndex = (yi >= 0 && yi < fitParamModel.count) ? yi
                                : (keepY >= 0 && keepY < fitParamModel.count ? keepY : 0)
         }
+        root.hasPosterior = Julia.shell_fit_has_posterior() === "1"
+        root.hasFit = fitModel.count > 0
     }
 
     function saveView() {
@@ -1211,6 +1355,25 @@ Pane {
     // tab: a tab showing four views would otherwise have to guess which was meant.
     function currentPlotName() {
         return ["sky", "mollweide", "star3d", "posterior"][viewBar.viewIndex]
+    }
+
+    // Relabel and re-range the budget box for whichever engine is selected, and put back the
+    // value that engine was last given — its default the first time.
+    function applyBudget() {
+        if (methodBox.currentIndex < 0 || methodModel.count === 0) return
+        var key = methodModel.get(methodBox.currentIndex).key
+        var b = Julia.shell_fit_budget(key).split("\t")
+        if (b.length < 6) return
+        root.budgetKey = key
+        budgetLabel.text = b[0]
+        root.budgetTip = b[5]
+        // RANGE BEFORE VALUE: a SpinBox silently clamps an assignment to its current bounds,
+        // so setting 8 rounds while `from` is still 50 would store 50.
+        evalBox.from = parseInt(b[2])
+        evalBox.to = parseInt(b[3])
+        evalBox.stepSize = parseInt(b[4])
+        evalBox.value = (key in root.budgetMemory) ? root.budgetMemory[key]
+                                                   : parseInt(b[1])
     }
 
     function applyPair() {

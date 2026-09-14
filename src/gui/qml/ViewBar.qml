@@ -123,13 +123,30 @@ Pane {
         Layout.fillWidth: true
         spacing: root.dp(6)
         Repeater {
-            model: root.showPosterior ? ["orthographic", "Mollweide", "Full 3D", "posterior"]
-                                      : ["orthographic", "Mollweide", "Full 3D"]
+            // THE FOURTH ENTRY IS NOT IMPLEMENTED, and it is not the parameter posterior.
+            //
+            // The three views before it are pictures of the STAR, so a fourth one should be
+            // too: a per-tessel uncertainty map built from the posterior draws, answering
+            // "where on the surface is the model unsure?". Nothing computes that yet, so the
+            // button names the intention and stays disabled.
+            //
+            // The PARAMETER posterior — the marginal and the pair scatter — is not a picture
+            // of the star and does not belong in this row. It renders into the same stack
+            // slot, reached from the "Posterior" button in the Model tab's parameters frame,
+            // beside the numbers it is about.
+            model: root.showPosterior
+                   ? ["orthographic", "Mollweide", "Full 3D", "Posterior image"]
+                   : ["orthographic", "Mollweide", "Full 3D"]
             Button {
                 text: modelData
                 checkable: true
                 checked: root.viewIndex === index
+                enabled: index !== 3
                 font.pointSize: root.fontPt
+                ToolTip.text: "not implemented yet — a per-tessel uncertainty map from the " +
+                              "posterior draws. For the parameter posterior, use Posterior " +
+                              "in the Optimized parameters frame."
+                ToolTip.visible: index === 3 && hovered
                 onClicked: { root.viewIndex = index; root.viewChanged() }
             }
         }
