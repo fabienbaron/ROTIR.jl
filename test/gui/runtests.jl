@@ -591,6 +591,30 @@ end
 
     @test occursin("unknown method", G.shell_fit("nosuchmethod", 10))
 
+    # NOTHING PROMOTES, ON ANY PATH. The precision box defaults to Float32; every runner
+    # builds its mesh at that, and every library entry point narrows the Float64 θ the panel
+    # hands it to the mesh's type once at entry, so no evaluation converts. The shape path used
+    # to be the exception — it forced Float64 and ignored the box, while the console printed
+    # the box's value anyway. `shape_chi2_fg!` was already generic in a single `T`; only its
+    # caller was not.
+    @test sh.precision[] === Float32
+    for engine in ("neldermead", "gradient")
+        G.shell_fit(engine, 20); drain!()
+        @test occursin("Float32", G.shell_console())
+        @test !occursin("Float64", G.shell_console())
+    end
+    # And a fit at Float64 says Float64 — the box is honoured rather than overridden either way.
+    # `"healpix"`, lower case: `shell_set_tessellation` compares `Symbol(kind) === :healpix`
+    # and QML sends the lower-case key, so "HEALPix" is REFUSED — which is easy to write by
+    # accident, since that is how the combo spells it on screen.
+    @test occursin("only :healpix", G.shell_set_tessellation("HEALPix", 3, "Float64"))
+    @test occursin("Float64", G.shell_set_tessellation("healpix", 3, "Float64"))
+    @test sh.precision[] === Float64
+    G.shell_fit("gradient", 20); drain!()
+    @test occursin("Float64", G.shell_console())
+    G.shell_set_tessellation("healpix", 3, "Float32")
+    @test sh.precision[] === Float32
+
     # STOP SAYS WHAT IT CAN DO. `start_job!` gives its worker a `stop::Ref`, and the only thing
     # that reads it is the objective closure `_run_fit` receives — so the NLopt searches notice
     # and VMLMB, NUTS, Pigeons and the shape path never see the Ref at all. It used to answer

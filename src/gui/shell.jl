@@ -3251,6 +3251,12 @@ function shell_fit(method, maxeval)
     nexp = sh.nside_exp[]
     prec = sh.precision[]
     sh.jobmethod = meth
+    # EVERY PATH RUNS AT `prec` NOW. Each runner builds its mesh at the precision the box
+    # asks for, and every library entry point narrows the Float64 θ the panel hands it to the
+    # mesh's type once — `fit_parametric` and `_fit_hmc` both do
+    # `collect(eltype(tessels.unit_xyz), θ0)` — so nothing promotes per evaluation. The shape
+    # path used to be an exception, forcing Float64 and printing `prec` anyway; it honours the
+    # box now, so this line is true for all six engines.
     console!(sh, "fit $(join(names, ", ")) by $(meth), $(it) $(unit), " *
                  "HEALPix level $(nexp) ($(12 * (2^nexp)^2) tessels, $(prec))"; kind = :cmd)
     return start_job!(sh, :fit, function (stop)
@@ -3565,26 +3571,43 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
     layout = SHAPE_THETA[snap.surface_type]
     n = maximum(values(layout))
     inv = Dict(v => k for (k, v) in layout)
-    θ  = Float64[Float64(get(snap.params, inv[j], 0.0)) for j in 1:n]
-    lo = fill(-Inf, n); hi = fill(Inf, n)
+    # THE PANEL'S ELEMENT TYPE, not a forced Float64. `shape_chi2_fg!` is generic in a single
+    # `T` shared by θ, both gradients, the map and the tessellation — so honouring `prec` is
+    # just a matter of building all five at the same type, which is what this does.
+    #
+    # MEASURED on a sphere's diameter, one epoch of bet Cas at HEALPix 3:
+    #
+    #                 kernel      per call    vmlmb      result
+    #     Float32     5.14 ms     1457 KiB    21 calls   1.027463
+    #     Float64     6.37 ms     2854 KiB    12 calls   1.025099
+    #
+    # Float32 is a fifth faster per evaluation and halves the working set, and it needs more
+    # iterations to satisfy the same tolerances on a noisier gradient — so the wall clock comes
+    # out a wash and the answer lands 0.23 % away. Set the precision box to Float64 when the
+    # diameter itself is the result; Float32 is the right default for everything else, and it
+    # is what the rest of the model is evaluated in.
+    T  = prec
+    θ  = T[T(get(snap.params, inv[j], 0.0)) for j in 1:n]
+    lo = fill(T(-Inf), n); hi = fill(T(Inf), n)
     # Only the named parameters move. VMLMB has no frozen-variable facility, so the others are
     # pinned by collapsing their bounds onto their current value — which is exact, and cheaper
     # than the scatter-matrix reduction the Zygote path uses.
     for j in 1:n; lo[j] = θ[j]; hi[j] = θ[j]; end
     for (k, nm) in enumerate(names)
         j = layout[nm]
-        lo[j] = lb[k]; hi[j] = ub[k]
-        θ[j]  = clamp(θ[j], lb[k], ub[k])
+        lo[j] = T(lb[k]); hi[j] = T(ub[k])
+        θ[j]  = clamp(θ[j], T(lb[k]), T(ub[k]))
     end
-    # Float64 throughout: `shape_chi2_fg!` is written with ONE element type `T` shared by the
-    # gradients, the map, θ and the tessellation, so the default Float32 mesh and a Float64 θ
-    # do not meet a method. The LEVEL still follows the panel — only the element type is
-    # forced here, and `prec` is deliberately ignored for that reason.
-    tess = tessellation_healpix(nexp; T = Float64)
-    base = star_params(snap)
-    star = create_star(tess, base, tepochs[1]; secondary = snap.secondary)
-    xmap = Float64.(parametric_temperature_map(base, star; secondary = snap.secondary))
-    gθ = zeros(Float64, n); gx = zeros(Float64, length(xmap))
+    tess = tessellation_healpix(nexp; T = T)
+    # The base parameters come off the panel as Float64 (`ModelEntry.params` is a
+    # `Dict{Symbol,Float64}`), and `merge`ing θ into them would leave a NamedTuple with mixed
+    # fields. `convert_params` narrows the floats and leaves `surface_type` and `ldtype` as the
+    # `Int`s the geometry branches on.
+    base = ROTIR.convert_params(T, star_params(snap))
+    star = create_star(tess, base, T(tepochs[1]); secondary = snap.secondary)
+    xmap = T.(parametric_temperature_map(base, star; secondary = snap.secondary))
+    gθ = zeros(T, n); gx = zeros(T, length(xmap))
+    teps = collect(T, tepochs)
     npts = sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data)
     calls = Ref(0)
     function fg!(x, g)
@@ -3595,7 +3618,7 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
         # ellipsoid and 13 % wrong in `radius_y` (measured against finite differences of the
         # objective itself), and that mismatch is what stalls the optimiser. A no-op for a
         # sphere, whose uniform map depends on nothing in θ.
-        c = shape_chi2_fg!(gθ, gx, xmap, collect(Float64, x), data, tess, base, tepochs;
+        c = shape_chi2_fg!(gθ, gx, xmap, collect(T, x), data, tess, base, teps;
                            parametric_map = true)
         g .= gθ ./ npts
         calls[] % 10 == 1 && Printf.@printf("  it %3d   χ²ᵣ = %.6f\n", calls[], c / npts)
@@ -3607,9 +3630,12 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
     # converted with the budget table; this path was missed.
     θ̂ = OptimPackNextGen.vmlmb(fg!, θ; lower = lo, upper = hi, maxiter = max(10, maxiter),
                                blmvm = false, verb = false)
-    best = [θ̂[layout[nm]] for nm in names]
-    c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, tepochs; parametric_map = true)
-    return best, c, Dict{Symbol,Float64}(), nothing, 0
+    # COMPUTED at `T`, REPORTED at Float64: the fit history, the parameter table and
+    # `ModelEntry.params` are all Float64, and widening three numbers at the end costs nothing.
+    # The same split `_fit_hmc` makes with its quantiles.
+    best = Float64[θ̂[layout[nm]] for nm in names]
+    c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, teps; parametric_map = true)
+    return best, Float64(c), Dict{Symbol,Float64}(), nothing, 0
 end
 
 # One place that knows how each backend is driven, so `shell_fit` stays about the model.

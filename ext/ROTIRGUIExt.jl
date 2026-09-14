@@ -222,8 +222,7 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
             # `shape_chi2_fg!` specialises on the TYPE of `star_params_base`, which is a
             # NamedTuple whose field set comes from the surface type — so a sphere, an
             # ellipsoid and a rapid rotator are three different specialisations of the same
-            # method, and each costs its own first-call compile. MEASURED, all with the mesh at
-            # Float64 (which is what `_run_shape_fit` forces regardless of the precision box):
+            # method, and each costs its own first-call compile. MEASURED at Float64:
             #
             #     sphere         4.5 s        ellipsoid      5.2 s
             #     steady state   6.3 ms per evaluation, and vmlmb needs about a dozen
@@ -235,14 +234,19 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
             #
             # The keyword is NOT part of it — `parametric_map = true` measured at 0.010 s
             # against the positional call's 4.481 s, so kwargs reuse the specialisation.
-            # Float32 is not part of it either: `_run_shape_fit` ignores `prec` and builds the
-            # mesh at Float64, because `shape_chi2_fg!` shares one element type across θ, the
-            # gradients, the map and the tessellation.
+            #
             # THROUGH `_run_shape_fit` ITSELF, not through `shape_chi2_fg!` directly. The
             # objective is a closure defined inside that function, and `vmlmb` specialises on
             # the closure's type — so calling the kernel by hand leaves vmlmb to compile at
             # first use anyway (measured at 0.92 s of the remaining cost). Going through the
             # runner covers the kernel, the closure and the optimiser in one go.
+            #
+            # BOTH ELEMENT TYPES, because `shape_chi2_fg!` specialises on the element type as
+            # well as on the surface type — so the four combinations are four compiles of about
+            # 4.5 s each. MEASURED with only Float32 covered: switching the precision box to
+            # Float64 and fitting cost 5.9 s before the optimiser started, and 0.14 s on the
+            # next fit. That is the same latency this block exists to remove, so it is paid
+            # once at install (about 9 s of build) instead of once per session per type.
             #
             # TYPES 0 AND 1 ONLY, which is exactly what the shape path serves:
             # `gradient_fit_kind` sends a rapid rotator to `:parametric` when Zygote is there
@@ -250,12 +254,13 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
             # `shape_map_and_derivs` refuses it outright, since that map is differentiated
             # through `vonzeipel_map` instead.
             let _dd = _s.datasets[1]
-                for (_code, _free) in ((0, [:radius]), (1, [:radius_x, :radius_y]))
+                for (_code, _free) in ((0, [:radius]), (1, [:radius_x, :radius_y])),
+                    _T in (Float32, Float64)
                     _sm = add_model!(Session(), _code)
                     _run_shape_fit(_sm, _dd.data, _dd.tepochs, _free,
                                    Float64[_sm.params[n] for n in _free],
                                    Float64[0.5 for _ in _free], Float64[2.0 for _ in _free],
-                                   2, Float64, 10)
+                                   2, _T, 10)
                 end
             end
             SHELL[] = nothing

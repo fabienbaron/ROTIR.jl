@@ -153,6 +153,13 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
               "the sampler is struggling with; raise target_accept or narrow the bounds."
 
     q(pr) = [Statistics.quantile(view(Θ, :, j), pr) for j in 1:length(idx)]
+    # ELEMENT TYPES, checked because a Float32 mesh silently promoted would double the cost of
+    # every leapfrog step. MEASURED on a Float32 tessellation: `samples` and `std` come back
+    # Float32, so the chain really did integrate in the mesh's own precision — `θfull`, the
+    # metric and the box transform are all built from `T` above for exactly that reason. Only
+    # `median` is Float64, because `Statistics.quantile` interpolates in Float64 whatever it is
+    # given. That is three numbers per parameter at the very end, not the integration, and a
+    # reported quantile is the one place the extra digits are worth having.
     return (median = q(0.5), q16 = q(0.16), q84 = q(0.84),
             mean = vec(Statistics.mean(Θ, dims = 1)),
             std = vec(Statistics.std(Θ, dims = 1)),
