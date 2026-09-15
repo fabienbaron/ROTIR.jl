@@ -59,6 +59,16 @@ Pane {
             if (f.length < 3) continue
             backendModel.append({ bkey: f[0], blabel: f[1], bdoc: f[2] })
         }
+        root.syncBackend()
+    }
+
+    // WHICH ENTRY IS SHOWING, read back from Julia rather than left where the click put it.
+    // Two reasons, both of which were visible bugs: a selection can FAIL — `:turbo` needs
+    // LoopVectorization, and a bundle cannot ship it — and the combo used to go on showing
+    // the kernel that had not been selected; and the other tab has the same combo over the
+    // same process-wide setting, so a change here has to appear there. Called from
+    // `refresh()`, which every tab switch runs.
+    function syncBackend() {
         var cur = Julia.shell_polyft_backend()
         for (var j = 0; j < backendModel.count; ++j)
             if (backendModel.get(j).bkey === cur) backendBox.currentIndex = j
@@ -80,6 +90,7 @@ Pane {
 
     function refresh() {
         root.fillBackends()
+        root.syncBackend()
         var ctx = Julia.shell_imaging_context().split("\t")
         if (ctx.length >= 5) {
             root.ctxDataset = ctx[0]; root.ctxEpochs = parseInt(ctx[1])
@@ -259,8 +270,9 @@ Pane {
 
             // Which forward kernel evaluates the polygon Fourier transform. A COMPUTE choice,
             // not a display one, so it sits with the mesh: those two together are what a χ²
-            // costs. Both backends give the exact transform and are asserted against each
-            // other in the suite; the vectorised one is 17-19x faster and is the default.
+            // costs. All three are asserted against each other in the suite, and "auto" — the
+            // default — lets each code path pick; see the same combo in ModelTab.qml for why
+            // that is the honest setting and why this is disabled while a job runs.
             RowLayout {
                 Layout.fillWidth: true
                 spacing: dp(6)
@@ -268,14 +280,19 @@ Pane {
                 ComboBox {
                     id: backendBox
                     Layout.fillWidth: true
+                    enabled: !root.jobRunning
+                    opacity: enabled ? 1.0 : 0.4
                     model: backendModel
                     textRole: "blabel"
                     font.pointSize: root.fontPt - 1
                     ToolTip.text: currentIndex >= 0 && backendModel.count > 0
                                   ? backendModel.get(currentIndex).bdoc : ""
                     ToolTip.visible: hovered
-                    onActivated: root.statusChanged(Julia.shell_set_polyft_backend(
-                        backendModel.get(currentIndex).bkey))
+                    onActivated: {
+                        root.statusChanged(Julia.shell_set_polyft_backend(
+                            backendModel.get(currentIndex).bkey))
+                        root.syncBackend()
+                    }
                 }
             }
 

@@ -114,7 +114,7 @@ Returns:
 - `dnz_dθ`: (npix, nparams) derivative of normalized normals_z w.r.t. θ
 """
 function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
-                                        nparams::Int=0) where T
+                                        nparams::Int=0, derivs::Bool=true) where T
     npix = tessels.npix
     deg2rad = T(π/180)
     stype = star_params.surface_type
@@ -190,7 +190,28 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
     nn3 = nn.^3
 
     # ─── Vertex derivatives ──────────────────────────────────────────────────
+    #
+    # SKIPPED ENTIRELY when `derivs = false`. Three of this function's callers are the FORWARD
+    # halves of the geometry rrules — `project_geometry`, `project_sphere_geometry` and
+    # `project_ellipsoid_geometry` — and each of them destructures the derivatives and throws
+    # them away:
+    #
+    #     pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 4)
+    #
+    # The two `dproj_*` arrays are `npix × 4 × nparams` and are most of what this function
+    # allocates: MEASURED at 1.6 MiB per call on a HEALPix-3 rapid rotator, which is the
+    # largest single allocation in a NUTS gradient evaluation and the reason Float32 buys only
+    # 1.08x there against the 1.9x its byte count would suggest.
+    #
+    # ZERO-LENGTH ARRAYS, not `nothing`: the return type must not change. Every caller
+    # destructures six values, and a `Union{Nothing,Array}` in three of the slots would make
+    # the tuple type-unstable for the callers that do use them — trading an allocation for a
+    # dynamic dispatch on the path that needs the derivatives most.
     u = tessels.unit_xyz[:, 1:4, :]  # (npix, 4, 3)
+    if !derivs
+        z3 = Array{T,3}(undef, 0, 0, 0); z2 = Array{T,2}(undef, 0, 0)
+        return proj_west, proj_north, z3, z3, normals_z, z2
+    end
     dproj_west_dθ = zeros(T, npix, 4, nparams)
     dproj_north_dθ = zeros(T, npix, 4, nparams)
     dnz_dθ = zeros(T, npix, nparams)

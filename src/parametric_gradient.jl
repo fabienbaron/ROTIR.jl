@@ -237,7 +237,8 @@ function of the geometry parameters (Zygote primitive).
 function project_geometry(rpole, fev, inc, PA, tessels, t, base_params)
     sp = merge(base_params, (rpole = rpole, frac_escapevel = fev,
                              inclination = inc, position_angle = PA))
-    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 4)
+    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 4,
+                                                        derivs = false)
     return pw, pn, nz
 end
 
@@ -492,7 +493,8 @@ numerical noise the sampler would chase.
 """
 function project_sphere_geometry(radius, tessels, t, base_params)
     sp = merge(base_params, (radius = radius,))
-    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 3)
+    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 3,
+                                                        derivs = false)
     return pw, pn, nz
 end
 
@@ -669,7 +671,8 @@ Projected vertices and face normals of a triaxial ellipsoid, differentiable in a
 function project_ellipsoid_geometry(rx, ry, rz, inc, PA, tessels, t, base_params)
     sp = merge(base_params, (radius_x = rx, radius_y = ry, radius_z = rz,
                              inclination = inc, position_angle = PA))
-    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 5)
+    pw, pn, _, _, nz, _ = projected_vertices_and_derivs(tessels, sp, t; nparams = 5,
+                                                        derivs = false)
     return pw, pn, nz
 end
 

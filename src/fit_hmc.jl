@@ -60,9 +60,11 @@ Returns the same fields the nested samplers do — `median`, `q16`, `q84`, `mean
 sampler does not compute an evidence, and reporting a number there would be worse than
 reporting that it has none.
 
-`n_samples` and `n_adapt` are the two knobs. The defaults are a working scale, not a
-production one: 300 adaptation steps is enough for the step size and a diagonal mass matrix to
-settle on a smooth posterior, and 400 draws is enough to see the shape.
+`n_samples` and `n_adapt` are the two knobs, and they ADD: the run does `n_adapt` warm-up
+iterations, throws them away, and returns `n_samples` draws — 700 iterations at the defaults,
+not 400. The defaults are a working scale, not a production one: 300 adaptation steps is
+enough for the step size and a diagonal mass matrix to settle on a smooth posterior, and 400
+draws is enough to see the shape.
 """
 function _fit_hmc(data_epochs, tessels, tepochs, base_params;
                   θ0, free = nothing, lb = nothing, ub = nothing,
@@ -142,17 +144,32 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
     adaptor = AdvancedHMC.StanHMCAdaptor(AdvancedHMC.MassMatrixAdaptor(metric),
                                          AdvancedHMC.StepSizeAdaptor(T(target_accept), integrator))
 
-    zs, stats = AdvancedHMC.sample(ham, kernel, z0, n_samples, adaptor, n_adapt;
+    # `n_samples + n_adapt`, NOT `n_samples`. AdvancedHMC's fourth argument is the TOTAL number
+    # of iterations, and `drop_warmup = true` then discards the first `n_adapt` of them — so
+    # passing the number of draws we want to KEEP returned `n_samples - n_adapt`. MEASURED
+    # before the fix: asking for 40 draws with 30 adapting gave 10, and the GUI's default 400
+    # with 300 adapting gave 100. The docstring has always promised `n_samples` draws and every
+    # caller reads it that way, so the call is what was wrong.
+    zs, stats = AdvancedHMC.sample(ham, kernel, z0, n_samples + n_adapt, adaptor, n_adapt;
                                    drop_warmup = true, progress = false, verbose = verb)
     Θ = reduce(hcat, (to_θ(z) for z in zs))'          # n_samples x nfree
     ndiv = count(s -> hasproperty(s, :numerical_error) && s.numerical_error, stats)
     verb && Printf.@printf("NUTS: %d draws after %d adaptation, %d divergences\n",
                            size(Θ, 1), n_adapt, ndiv)
-    ndiv > 0.05 * n_samples &&
-        @warn "NUTS: $(ndiv) divergences in $(n_samples) draws — the posterior has geometry " *
+    ndiv > 0.05 * (n_samples + n_adapt) &&
+        @warn "NUTS: $(ndiv) divergences in $(n_samples + n_adapt) iterations — the posterior has geometry " *
               "the sampler is struggling with; raise target_accept or narrow the bounds."
 
     q(pr) = [Statistics.quantile(view(Θ, :, j), pr) for j in 1:length(idx)]
+    # THE χ² AT THE MEDIAN, so a sampler's row can be compared with an optimiser's. It used to
+    # be left for the caller to invent and every one of them reported `NaN`, which made the fit
+    # history — the table whose whole purpose is comparing models — unable to compare the two
+    # kinds of fit at all. One likelihood evaluation, against a run of hundreds.
+    #
+    # `logπ` here is built with `logprior = nothing`, so it is exactly `-χ²/2` and this is the
+    # same number `parametric_chi2` would give at those parameters. The MEDIAN, not the best
+    # draw: it is the point estimate the rest of the return reports, and quoting a χ² from a
+    # different point than the parameters beside it would be worse than quoting none.
     # ELEMENT TYPES, checked because a Float32 mesh silently promoted would double the cost of
     # every leapfrog step. MEASURED on a Float32 tessellation: `samples` and `std` come back
     # Float32, so the chain really did integrate in the mesh's own precision — `θfull`, the
@@ -160,7 +177,8 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
     # `median` is Float64, because `Statistics.quantile` interpolates in Float64 whatever it is
     # given. That is three numbers per parameter at the very end, not the integration, and a
     # reported quantile is the one place the extra digits are worth having.
-    return (median = q(0.5), q16 = q(0.16), q84 = q(0.84),
+    θmed = θ_frozen .+ S * collect(T, q(0.5))
+    return (median = q(0.5), q16 = q(0.16), q84 = q(0.84), chi2 = -2 * logπ(θmed),
             mean = vec(Statistics.mean(Θ, dims = 1)),
             std = vec(Statistics.std(Θ, dims = 1)),
             samples = Matrix(Θ), logz = NaN, logzerr = NaN,

@@ -58,6 +58,16 @@ Pane {
             if (f.length < 3) continue
             backendModel.append({ bkey: f[0], blabel: f[1], bdoc: f[2] })
         }
+        root.syncBackend()
+    }
+
+    // WHICH ENTRY IS SHOWING, read back from Julia rather than left where the click put it.
+    // Two reasons, both of which were visible bugs: a selection can FAIL — `:turbo` needs
+    // LoopVectorization, and a bundle cannot ship it — and the combo used to go on showing
+    // the kernel that had not been selected; and the other tab has the same combo over the
+    // same process-wide setting, so a change here has to appear there. Called from
+    // `refresh()`, which every tab switch runs.
+    function syncBackend() {
         var cur = Julia.shell_polyft_backend()
         for (var j = 0; j < backendModel.count; ++j)
             if (backendModel.get(j).bkey === cur) backendBox.currentIndex = j
@@ -176,6 +186,7 @@ Pane {
 
     function refresh() {
         root.fillBackends()
+        root.syncBackend()
         fillChoices()
         root.refreshFits()
         // The model list. A session can hold several — a binary is two components — and
@@ -672,8 +683,21 @@ Pane {
 
                 // Which forward kernel evaluates the polygon Fourier transform. A COMPUTE choice,
                 // not a display one, so it sits with the mesh: those two together are what a χ²
-                // costs. Both backends give the exact transform and are asserted against each
-                // other in the suite; the vectorised one is 17-19x faster and is the default.
+                // costs. All three are asserted against each other in the suite.
+                //
+                // DEFAULT IS "auto", and it is what anyone should leave it on: the right kernel
+                // is a property of the code path, not of the user's taste, and no panel can
+                // teach that distinction in a tooltip (see `KERNEL_TURBO_METHODS`). The three
+                // explicit entries stay because forcing the exact reference is how a result
+                // that looks wrong gets checked — the quadrature kernel is accurate to 6.8e-7
+                // at HEALPix 3 rather than exact, so it CAN be the thing that is wrong.
+                //
+                // DISABLED WHILE A JOB RUNS. It used to stay live, and since the kernel was a
+                // bare global Ref read per evaluation, a click mid-fit changed the objective
+                // function underneath a running optimiser — a line search taking its value and
+                // its gradient from different kernels, or a NUTS trajectory whose leapfrog
+                // steps disagree. The fit snapshots its kernel now, so this is belt and braces,
+                // but a control that appears to do something and does not is its own bug.
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: dp(6)
@@ -681,14 +705,19 @@ Pane {
                     ComboBox {
                         id: backendBox
                         Layout.fillWidth: true
+                        enabled: !root.jobRunning
+                        opacity: enabled ? 1.0 : 0.4
                         model: backendModel
                         textRole: "blabel"
                         font.pointSize: root.fontPt - 1
                         ToolTip.text: currentIndex >= 0 && backendModel.count > 0
                                       ? backendModel.get(currentIndex).bdoc : ""
                         ToolTip.visible: hovered
-                        onActivated: root.statusChanged(Julia.shell_set_polyft_backend(
-                            backendModel.get(currentIndex).bkey))
+                        onActivated: {
+                            root.statusChanged(Julia.shell_set_polyft_backend(
+                                backendModel.get(currentIndex).bkey))
+                            root.syncBackend()
+                        }
                     }
                 }
 

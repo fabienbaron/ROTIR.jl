@@ -1224,6 +1224,27 @@ end
     # row where those differ used to read "gradient" instead of "VMLMB".
     @test f1[2] == G.fit_method_short(:neldermead) && f1[6] == "—"   # no evidence
     @test f1[2] != "neldermead"                                      # i.e. it is the label
+    # A REAL χ² IN THE COLUMN, for a sampler as much as for an optimiser. Every sampler runner
+    # used to return `NaN` here, so the one table built for comparing a sphere against a rapid
+    # rotator could not compare a NUTS row with a Nelder-Mead one at all. `_fit_hmc` and
+    # `_fit_pigeons` now evaluate their own log-posterior at the median and return it; the
+    # value is checked below against a route that shares nothing with the sampler.
+    @test isfinite(parse(Float64, f1[5]))
+    if "hmc" in Set(cols(r)[1] for r in rows(G.shell_fit_methods()))
+        G.shell_fit("hmc", 50); drain!()
+        fh = G.current_fit(sh.session)
+        @test isfinite(fh.chi2) && fh.chi2 > 0
+        @test isfinite(parse(Float64, cols(rows(G.shell_fits())[end])[5]))
+        # THE SAME NUMBER by an independent route: rebuild the star at the reported median and
+        # ask `parametric_chi2`. They differ only by the soft-versus-hard visibility cut the
+        # differentiable path uses (see test_parametric_gradient.jl), which is parts per 1e5.
+        mm = G.current_model(sh.session)
+        for (k, n) in enumerate(fh.names); mm.params[n] = fh.best[k]; end
+        indep = parametric_chi2(G.star_params(mm), tessellation_healpix(sh.nside_exp[];
+                                                                       T = sh.precision[]),
+                                sh.session.datasets[1].data, sh.session.datasets[1].tepochs)
+        @test abs(fh.chi2 - indep) / indep < 1e-3
+    end
     # The draws/evals column holds whichever number the METHOD produced: a sampler reports
     # draws, a local optimiser reports how many times it evaluated the criterion. It used to
     # read "0" here, which said nothing — an optimiser has no draws, and the count it does
@@ -1373,6 +1394,15 @@ end
     before = [m.params[n] for n in (:radius_x, :radius_y, :radius_z)]
     G.shell_fit("gradient", 400); drain!()
     @test length(rows(G.shell_fits())) == 1
+    # THE KERNEL THE FIT RAN UNDER. The shape route goes through `_cvis_forward!` and the two
+    # adjoints, none of which has a `:nufft` branch, so under `auto` the fit scopes `:turbo`
+    # for its duration — which means loading LoopVectorization on the GUI thread first. If
+    # that had not happened this fit would have run the plain-Julia reference, 16x slower.
+    @test ROTIR.turbo_available()
+    # SCOPED, not assigned: the panel is still on auto and the process default is untouched,
+    # so the χ² this tab computes beside the fit is the one the panel says it is.
+    @test sh.kernel_auto[] && ROTIR.POLYFT_BACKEND[] === :nufft
+    @test ROTIR.polyft_backend() === :nufft
     # A FIT NO LONGER TOUCHES THE MODEL — the numbers are on the fit until Adopt is pressed —
     # so the radii are read off the recorded fit, and the model is checked to have stayed put.
     @test [m.params[n] for n in (:radius_x, :radius_y, :radius_z)] == before
@@ -1381,7 +1411,19 @@ end
     # The RADII move, which is what the map derivative unlocked: with the map held fixed the
     # gradient pointed the wrong way in `radius_y` by 13 %.
     @test after != before
-    @test all(0.7 .<= after .<= 2.0)
+    # THE BOX AS THE FIT SEES IT. The mesh is Float32 here (the panel's default), so the
+    # bounds the optimiser projects onto are `Float32(0.7) = 0.69999998807907104` and
+    # `Float32(2.0)`; comparing a result that landed ON the lower bound against the Float64
+    # literal `0.7` fails on the rounding alone.
+    #
+    # And landing on a bound is a legitimate outcome here, not a symptom. MEASURED: this
+    # five-parameter shape objective is chaotic in its endpoint — under Float64, where the
+    # `:scalar` and `:turbo` kernels agree on value and gradient to 6e-15, the two still
+    # converge to χ² 11857 and 17981 with `radius_z` at 1.83 and 1.42. So this testset asserts
+    # that the radii MOVE and stay in the box, which is what the map derivative unlocked; it
+    # cannot assert where they land, and a version of it that did would be testing VMLMB's
+    # line search against the last bit of the kernel.
+    @test all(Float32(0.7) .<= after .<= Float32(2.0))
     # And Adopt is what puts them in the form.
     @test occursin("adopted", G.shell_adopt_fit())
     @test [m.params[n] for n in (:radius_x, :radius_y, :radius_z)] == after
@@ -1390,14 +1432,38 @@ end
 @testset "the polyft kernel is selectable" begin
     sh = fresh_shell()
     rows_ = rows(G.shell_polyft_backends())
-    @test length(rows_) == 3
-    # Fastest first: the panel offers them in the order the measurements put them.
-    @test [cols(r)[1] for r in rows_] == ["nufft", "turbo", "scalar"]
-    @test G.shell_polyft_backend() == "nufft"
+    @test length(rows_) == 4
+    # `auto` first and it is the DEFAULT, then the three in the order the measurements put
+    # them. The right kernel is a property of the code path — `:nufft` only has a branch in
+    # `fused_cvis`, so the gradient route cannot reach it — and no user can be expected to
+    # know that, so the panel picks by default and the three stay as cross-checks.
+    @test [cols(r)[1] for r in rows_] == ["auto", "nufft", "turbo", "scalar"]
+    @test G.shell_polyft_backend() == "auto"
+    @test sh.kernel_auto[]
+    # `auto` is not itself a kernel: the library Ref still names a real one, the one the
+    # forward paths want.
+    @test ROTIR.POLYFT_BACKEND[] === :nufft
+
+    # WHICH ENGINES GET WHICH KERNEL under auto. This is the whole point of the setting.
+    for m in (:gradient, :hmc, :pigeons)
+        @test G._fit_kernel(sh, m) === :turbo
+    end
+    for m in (:neldermead, :bobyqa, :nautilus)
+        # These evaluate `parametric_chi2` → `fused_cvis`, which HAS the `:nufft` branch, so
+        # they are already on the fastest kernel and are left alone.
+        @test G._fit_kernel(sh, m) === nothing
+    end
+
     @test occursin("scalar", G.shell_set_polyft_backend("scalar"))
     @test G.shell_polyft_backend() == "scalar"
+    @test !sh.kernel_auto[]
+    # A FORCED kernel wins everywhere. Someone who selected the exact reference is checking a
+    # result that looked wrong; running something else under their fit would make that check
+    # worthless.
+    @test all(G._fit_kernel(sh, m) === nothing
+              for m in (:gradient, :hmc, :pigeons, :neldermead))
     @test G.shell_set_polyft_backend("rasterize") ==
-          "backend must be nufft, turbo or scalar"
+          "backend must be auto, nufft, turbo or scalar"
     # ALL THREE agree on a real χ². That is the only thing that makes offering a choice safe:
     # a backend that is fast and slightly wrong would bias every fit run through it.
     G.shell_open(LAM[1], "0"); G.shell_add_model(0)
@@ -1424,7 +1490,31 @@ end
     # loads it on demand. By here that has happened, so the extension must be live: if the
     # lazy load had failed, `shell_set_polyft_backend` would have said so above.
     @test ROTIR.turbo_available()
-    G.shell_set_polyft_backend("nufft")
+
+    # And back to auto, which restores the process default rather than leaving the last
+    # forced choice in place for whatever runs next.
+    @test occursin("auto", G.shell_set_polyft_backend("auto"))
+    @test sh.kernel_auto[]
+    @test ROTIR.POLYFT_BACKEND[] === :nufft
+    @test G.shell_polyft_backend() == "auto"
+    @test G._fit_kernel(sh, :hmc) === :turbo
+
+    # AND WHEN TURBO CANNOT BE HAD. A BUNDLE ships without LoopVectorization by necessity —
+    # `create_app` builds a multiversioned sysimage while VectorizationBase specialises to the
+    # build machine, and the link aborts (app/Project.toml records the LLVM error) — so every
+    # gradient fit and every sampler run there would otherwise retry the load and print the
+    # same sentence again. The flag makes it once per session, and `_fit_kernel` then answers
+    # `nothing` so a fit does not even ask.
+    try
+        G.TURBO_LOAD_FAILED[] = true
+        @test all(G._fit_kernel(sh, m) === nothing for m in (:gradient, :hmc, :pigeons))
+        # `_ensure_turbo!` itself cannot be exercised here — by this point LoopVectorization IS
+        # loaded, and its first line answers `""` for that, correctly. The flag is what a
+        # bundle reaches, and `_fit_kernel` is where it has to be honoured.
+    finally
+        G.TURBO_LOAD_FAILED[] = false
+    end
+    @test G._fit_kernel(sh, :gradient) === :turbo
 end
 
 @testset "the orbit tab" begin

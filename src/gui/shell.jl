@@ -106,6 +106,13 @@ Base.@kwdef mutable struct ShellState
     tessel::Base.RefValue{Symbol} = Ref(:healpix)   # :longlat is not wired yet
     nside_exp::Base.RefValue{Int} = Ref(3)   # log2(nside); 3 for a result, 2 to try something
     precision::Base.RefValue{DataType} = Ref{DataType}(Float32)
+    # WHO PICKS THE FORWARD KERNEL. `true` — the default — means the CODE PATH picks: `:nufft`
+    # for the interactive χ² and the derivative-free engines, which reach its branch through
+    # `fused_cvis`, and `:turbo` for the gradient path and the samplers, which go through
+    # `interferometric_chi2` / `shape_chi2_fg!` and have no `:nufft` branch to reach. `false`
+    # means the user forced one from the panel and every path honours it, which is what makes
+    # "run the reference kernel and see if the answer moves" possible.
+    kernel_auto::Base.RefValue{Bool} = Ref(true)
     # The Orbit perspective. One orbit at a time, like the model — a session fitting two
     # unrelated binaries at once is not a thing anyone does, and a selector for it would be
     # another way to have the wrong one selected.
@@ -1548,6 +1555,13 @@ shrink from nx = 128 to 512 — a pixel-integrated image is not a polygon, and a
 the same image reproduces the same 4.97e-3, so it is the model rather than the transform.
 """
 shell_polyft_backends() = join((
+    "auto\tAutomatic (per fit)\t" *
+    "let each code path pick: the quadrature kernel for this panel's χ² and for Nelder-Mead, " *
+    "BOBYQA and Nautilus, which can reach it; the exact vectorised kernel for VMLMB, NUTS " *
+    "and Pigeons, which cannot — their gradient goes through kernels that have no quadrature " *
+    "branch, and it is 16x on the three of them. The first such fit LOADS LoopVectorization, " *
+    "which pauses the window for a few seconds, once per session" *
+    (ROTIR.turbo_available() ? " (already loaded)" : ""),
     "nufft\tQuadrature + NUFFT (fastest)\t" *
     "Gauss-Legendre over each tessel folded into one type-3 NUFFT; 2.6 ms at HEALPix 3 and " *
     "4.1 ms at 5, where the exact kernels take 7 ms and 86 ms — the cost barely moves with " *
@@ -1561,49 +1575,116 @@ shell_polyft_backends() = join((
     "the same arithmetic in plain Julia; the definition the other two are tested against, " *
     "and what to fall back on if a fit looks wrong"), "\n")
 
-"Which forward kernel is selected."
-shell_polyft_backend() = String(ROTIR.POLYFT_BACKEND[])
+"""
+    shell_polyft_backend() -> String
+
+Which forward kernel the panel is SET to — `"auto"`, or the one the user forced.
+
+Not the same question as `ROTIR.polyft_backend()`, which answers what is running right now: a
+fit scopes its own kernel for its duration, so during one of them the two differ by design.
+"""
+shell_polyft_backend() =
+    _sh().kernel_auto[] ? "auto" : String(ROTIR.POLYFT_BACKEND[])
+
+"""
+    TURBO_LOAD_FAILED
+
+Whether loading LoopVectorization has already been tried in this session and failed. A
+PROCESS-level flag rather than a `ShellState` field: it records a property of the installation,
+which a new shell does not change.
+"""
+const TURBO_LOAD_FAILED = Ref(false)
+
+"""
+    _ensure_turbo!(sh) -> String
+
+Load LoopVectorization if it is not loaded, so the `:turbo` kernel has methods. Returns `""`
+on success and a sentence on failure, which the caller reports and falls back from.
+
+`:turbo` needs LoopVectorization, which ROTIR does NOT load: measured, loading it invalidates
+OITOOLS' precompiled canvas code and takes one `build_canvas` from 341 ms to 2685 ms — 1.8 s
+onto every GUI start, whether or not this session ever fits anything. So it is loaded HERE,
+when something asks for it, and never otherwise.
+
+SYNCHRONOUSLY, ON THE GUI THREAD, which is why this is a separate function and why every
+caller of it sits BEFORE `start_job!` rather than inside a worker closure: package loading
+takes locks that the render thread also wants, and a `using` on a worker can deadlock against
+it. A few seconds of frozen window is the honest cost, and the panel says so before the click.
+It is only ever paid once — the next caller finds the extension loaded.
+"""
+function _ensure_turbo!(sh::ShellState)
+    ROTIR.turbo_available() && return ""
+    # ONCE PER SESSION, INCLUDING THE FAILURE. A BUNDLE cannot load it at all: `app/build.jl`
+    # deliberately leaves LoopVectorization out of `app/Project.toml` because `create_app`
+    # builds a multiversioned sysimage while VectorizationBase specialises to the build
+    # machine, and the link aborts on an AVX512 reciprocal with no generic encoding — the
+    # reason is recorded in app/Project.toml. Without this flag every gradient fit and every
+    # sampler run in a bundle would retry the load and print the same sentence again.
+    TURBO_LOAD_FAILED[] &&
+        return "turbo is not available in this installation (LoopVectorization did not load)"
+    # ASKED BEFORE IT IS TRIED. `identify_package` resolves against the active project — the
+    # same thing the `using` below would consult — so a bundle answers `nothing` here and gets
+    # a sentence that says what is wrong instead of a caught `ArgumentError` from `require`.
+    if Base.identify_package("LoopVectorization") === nothing
+        TURBO_LOAD_FAILED[] = true
+        return "this installation does not ship LoopVectorization, so the turbo kernel is " *
+               "unavailable — the exact reference kernel is used instead. A bundle cannot " *
+               "carry it: see app/Project.toml"
+    end
+    console!(sh, "loading LoopVectorization for the turbo kernel (one-time)…")
+    try
+        # Into `Main`, whose load path is the ACTIVE PROJECT — `bin`, which carries
+        # LoopVectorization as a direct dep for exactly this. An extension module resolves
+        # only the parent's deps plus its own triggers, so a `using` in here would not find a
+        # weakdep of ROTIR that is not one of ROTIRGUIExt's triggers. The binding is not what
+        # is wanted anyway: loading the package is what activates ROTIRLoopVectorizationExt
+        # and gives `_cvis_turbo!` and the two adjoints their methods.
+        @eval Main using LoopVectorization
+        # The documented way to force extension activation. Not needed in practice — loading
+        # the trigger activates ROTIRLoopVectorizationExt synchronously — but harmless, and
+        # the check below is what actually reports a failure.
+        Base.retry_load_extensions()
+    catch e
+        TURBO_LOAD_FAILED[] = true
+        return "turbo needs LoopVectorization, which failed to load: " * sprint(showerror, e)
+    end
+    if !ROTIR.turbo_available()
+        TURBO_LOAD_FAILED[] = true
+        return "LoopVectorization loaded but ROTIRLoopVectorizationExt did not"
+    end
+    return ""
+end
 
 """
     shell_set_polyft_backend(kind) -> String
 
-Choose the forward kernel. Invalidates the χ² cache, since the number it holds came from the
-other one.
+Choose the forward kernel: `"auto"` to let each code path pick (see `ShellState.kernel_auto`),
+or one of the three to force it everywhere. Invalidates the χ² cache, since the number it holds
+came from the kernel that was selected when it was computed — and the three do not agree to
+better than the quadrature's 6.8e-7 at HEALPix 3.
 """
 function shell_set_polyft_backend(kind)
     sh = _sh()
     k = Symbol(_qmlstr(kind))
-    k in (:nufft, :turbo, :scalar) || return "backend must be nufft, turbo or scalar"
-    # `:turbo` needs LoopVectorization, which ROTIR does NOT load: measured, loading it
-    # invalidates OITOOLS' precompiled canvas code and takes one `build_canvas` from 341 ms to
-    # 2685 ms — 1.8 s onto every GUI start, for a kernel that is now the cross-check rather
-    # than the default. So it is loaded HERE, when someone asks for it, and never otherwise.
-    #
-    # Synchronously, on the GUI thread, rather than through `start_job!`: package loading takes
-    # locks that the render thread also wants, and a `using` on a worker can deadlock against
-    # it. A few seconds of frozen window is the honest cost, and the panel says so before the
-    # click. It is only ever paid once — the second selection finds the extension loaded.
-    if k === :turbo && !ROTIR.turbo_available()
-        console!(sh, "loading LoopVectorization for the turbo kernel (one-time)…")
-        try
-            # Into `Main`, whose load path is the ACTIVE PROJECT — `bin`, which carries
-            # LoopVectorization as a direct dep for exactly this. An extension module resolves
-            # only the parent's deps plus its own triggers, so a `using` in here would not
-            # find a weakdep of ROTIR that is not one of ROTIRGUIExt's triggers. The binding
-            # is not what is wanted anyway: loading the package is what activates
-            # ROTIRLoopVectorizationExt and gives `_cvis_turbo!` its methods.
-            @eval Main using LoopVectorization
-            # The documented way to force extension activation. Not needed in practice —
-            # loading the trigger activates ROTIRLoopVectorizationExt synchronously — but
-            # harmless, and the check below is what actually reports a failure.
-            Base.retry_load_extensions()
-        catch e
-            return "turbo needs LoopVectorization, which failed to load: " *
-                   sprint(showerror, e)
-        end
-        ROTIR.turbo_available() ||
-            return "LoopVectorization loaded but ROTIRLoopVectorizationExt did not"
+    k in (:auto, :nufft, :turbo, :scalar) ||
+        return "backend must be auto, nufft, turbo or scalar"
+    # AUTO IS NOT A KERNEL, so it does not go into `POLYFT_BACKEND`, which the library reads
+    # and the test suite assigns to. It sets the process default back to the one the forward
+    # paths want and lets each fit scope its own — and it deliberately does NOT load
+    # LoopVectorization here: that cost belongs to the first fit that needs it, not to a click.
+    if k === :auto
+        sh.kernel_auto[] = true
+        ROTIR.POLYFT_BACKEND[] = :nufft
+        sh.chi2key[] = nothing
+        console!(sh, "polyft backend: auto (nufft here, turbo for gradient fits and samplers)")
+        refresh_both!(sh)
+        return "polyft backend: auto"
     end
+    if k === :turbo
+        err = _ensure_turbo!(sh)
+        isempty(err) || return err
+    end
+    sh.kernel_auto[] = false
     ROTIR.POLYFT_BACKEND[] = k
     sh.chi2key[] = nothing
     console!(sh, "polyft backend: $(k)")
@@ -2652,6 +2733,48 @@ shell_job_running() = (sh = SHELL[]; sh !== nothing && sh.job !== nothing) ? "1"
 # rather than answering "stopping…" to every engine and leaving the user watching a counter.
 const STOP_AWARE = (:neldermead, :bobyqa)
 
+# WHICH ENGINES REACH THE QUADRATURE KERNEL AND WHICH DO NOT. This is the whole reason a fit
+# selects its own kernel rather than inheriting the panel's.
+#
+# `:nufft` exists in ONE place — `fused_cvis_parts`. So:
+#
+#   * Nelder-Mead, BOBYQA, Nautilus and every binary fit evaluate the objective closure in
+#     `shell_fit_start`, which calls `parametric_chi2` → `fused_cvis` → that branch. They are
+#     already on the fastest kernel there is (2.6/3.8/4.1 ms at HEALPix 3/4/5) and want
+#     nothing done to them.
+#   * VMLMB (`fit_parametric` → `build_parametric_logπ`), NUTS and Pigeons all evaluate
+#     `interferometric_chi2`, and the shape route evaluates `shape_chi2_fg!`; both go through
+#     `_cvis_forward!` and the two adjoint kernels, NONE of which has a `:nufft` branch. Left
+#     alone they run the plain-Julia reference. MEASURED on one lam And epoch, the three
+#     kernels one gradient evaluation runs: 11.4 ms → 0.7 ms at nside 3, 32.3 → 2.2 at 4,
+#     124.9 → 9.0 at 5. A 20-draw NUTS fit made 2240 gradient evaluations, so that is ~24 s
+#     against a one-time 1.8 s load.
+#
+# `:gradient` covers both gradient routes — `_run_gradient_fit` and `_run_shape_fit` — since
+# `shell_fit_start` picks between them on `gradient_fit_kind` after this point.
+const KERNEL_TURBO_METHODS = (:gradient, :hmc, :pigeons)
+
+"""
+    _fit_kernel(sh, meth) -> Union{Symbol,Nothing}
+
+Which forward kernel this engine should run under, or `nothing` to leave the process default
+alone. See [`KERNEL_TURBO_METHODS`](@ref).
+
+A FORCED selection wins. Someone who picked `:scalar` from the panel is cross-checking a
+result that looked wrong, and silently running something else under their fit is exactly the
+thing that would make that check worthless.
+"""
+function _fit_kernel(sh::ShellState, meth::Symbol)
+    sh.kernel_auto[] || return nothing
+    meth in KERNEL_TURBO_METHODS || return nothing
+    # AND NOT IF IT IS KNOWN NOT TO WORK HERE — a bundle, where LoopVectorization is absent by
+    # necessity (see `TURBO_LOAD_FAILED`). Answering `nothing` rather than letting the load
+    # fail again keeps the console clean: the fit runs the reference kernel, which is what it
+    # would have done anyway.
+    TURBO_LOAD_FAILED[] && return nothing
+    return :turbo
+end
+
 function shell_job_stop()
     sh = _sh()
     j = sh.job
@@ -3219,8 +3342,16 @@ function shell_fit(method, maxeval)
         ([m.params[n] for n in names], [m.bounds[n][1] for n in names],
          [m.bounds[n][2] for n in names])
     end
-    any(θ0 .< lb) || any(θ0 .> ub) &&
-        return "a starting value is outside its bounds"
+    # PARENTHESISED. `&&` binds tighter than `||`, so `a || b && return` parses as
+    # `a || (b && return)` — and when `a` is true the `||` short-circuits and the return never
+    # runs. A starting value BELOW its lower bound was therefore accepted silently, which is
+    # the half of this check that matters: a sampler started outside its box transforms to
+    # infinity, and an optimiser clamps without saying so.
+    if any(θ0 .< lb) || any(θ0 .> ub)
+        bad = findfirst(k -> θ0[k] < lb[k] || θ0[k] > ub[k], eachindex(θ0))
+        return "$(names[bad]) = $(θ0[bad]) is outside its bounds " *
+               "[$(lb[bad]), $(ub[bad])]"
+    end
 
     # Snapshot the model: the worker must not read a struct the GUI thread can edit under it.
     # The COMPANION is copied too, deeply — a shallow copy would share the parameter dictionary
@@ -3251,6 +3382,21 @@ function shell_fit(method, maxeval)
     nexp = sh.nside_exp[]
     prec = sh.precision[]
     sh.jobmethod = meth
+    # THE KERNEL THIS ROUTE WANTS, resolved and LOADED here — on the GUI thread, before the
+    # worker exists, because `_ensure_turbo!` must not run on a worker. Captured as a value
+    # and scoped over the worker below, so it is snapshotted exactly the way `nexp` and `prec`
+    # are: a click on the kernel combo mid-fit must not change the objective function under a
+    # running line search, which is what a bare assignment to the global Ref would do.
+    kernel = _fit_kernel(sh, meth)
+    if kernel === :turbo
+        err = _ensure_turbo!(sh)
+        if !isempty(err)
+            # Not fatal. The reference kernel computes the same thing, only slower, so a
+            # failed load costs time rather than the fit.
+            console!(sh, err * " — this fit runs the reference kernel instead")
+            kernel = nothing
+        end
+    end
     # EVERY PATH RUNS AT `prec` NOW. Each runner builds its mesh at the precision the box
     # asks for, and every library entry point narrows the Float64 θ the panel hands it to the
     # mesh's type once — `fit_parametric` and `_fit_hmc` both do
@@ -3259,7 +3405,7 @@ function shell_fit(method, maxeval)
     # box now, so this line is true for all six engines.
     console!(sh, "fit $(join(names, ", ")) by $(meth), $(it) $(unit), " *
                  "HEALPix level $(nexp) ($(12 * (2^nexp)^2) tessels, $(prec))"; kind = :cmd)
-    return start_job!(sh, :fit, function (stop)
+    body = function (stop)
         tess = tessellation_healpix(nexp; T = prec)
         obj = isbin ?
             _binary_objective(snap, bnames, tess, data, mjd, tepochs, orbit_snap, stop) :
@@ -3313,7 +3459,12 @@ function shell_fit(method, maxeval)
                 method = meth, model = snap.name, surface_type = snap.surface_type,
                 chi2 = chi2, ndata = nd,
                 status = Printf.@sprintf("fit done: χ²ᵣ = %.4f over %d points", chi2 / nd, nd))
-    end)
+    end
+    # The scope wraps the WHOLE worker, so every task the engine starts inside it — the
+    # `Threads.@threads` loops in the adjoint kernels included — inherits the choice, and the
+    # GUI thread answering the event loop beside it keeps the kernel the panel is set to.
+    return start_job!(sh, :fit, kernel === nothing ? body :
+                      (stop -> ROTIR.with_polyft_backend(() -> body(stop), kernel)))
 end
 
 """
@@ -3411,7 +3562,12 @@ function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxev
     end
     # `invperm`, not `order`: `order` maps a panel slot to a sampler column, and the columns
     # have to be permuted the other way to land in panel order.
-    return best, NaN, errs,
+    # `r.chi2` is the χ² AT THE MEDIAN, which `_fit_hmc` and `_fit_pigeons` now return. It used
+    # to be `NaN` here, so every sampler row in the fit history showed `NaN` in the χ²ᵣ column
+    # — in the one table built for comparing a sphere against a rapid rotator, which cannot be
+    # done if half the rows have no number. The evidence is the better comparison where there
+    # is one, but a sampler without an evidence still has a χ².
+    return best, r.chi2, errs,
            _posterior(r; order = invperm(order),
                       diagnostics = Printf.@sprintf("%d draws, %d divergences",
                                                     size(r.samples, 1), r.divergences)), 0
@@ -3449,7 +3605,12 @@ function _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, max
         best[k] = r.median[slot]
         errs[names[k]] = (r.q84[slot] - r.q16[slot]) / 2
     end
-    return best, NaN, errs,
+    # `r.chi2` is the χ² AT THE MEDIAN, which `_fit_hmc` and `_fit_pigeons` now return. It used
+    # to be `NaN` here, so every sampler row in the fit history showed `NaN` in the χ²ᵣ column
+    # — in the one table built for comparing a sphere against a rapid rotator, which cannot be
+    # done if half the rows have no number. The evidence is the better comparison where there
+    # is one, but a sampler without an evidence still has a χ².
+    return best, r.chi2, errs,
            _posterior(r; order = invperm(order),
                       diagnostics = Printf.@sprintf("%d draws, %d divergences",
                                                     size(r.samples, 1), r.divergences)), 0
@@ -3495,7 +3656,12 @@ function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, 
         best[k] = r.median[slot]
         errs[names[k]] = (r.q84[slot] - r.q16[slot]) / 2
     end
-    return best, NaN, errs,
+    # `r.chi2` is the χ² AT THE MEDIAN, which `_fit_hmc` and `_fit_pigeons` now return. It used
+    # to be `NaN` here, so every sampler row in the fit history showed `NaN` in the χ²ᵣ column
+    # — in the one table built for comparing a sphere against a rapid rotator, which cannot be
+    # done if half the rows have no number. The evidence is the better comparison where there
+    # is one, but a sampler without an evidence still has a χ².
+    return best, r.chi2, errs,
            _posterior(r; order = invperm(order),
                       diagnostics = Printf.@sprintf("%d draws, %d divergences",
                                                     size(r.samples, 1), r.divergences)), 0
@@ -3549,7 +3715,12 @@ function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, m
         best[k] = r.median[slot]
         errs[names[k]] = (r.q84[slot] - r.q16[slot]) / 2
     end
-    return best, NaN, errs,
+    # `r.chi2` is the χ² AT THE MEDIAN, which `_fit_hmc` and `_fit_pigeons` now return. It used
+    # to be `NaN` here, so every sampler row in the fit history showed `NaN` in the χ²ᵣ column
+    # — in the one table built for comparing a sphere against a rapid rotator, which cannot be
+    # done if half the rows have no number. The evidence is the better comparison where there
+    # is one, but a sampler without an evidence still has a χ².
+    return best, r.chi2, errs,
            _posterior(r; order = invperm(order),
                       diagnostics = Printf.@sprintf("%d draws, %d chains, %d round trips",
                                                     size(r.samples, 1), r.n_chains,

@@ -40,7 +40,7 @@ Anything a script does not need should not be loaded by it.
 | `Nautilus` | `method = :nautilus` — nested sampling, with an evidence |
 | `Pigeons, Distributions, ADTypes` (with `Zygote`) | `method = :pigeons` — parallel tempering |
 | `PythonCall` | `method = :ultranest` |
-| `LoopVectorization` | `POLYFT_BACKEND[] = :turbo`, the vectorised exact kernel |
+| `LoopVectorization` | the `:turbo` kernel — the vectorised exact transform, and the forward/adjoint kernels every gradient fit and sampler runs |
 
 Each of these must be installed in **your own** project — a weak dependency of ROTIR is
 not automatically available to you:

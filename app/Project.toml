@@ -59,9 +59,19 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 #     In function: julia_inv_approx_286209u286212        (VectorizationBase/src/special/log.jl)
 #
 # an AVX512 reciprocal emitted for this machine that has no encoding in the generic target.
-# Narrowing the cpu_target to `native` would fix the link and give up portability, which is the
-# wrong trade for a kernel that is not even the default: the GUI ships `:nufft`, which its own
-# menu labels "fastest".
+# Narrowing the cpu_target to `native` would fix the link and give up portability.
+#
+# WHAT THAT COSTS, STATED HONESTLY, because it is more than it looks. `:nufft` — which the
+# menu labels "fastest" and which the panel selects by default — has a branch in exactly ONE
+# place, `fused_cvis_parts`. The interactive chi2 and the derivative-free engines reach it and
+# are unaffected. The GRADIENT path and the samplers do not: `interferometric_chi2` and
+# `shape_chi2_fg!` go through `_cvis_forward!` and the two adjoint kernels, which have no
+# quadrature branch, so in a bundle they run the plain-Julia reference. MEASURED on a lam And
+# rapid-rotator VMLMB fit over four parameters at HEALPix 3: 15.7 s against 1.24 s at Float32
+# and 8.2 s against 1.6 s at Float64. So a bundle's VMLMB, NUTS and Pigeons fits are roughly
+# 5-13x slower than the same fits from a source checkout, which is a real limitation of the
+# bundle and not a rounding error. `_ensure_turbo!` in the GUI detects the absence once per
+# session (via `identify_package`, before trying to load) and says so rather than retrying.
 #
 # PythonCall and PythonPlot are deliberately absent: they would pull a ~1.6 GB Conda
 # environment and map a SECOND Qt into the process, which is the conflict `check_qt_conflict`

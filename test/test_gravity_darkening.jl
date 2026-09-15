@@ -196,6 +196,33 @@ using Test, ROTIR, Zygote, FiniteDifferences, LinearAlgebra
         end
     end
 
+    @testset "every entry point is generic in T" begin
+        # NO HARDCODED Float64 ANYWHERE IN THE PATH. The mesh is Float32 by default, so a
+        # single bare literal in the Newton solve or the map assembly would promote the whole
+        # evaluation and then narrow again on the store — invisible in the result, twice the
+        # memory traffic in the loop. Float32 in, Float32 out, at all eight entry points.
+        for T in (Float32, Float64)
+            sθ = T[0.2, 0.7, 1.0]; cθ = T.(sqrt.(max.(1 .- sθ .^ 2, 0)))
+            @test typeof(elr_omega(T(0.9))) === T
+            @test all(t -> t === T, typeof.(elr_q_and_deriv(T(0.9), T(0.5))))
+            @test typeof(elr_flux_factor(T(0.5), T(0.7))) === T
+            @test all(t -> t === T, typeof.(elr_flux_factor_and_dq(T(0.5), T(0.7))))
+            @test typeof(elr_temperature_ratio(T(0.6))) === T
+            @test eltype(elr_map(T(1), T(0.9), T(0.25), T(6000), sθ, cθ)) === T
+            # All FIVE of the derivative returns, not just the map: a promoted derivative is
+            # the easier one to miss, since nothing downstream checks its type.
+            @test all(v -> eltype(v) === T,
+                      elr_map_and_derivs(T(1), T(0.9), T(0.25), T(6000), sθ, cθ))
+            # And the mesh-side entry point, beside von Zeipel's so the two cannot drift.
+            tess = tessellation_healpix(3; T = T)
+            p = default_star_params(2; T = T, frac_escapevel = 0.9, gravity_law = :elr)
+            star = create_star(tess, p, T(0))
+            @test eltype(temperature_map_rapid_rotator(p, star)) === T
+            @test eltype(temperature_map_vonZeipel_rapid_rotator(
+                             merge(p, (gravity_law = 1,)), star)) === T
+        end
+    end
+
     # ---------------------------------------------------------------------------------------
     # The derivatives
     # ---------------------------------------------------------------------------------------

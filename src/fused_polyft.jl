@@ -84,7 +84,7 @@ function fused_cvis_parts(x, star, data; intensity_model::Symbol = :linear, band
     F = Vector{Complex{T}}(undef, length(kx))
     pf = zeros(T, length(indx))
     mpjx = Matrix(pjx); mpjy = Matrix(pjy)
-    if POLYFT_BACKEND[] === :nufft
+    if polyft_backend() === :nufft
         # `polyflux` is the shoelace area and is needed for the flux normalisation whichever
         # backend runs, so it is computed here rather than inside the visibility kernel.
         @inbounds for q in 1:length(indx)
@@ -103,7 +103,9 @@ end
 """
     POLYFT_BACKEND
 
-Which forward kernel computes the visibilities: `:nufft` (default), `:turbo`, or `:scalar`.
+The PROCESS-WIDE forward kernel: `:nufft` (default), `:turbo`, or `:scalar`. A task can
+override it for its own duration with [`with_polyft_backend`](@ref); read the answer that
+applies here and now with [`polyft_backend`](@ref) rather than this Ref.
 
 All three compute the SAME quantity and are asserted against each other in
 `test/test_fused_polyft.jl`. They differ in how, and therefore in how the cost scales:
@@ -127,23 +129,120 @@ when a fit looks wrong.
 """
 const POLYFT_BACKEND = Ref(:nufft)
 
+"""
+    POLYFT_BACKEND_SCOPE
+
+A per-TASK override of [`POLYFT_BACKEND`](@ref); `nothing` — the default — means "no override,
+use the process-wide setting". Set it with [`with_polyft_backend`](@ref) and read the answer
+with [`polyft_backend`](@ref); nothing should read either this or `POLYFT_BACKEND` directly.
+
+WHY A SCOPE AND NOT JUST THE REF. The right kernel is a property of the CODE PATH, not of the
+caller's taste, and the two paths disagree:
+
+  * `fused_cvis` / `fused_cvis_parts` — one χ² for a table, a derivative-free trial point —
+    has a `:nufft` branch, and `:nufft` is nearly mesh-independent there (2.6/3.8/4.1 ms at
+    HEALPix 3/4/5).
+  * `interferometric_chi2` and `shape_chi2_fg!` go through `_cvis_forward!` and the two
+    adjoints, which have NO `:nufft` branch — they run `:scalar` unless `:turbo` is selected.
+    That is where a gradient fit and a sampler live, and `:turbo` takes the three kernels a
+    gradient evaluation runs from 11.4 ms to 0.7 ms at HEALPix 3.
+
+So a fit wants to select `:turbo` for its own duration WITHOUT changing what the rest of the
+process computes: a GUI holds its worker on one thread while the event loop keeps answering on
+another, and flipping a global Ref under a running optimiser changes the objective function
+mid-line-search — value and gradient from different kernels. A scope is task-local and is
+inherited by tasks started inside it (`Threads.@threads` inside the kernels included), which is
+exactly the lifetime wanted.
+
+The one place it does NOT reach is another PROCESS: a distributed Pigeons run would see the
+process default on its workers. Neither does the Ref, so this is not a regression.
+"""
+const POLYFT_BACKEND_SCOPE = Base.ScopedValues.ScopedValue{Union{Nothing, Symbol}}(nothing)
+
+"""
+    polyft_backend() -> Symbol
+
+Which forward kernel to run here and now: the innermost [`with_polyft_backend`](@ref) scope if
+there is one, and [`POLYFT_BACKEND`](@ref) otherwise. Every kernel dispatch reads this.
+
+The read is one scope lookup per KERNEL INVOCATION — once per epoch per evaluation, not per
+element or per uv point — against milliseconds of kernel, so it does not register.
+"""
+function polyft_backend()
+    s = POLYFT_BACKEND_SCOPE[]
+    return s === nothing ? POLYFT_BACKEND[] : s
+end
+
+"""
+    with_polyft_backend(f, kind::Symbol)
+
+Run `f()` with `kind` as the forward kernel, for this task and any task it starts, then restore
+whatever was in force. See [`POLYFT_BACKEND_SCOPE`](@ref) for why a fit does this rather than
+assigning to [`POLYFT_BACKEND`](@ref).
+
+    with_polyft_backend(:turbo) do
+        fit_parametric(data, tess, tepochs, base; free = names)
+    end
+"""
+with_polyft_backend(f, kind::Symbol) =
+    Base.ScopedValues.with(f, POLYFT_BACKEND_SCOPE => kind)
+
 # `_cvis_turbo!` is provided by ext/ROTIRLoopVectorizationExt.jl. Declared here so that
 # `:turbo` is a name this package knows and the failure without LoopVectorization is a
 # sentence rather than a MethodError on an underscored internal.
 function _cvis_turbo! end
 
+# The two ADJOINT kernels, same arrangement: declared here so `:turbo` is a name this package
+# knows, defined in ext/ROTIRLoopVectorizationExt.jl.
+#
+# WHY THEY MATTER MORE THAN THE FORWARD. MEASURED on one lam And epoch, the three kernels a
+# gradient evaluation runs:
+#
+#     nside    forward   adj_cvis   adj_verts   vertex share
+#       3      1.5 ms     3.6 ms      4.9 ms        49%
+#       4      5.2 ms     9.3 ms     18.1 ms        55%
+#       5     18.0 ms    32.7 ms     67.3 ms        57%
+#
+# So the forward is 15-19% of a gradient and the two adjoints are the rest. `:turbo` on the
+# forward alone was capped at that; this is where a gradient fit's time actually is.
+function _adj_cvis_turbo! end
+function _adj_vertices_turbo! end
+
+"""
+    TURBO_OK
+
+Set to `true` by `ROTIRLoopVectorizationExt.__init__` when that extension loads. See
+[`turbo_available`](@ref).
+"""
+const TURBO_OK = Ref(false)
+
 """
     turbo_available() -> Bool
 
-Whether `POLYFT_BACKEND[] = :turbo` will work here, i.e. whether `using LoopVectorization` has
-loaded ROTIRLoopVectorizationExt.
+Whether the `:turbo` kernel will work here, i.e. whether `using LoopVectorization` has loaded
+ROTIRLoopVectorizationExt.
+
+A CACHED FLAG, not `!isempty(methods(_cvis_turbo!))`. That spelling asks the runtime's method
+table on every call, which is a reflection call returning `Any` — JET flags it as the only
+runtime dispatch left anywhere in the differentiable log-posterior, reported from inside
+`_cvis_forward!`, the innermost visibility kernel.
+
+To be accurate about what that cost: the call sits inside `if polyft_backend() === :turbo`,
+and the default backend is `:nufft`, so the default path never reaches it. JET sees it because
+it analyses both branches. The fix is worth making for the `:turbo` path, which the GUI does
+offer, and because a clean report is what makes the next audit readable — not because the
+default was paying for it.
+
+The extension SETS the flag rather than this function asking, which also removes a staleness
+trap: the GUI loads LoopVectorization on demand mid-session, so anything cached at ROTIR's own
+load time would have been wrong for the rest of that session.
 """
-turbo_available() = !isempty(methods(_cvis_turbo!))
+turbo_available() = TURBO_OK[]
 
 function _cvis_forward!(F, kx, ky, k2, pjx, pjy, xw)
-    if POLYFT_BACKEND[] === :turbo
+    if polyft_backend() === :turbo
         turbo_available() ||
-            error("POLYFT_BACKEND[] = :turbo needs LoopVectorization loaded: add " *
+            error("the :turbo kernel needs LoopVectorization loaded: add " *
                   "`using LoopVectorization` to this session. It is a weak dependency " *
                   "because loading it costs 1.8 s of GUI startup by invalidating OITOOLS' " *
                   "precompiled plot pipeline, and `:nufft` — the default — is faster anyway.")
@@ -221,6 +320,13 @@ Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
     k2_inv_im::Vector{Complex{T}},
     proj_west::AbstractMatrix{T}, proj_north::AbstractMatrix{T}, polyflux::Vector{T}) where T
 
+    if polyft_backend() === :turbo && turbo_available()
+        # `invokelatest` for the same reason the forward needs it: the GUI can load
+        # LoopVectorization mid-session, and methods added after this frame's world age are
+        # invisible to a direct call.
+        return Base.invokelatest(_adj_cvis_turbo!, grad_xw, adj, kx, ky, k2_inv_im,
+                                 proj_west, proj_north)
+    end
     nuv = length(kx)
     npix = size(proj_west, 1)
     grad_xw .= zero(T)
@@ -264,6 +370,10 @@ Used for shape gradient computation.
     k2_inv_im::Vector{Complex{T}},
     proj_west::AbstractMatrix{T}, proj_north::AbstractMatrix{T}, xw::Vector{T}, polyflux::Vector{T}) where T
 
+    if polyft_backend() === :turbo && turbo_available()
+        return Base.invokelatest(_adj_vertices_turbo!, grad_proj_west, grad_proj_north, adj,
+                                 kx, ky, k2_inv_im, proj_west, proj_north, xw)
+    end
     nuv = length(kx)
     npix = size(proj_west, 1)
     grad_proj_west .= zero(T)

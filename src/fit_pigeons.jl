@@ -203,7 +203,13 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
                          "been explored. Raise n_rounds or n_chains."
 
     q(pr) = [Statistics.quantile(view(Θ, :, j), pr) for j in 1:D]
-    return (median = q(0.5), q16 = q(0.16), q84 = q(0.84),
+    # THE χ² AT THE MEDIAN, for the same reason `_fit_hmc` returns one: a sampler's row in the
+    # fit history has to be comparable with an optimiser's, and every caller was reporting
+    # `NaN` because there was nothing else to report. `logπ` is built here with
+    # `logprior = nothing`, so it is exactly `-χ²/2`; note this is the UNTRANSFORMED closure,
+    # not `logπz`, so no Jacobian term is included.
+    θmed = θ_frozen .+ S * collect(T, q(0.5))
+    return (median = q(0.5), q16 = q(0.16), q84 = q(0.84), chi2 = -2 * logπ(θmed),
             mean = vec(Statistics.mean(Θ, dims = 1)),
             std = vec(Statistics.std(Θ, dims = 1)),
             samples = Matrix(Θ), logz = logz,

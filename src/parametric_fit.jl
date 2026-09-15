@@ -124,7 +124,7 @@ it matters, because `temperature_map_vonZeipel_ellipsoid` is a placeholder gravi
 a shape fit.
 """
 function parametric_chi2(params, tessels, data, tepochs;
-                         weights = [1.0, 1.0, 1.0], uniform::Bool = false)
+                         weights = (1.0, 1.0, 1.0), uniform::Bool = false)
     stars = create_star_multiepochs(tessels, params, tepochs)
     # NO `setup_oi!`. This built the dense (nuv × npix) `polyft` for every evaluation, used it
     # for a single matvec and threw it away — 5 to 10 GiB of temporaries to produce a 189 MiB
@@ -140,13 +140,23 @@ function parametric_chi2(params, tessels, data, tepochs;
     # and the map varies over hundreds of iterations, so the matrix is worth building once.
     x = uniform ? fill(eltype(stars[1])(params.tpole), stars[1].npix) :
                   parametric_temperature_map(params, stars[1])
-    c = 0.0
+    # THE ACCUMULATOR FOLLOWS THE MODEL. `c = 0.0` and a `Vector{Float64}` of weights made
+    # this Float64 whatever the mesh was, so every term of a Float32 model promoted and the
+    # function returned Float64 from a Float32 star. The weights are a TUPLE now as well: a
+    # `Vector{Float64}` default allocates on every call and forces the same promotion through
+    # `weights[k]`, while a tuple of literals costs nothing and converts at the multiply.
+    #
+    # Small beside `fused_cvis`, which is where this function's time actually goes — but a χ²
+    # whose type depends on a default keyword rather than on the model is a trap, and the
+    # comparison against `-2 logπ` is cleaner when both sides are the mesh's own type.
+    S = eltype(x)
+    c = zero(S)
     for (i, s) in enumerate(stars)
         v2m, t3am, t3pm = cvis_to_obs(fused_cvis(x, s, data[i]), data[i])
         d = data[i]
-        c += weights[1]*sum(abs2, (v2m  .- d.v2)    ./ d.v2_err) +
-             weights[2]*sum(abs2, (t3am .- d.t3amp) ./ d.t3amp_err) +
-             weights[3]*sum(abs2, mod360(t3pm .- d.t3phi) ./ d.t3phi_err)
+        c += S(weights[1])*sum(abs2, (v2m  .- d.v2)    ./ d.v2_err) +
+             S(weights[2])*sum(abs2, (t3am .- d.t3amp) ./ d.t3amp_err) +
+             S(weights[3])*sum(abs2, mod360(t3pm .- d.t3phi) ./ d.t3phi_err)
     end
     return c
 end

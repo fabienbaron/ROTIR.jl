@@ -298,7 +298,27 @@ Split out of [`create_star`](@ref) so that alternative orientations — notably
 `create_binary_star`, which rotates into the *orbital* frame instead of spinning about
 a fixed spin axis — reuse this verbatim rather than duplicating it.
 """
-@views function finish_star(xyz, r, tessels::tessellation, star_params, t; T=eltype(tessels), κ=T(50))
+@views function finish_star(xyz, r, tessels::tessellation, star_params, t;
+                            T = eltype(tessels), κ = T(50))
+  # THE TYPE AS A PARAMETER, not as a value. Written with `T` used directly in the body, `T`
+  # is a keyword whose VALUE is a `DataType`, so `T(0.01)` is a call on something the compiler
+  # does not know — it infers as `Any`, and the next line's `vis_weights .> vis_threshold`
+  # becomes `broadcasted(>, ::Vector{Float32}, ::Any)`. JET reports 103 runtime dispatches
+  # rooted here for a single `parametric_chi2` call, and the RETURN type is unstable too,
+  # because `stellar_geometry{T}` takes T from the same value.
+  #
+  # Handing it to an inner method as a positional `::Type{S}` makes `S` a genuine type
+  # parameter: one dispatch at the boundary, everything inside specialised.
+  #
+  # MEASURED, and worth being honest about: this is correctness rather than speed. The
+  # geometry is 332 of `parametric_chi2`'s 4987 allocations, so cleaning it does not move the
+  # wall clock — the cost is in `fused_cvis`. It is fixed because an `Any` on the critical
+  # path of every forward model is a trap for the next person, not because it was slow.
+  return _finish_star(T, xyz, r, tessels, star_params, t, κ)
+end
+
+@views function _finish_star(::Type{T}, xyz, r, tessels::tessellation, star_params, t,
+                             κ) where {T}
   npix = tessels.npix;
 
   # Determine normals via cross product of quad diagonals

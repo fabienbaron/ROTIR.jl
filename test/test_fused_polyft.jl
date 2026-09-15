@@ -17,7 +17,9 @@ using ROTIR
 # because loading it costs 1.8 s of GUI startup (see src/turbo_polyft.jl). The `import` below
 # resolves either way, since the stub is ROTIR's; only the methods arrive with the extension.
 using LoopVectorization
-using ROTIR: _cvis_scalar!, _cvis_turbo!, POLYFT_BACKEND
+using ROTIR: _cvis_scalar!, _cvis_turbo!, POLYFT_BACKEND,
+             compute_adjoint_cvis!, compute_adjoint_vertices!,
+             compute_polyflux_and_cvis!
 
 @testset "fused polyft: turbo vs reference" begin
     # Which is to say: the extension is loaded. Without this the whole file would test a
@@ -46,6 +48,67 @@ using ROTIR: _cvis_scalar!, _cvis_turbo!, POLYFT_BACKEND
     end
 
     relerr(a, b) = maximum(abs.(a .- b)) / max(maximum(abs.(b)), eps(Float64))
+
+    # THE TWO ADJOINTS, which are where a gradient's time actually goes. MEASURED per
+    # evaluation on one lam And epoch, scalar against turbo:
+    #
+    #     nside   forward          adj_cvis         adj_verts        all three
+    #       3     1.5 -> 0.2 ms    3.6 -> 0.2 ms    6.3 -> 0.2 ms    11.4 -> 0.7 ms  16.3x
+    #       4     5.3 -> 0.7       9.0 -> 0.5      18.1 -> 0.9       32.3 -> 2.2     15.0x
+    #       5    18.1 -> 2.4      39.0 -> 3.0      67.8 -> 3.6      124.9 -> 9.0     13.8x
+    #
+    # They vectorise BETTER than the forward (13-25x against 7x) because of a structural
+    # difference: in the forward every `F[k]` is touched by every tessel, which forces chunked
+    # per-thread accumulators; in both adjoints each `p` writes only its own outputs, so the
+    # thread split over `p` is free and `k` is a clean vectorised reduction inside it.
+    #
+    # The scalar kernel is the DEFINITION and the turbo one a rewrite in real arithmetic —
+    # `@turbo` will not take `Complex` — so this is the only thing standing between that
+    # algebra and a silently wrong gradient.
+    @testset "adjoints, $(T), level $(n)" for T in (Float32, Float64), n in (2, 3)
+        data = readoifits(joinpath(D, "2011Sep02.lam_And_prepped.oifits");
+                          verbose = false)[1, 1]
+        tess = tessellation_healpix(n; T = T)
+        prm  = default_star_params(2; T = T, rpole = 3.0, frac_escapevel = 0.7,
+                                   tpole = 5000.0, ldtype = 1, ld1 = 0.3)
+        star = create_star(tess, prm, zero(T))
+        idx  = star.index_quads_visible
+        pjx  = Array(star.proj_west[idx, :]); pjy = Array(star.proj_north[idx, :])
+        x    = T.(parametric_temperature_map(prm, star))
+        xw   = x[idx] .* (star.vis_weights[idx] .* star.ldmap[idx])
+        kx   = T.(data.uv[1, :]) * T(-π / (180 * 3600000))
+        ky   = T.(data.uv[2, :]) * T( π / (180 * 3600000))
+        k2   = precompute_k2_inv_im(kx, ky)
+        nuv  = length(kx); npx = length(xw)
+        F    = Vector{Complex{T}}(undef, nuv); pf = zeros(T, npx)
+        compute_polyflux_and_cvis!(F, pf, kx, ky, k2, pjx, pjy, xw)
+        # A COMPLEX cotangent with both parts populated: a real-only one would leave half the
+        # expanded algebra untested, and it is the imaginary half that carries the sign work.
+        adj = Complex{T}.(range(T(-1), T(1), length = nuv),
+                          range(T(0.7), T(-0.4), length = nuv))
+        gs = Vector{T}(undef, npx); gt = Vector{T}(undef, npx)
+        ws = zeros(T, npx, 4); ns = zeros(T, npx, 4)
+        wt = zeros(T, npx, 4); nt = zeros(T, npx, 4)
+        old = POLYFT_BACKEND[]
+        try
+            POLYFT_BACKEND[] = :scalar
+            compute_adjoint_cvis!(gs, adj, kx, ky, k2, pjx, pjy, pf)
+            compute_adjoint_vertices!(ws, ns, adj, kx, ky, k2, pjx, pjy, xw, pf)
+            POLYFT_BACKEND[] = :turbo
+            compute_adjoint_cvis!(gt, adj, kx, ky, k2, pjx, pjy, pf)
+            compute_adjoint_vertices!(wt, nt, adj, kx, ky, k2, pjx, pjy, xw, pf)
+        finally
+            POLYFT_BACKEND[] = old
+        end
+        # The tolerance is the float type's own floor for a reduction this long, not the
+        # kernel's: measured 1.9e-14 at Float64 and 6.5e-6 at Float32 for `adj_cvis`.
+        tol = T === Float64 ? 1e-10 : 2e-3
+        @test relerr(gt, gs) < tol
+        @test relerr(wt, ws) < tol
+        @test relerr(nt, ns) < tol
+        # And not trivially zero, which would pass every comparison above.
+        @test maximum(abs, gs) > 0 && maximum(abs, ws) > 0 && maximum(abs, ns) > 0
+    end
 
     @testset "$(T), level $(n), surface_type $(st)" for T in (Float32, Float64),
                                                         n in (2, 3, 4),
@@ -209,6 +272,59 @@ using ROTIR: _cvis_scalar!, _cvis_turbo!, POLYFT_BACKEND
                 c = parametric_chi2(p, tess, data, [0.0])
                 @test abs(c - c_scalar) / c_scalar < 1e-4
             end
+        finally
+            POLYFT_BACKEND[] = old
+        end
+    end
+
+    @testset "with_polyft_backend scopes the kernel" begin
+        # WHY THE SCOPE EXISTS. The kernel a fit wants is not the one the rest of the process
+        # wants: `fused_cvis` has a `:nufft` branch and `interferometric_chi2` does not, so a
+        # gradient fit needs `:turbo` while the interactive χ² beside it keeps `:nufft`. The
+        # GUI runs the fit on a worker thread while its event loop keeps answering on another,
+        # so this cannot be a global assignment: that would change the objective function
+        # under a running line search.
+        @test polyft_backend() === POLYFT_BACKEND[]          # no scope: the Ref answers
+        old = POLYFT_BACKEND[]
+        try
+            POLYFT_BACKEND[] = :nufft
+            with_polyft_backend(:turbo) do
+                @test polyft_backend() === :turbo
+                @test POLYFT_BACKEND[] === :nufft            # the Ref is NOT written
+                # A task started inside inherits it, which is what makes the `Threads.@threads`
+                # loops in the two adjoint kernels see the same choice as their caller.
+                @test fetch(Threads.@spawn polyft_backend()) === :turbo
+            end
+            @test polyft_backend() === :nufft                # and it is restored on exit
+            # Restored THROUGH A THROW as well; a fit that errors must not leave the kernel
+            # changed for the rest of the session.
+            @test_throws ErrorException with_polyft_backend(:scalar) do
+                @test polyft_backend() === :scalar
+                error("boom")
+            end
+            @test polyft_backend() === :nufft
+
+            # And the scope reaches the kernels, not just the accessor: the same χ² under a
+            # scoped `:turbo` as under a globally assigned one.
+            data = [readoifits(joinpath(D, "polaris.oifits"); verbose = false)[1, 1]]
+            # FLOAT64, deliberately. At Float32 this χ² is 1.11e7, so the quadrature kernel's
+            # 6.8e-7 relative difference from the exact one is below the last bit and the two
+            # come back bit-identical — which makes the "they differ" check below a tautology
+            # that passes for the wrong reason.
+            tess = tessellation_healpix(3; T = Float64)
+            p = default_star_params(0; radius = 3.2, tpole = 5000.0, ldtype = 1, ld1 = 0.3)
+            POLYFT_BACKEND[] = :turbo
+            c_global = parametric_chi2(p, tess, data, [0.0])
+            POLYFT_BACKEND[] = :nufft
+            c_scoped = with_polyft_backend(:turbo) do
+                parametric_chi2(p, tess, data, [0.0])
+            end
+            @test c_scoped == c_global
+            # Not a tautology: the unscoped call gives the OTHER kernel's number, which agrees
+            # to the quadrature's accuracy rather than exactly.
+            c_plain = parametric_chi2(p, tess, data, [0.0])
+            @test c_plain != c_global
+            @test 0 < abs(c_plain - c_global) / c_global < 1e-4
         finally
             POLYFT_BACKEND[] = old
         end
