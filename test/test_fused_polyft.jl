@@ -17,6 +17,9 @@ using ROTIR
 # because loading it costs 1.8 s of GUI startup (see src/turbo_polyft.jl). The `import` below
 # resolves either way, since the stub is ROTIR's; only the methods arrive with the extension.
 using LoopVectorization
+# FINUFFT is a weak dependency too now — `:nufft` needs ROTIRFINUFFTExt, exactly as `:turbo`
+# needs ROTIRLoopVectorizationExt. It is in the test target for this reason.
+using FINUFFT
 using ROTIR: _cvis_scalar!, _cvis_turbo!, POLYFT_BACKEND,
              compute_adjoint_cvis!, compute_adjoint_vertices!,
              compute_polyflux_and_cvis!
@@ -275,6 +278,78 @@ using ROTIR: _cvis_scalar!, _cvis_turbo!, POLYFT_BACKEND,
         finally
             POLYFT_BACKEND[] = old
         end
+    end
+
+    @testset "the type-3 kernel follows the mesh precision" begin
+        # IT USED TO PROMOTE. `polyft_cvis_nufft` built its samples with a hardcoded
+        # `T = Float64`, cast to `ComplexF64`, passed `Float64(tol)` and wrote its targets as
+        # `2π .* kx` — and `2π` is a Float64, so even a Float32 `kx` came out Float64. The
+        # whole default kernel therefore ran in double and narrowed on return, whatever the
+        # panel's precision box said.
+        data = [readoifits(joinpath(D, "polaris.oifits"); verbose = false)[1, 1]]
+        p = default_star_params(0; radius = 3.2, tpole = 5000.0, ldtype = 1, ld1 = 0.3)
+
+        "The quad geometry, the weights and the uv, all in `T`."
+        function inputs(T)
+            tess = tessellation_healpix(3; T = T)
+            star = create_star(tess, p, 0.0)
+            i = star.index_quads_visible
+            xw = T.(star.vis_weights[i] .* star.ldmap[i])
+            (Matrix(star.proj_west[i, :]), Matrix(star.proj_north[i, :]), xw,
+             T.(data[1].uv[1, :]) * T(-π / (180 * 3600000)),
+             T.(data[1].uv[2, :]) * T(π / (180 * 3600000)))
+        end
+
+        @test nufft_work_type(zeros(Float32, 2, 4), zeros(Float32, 3)) === Float32
+        @test nufft_work_type(zeros(Float64, 2, 4), zeros(Float64, 3)) === Float64
+        # A MIXED pair is Float64: the transform is only as good as its worse argument, and
+        # silently dropping the Float64 half to single would be a downgrade the caller did not
+        # ask for.
+        @test nufft_work_type(zeros(Float32, 2, 4), zeros(Float64, 3)) === Float64
+        # And a type FINUFFT cannot take at all resolves to Float64 rather than failing inside
+        # the C call — it supports exactly Float32 and Float64.
+        @test nufft_work_type(zeros(Float16, 2, 4), zeros(Float16, 3)) === Float64
+        @test nufft_tol(Float32) == 1.0e-6
+        @test nufft_tol(Float64) == 1.0e-9
+
+        a32 = inputs(Float32); a64 = inputs(Float64)
+        # THE DEFAULT IS DOUBLE, deliberately and whatever the mesh is — see the docstring for
+        # the measurement. Single is opt-in, and asking for it is what this checks.
+        @test eltype(polyft_cvis_nufft(a32...)) === ComplexF64
+        F32 = polyft_cvis_nufft(a32...; T = Float32)
+        F64 = polyft_cvis_nufft(a64...)
+        @test eltype(F32) === ComplexF32
+        @test eltype(F64) === ComplexF64
+        # And following the inputs is one keyword away for a caller that wants it.
+        @test eltype(polyft_cvis_nufft(a32...; T = nufft_work_type(a32[1], a32[4]))) === ComplexF32
+        # The pinned reference stays double whatever it is handed, which is what makes it
+        # usable as the thing the single path is measured against.
+        @test eltype(polyft_cvis_nufft_f64(a32...)) === ComplexF64
+
+        # ACCURACY AGAINST THE EXACT KERNEL, which is neither of these: `:scalar` evaluates the
+        # closed-form polygon transform with no quadrature and no tolerance.
+        exact = let (pw, pn, xw, kx, ky) = a64
+            F = Vector{ComplexF64}(undef, length(kx)); pf = zeros(length(xw))
+            old = POLYFT_BACKEND[]
+            try
+                POLYFT_BACKEND[] = :scalar
+                compute_polyflux_and_cvis!(F, pf, kx, ky, ROTIR.precompute_k2_inv_im(kx, ky),
+                                           pw, pn, xw)
+            finally
+                POLYFT_BACKEND[] = old
+            end
+            F
+        end
+        err(F) = maximum(abs, ComplexF64.(F) .- exact) / maximum(abs, exact)
+        # MEASURED: 5.8e-10 double against 1.9e-6 single on lam And and 1.0e-5 here on
+        # polaris. The single figure is the transform's own floor rather than slack in the
+        # bound — `nufft_tol(Float32)` is already FINUFFT's single-precision limit, and double
+        # at that same 1e-6 gives 7.2e-8. Note it is LARGER than the quadrature's 6.8e-7, so
+        # in single precision the transform becomes the limiting term rather than the rule,
+        # which is the measurement behind not making it the default.
+        @test err(F64) < 1e-8
+        @test err(F32) < 3e-5
+        @test err(F32) > 100 * err(F64)
     end
 
     @testset "with_polyft_backend scopes the kernel" begin

@@ -106,7 +106,7 @@ Base.@kwdef mutable struct ShellState
     tessel::Base.RefValue{Symbol} = Ref(:healpix)   # :longlat is not wired yet
     nside_exp::Base.RefValue{Int} = Ref(3)   # log2(nside); 3 for a result, 2 to try something
     precision::Base.RefValue{DataType} = Ref{DataType}(Float32)
-    # WHO PICKS THE FORWARD KERNEL. `true` — the default — means the CODE PATH picks: `:nufft`
+    # WHO PICKS THE FORWARD KERNEL. `true` — the default — means the CODE PATH picks: `:t3`
     # for the interactive χ² and the derivative-free engines, which reach its branch through
     # `fused_cvis`, and `:turbo` for the gradient path and the samplers, which go through
     # `interferometric_chi2` / `shape_chi2_fg!` and have no `:nufft` branch to reach. `false`
@@ -1556,12 +1556,19 @@ the same image reproduces the same 4.97e-3, so it is the model rather than the t
 """
 shell_polyft_backends() = join((
     "auto\tAutomatic (per fit)\t" *
-    "let each code path pick: the quadrature kernel for this panel's χ² and for Nelder-Mead, " *
+    "let each code path pick: the type-3 kernel for this panel's χ² and for Nelder-Mead, " *
     "BOBYQA and Nautilus, which can reach it; the exact vectorised kernel for VMLMB, NUTS " *
     "and Pigeons, which cannot — their gradient goes through kernels that have no quadrature " *
     "branch, and it is 16x on the three of them. The first such fit LOADS LoopVectorization, " *
     "which pauses the window for a few seconds, once per session" *
     (ROTIR.turbo_available() ? " (already loaded)" : ""),
+    "t3\tQuadrature + ROTIR type 3\t" *
+    "the same Gauss quadrature as nufft, through ROTIR's own type-3 transform instead of " *
+    "FINUFFT: 0.20 ms at HEALPix 3 and 2.2 ms at 6 against 1.7 and 6.0, and more accurate " *
+    "(1.1e-10 against 2.4e-9 on polaris). It is also the only quadrature route with an " *
+    "ADJOINT, so unlike nufft a gradient fit can use it — but the SHAPE gradient also needs " *
+    "the vertex adjoint, which has no type-3 form and would fall back to the plain reference, " *
+    "so leave gradient fits and samplers on turbo",
     "nufft\tQuadrature + NUFFT (fastest)\t" *
     "Gauss-Legendre over each tessel folded into one type-3 NUFFT; 2.6 ms at HEALPix 3 and " *
     "4.1 ms at 5, where the exact kernels take 7 ms and 86 ms — the cost barely moves with " *
@@ -1613,44 +1620,88 @@ it. A few seconds of frozen window is the honest cost, and the panel says so bef
 It is only ever paid once — the next caller finds the extension loaded.
 """
 function _ensure_turbo!(sh::ShellState)
-    ROTIR.turbo_available() && return ""
-    # ONCE PER SESSION, INCLUDING THE FAILURE. A BUNDLE cannot load it at all: `app/build.jl`
-    # deliberately leaves LoopVectorization out of `app/Project.toml` because `create_app`
-    # builds a multiversioned sysimage while VectorizationBase specialises to the build
-    # machine, and the link aborts on an AVX512 reciprocal with no generic encoding — the
-    # reason is recorded in app/Project.toml. Without this flag every gradient fit and every
-    # sampler run in a bundle would retry the load and print the same sentence again.
-    TURBO_LOAD_FAILED[] &&
-        return "turbo is not available in this installation (LoopVectorization did not load)"
+    return _ensure_weakdep!(sh, :LoopVectorization, ROTIR.turbo_available, TURBO_LOAD_FAILED,
+                            "the turbo kernel",
+                            "A bundle cannot carry it: `create_app` builds a multiversioned " *
+                            "sysimage while VectorizationBase specialises to the build " *
+                            "machine, and the link aborts — see app/Project.toml",
+                            "ROTIRLoopVectorizationExt")
+end
+
+"""
+    _ensure_finufft!(sh) -> String
+
+The same, for FINUFFT and the `:nufft` kernel.
+
+FINUFFT became a weak dependency for two measured reasons: 464 ms on every `using ROTIR`
+whether or not anything transforms, and 455 MB of CUDA driver in an application bundle (14 %
+of it) by way of `cufinufft_jll`, for a GPU NUFFT nothing calls. `:nufft` is kept as the
+independent cross-check against `:t3`, which is the default and both faster and more accurate.
+"""
+function _ensure_finufft!(sh::ShellState)
+    return _ensure_weakdep!(sh, :FINUFFT, ROTIR.finufft_available, FINUFFT_LOAD_FAILED,
+                            "the nufft kernel",
+                            "A bundle deliberately ships without it: it would add 455 MB of " *
+                            "CUDA driver for a GPU transform nothing calls — see " *
+                            "ext/ROTIRFINUFFTExt.jl",
+                            "ROTIRFINUFFTExt")
+end
+
+"""
+    FINUFFT_LOAD_FAILED
+
+As [`TURBO_LOAD_FAILED`](@ref), for FINUFFT.
+"""
+const FINUFFT_LOAD_FAILED = Ref(false)
+
+"""
+    _ensure_weakdep!(sh, pkg, available, failed, what, bundle_note, extname) -> String
+
+Load a weak dependency on demand so a kernel that needs it can be selected mid-session.
+Returns `""` on success and a sentence on failure, which the caller reports and falls back from.
+
+ONCE PER SESSION, INCLUDING THE FAILURE, which is what `failed` is for: a bundle ships without
+these packages by design, and without the flag every fit would retry the load and print the
+same sentence again.
+
+SYNCHRONOUSLY, ON THE GUI THREAD, which is why every caller sits BEFORE `start_job!` rather
+than inside a worker closure: package loading takes locks the render thread also wants, and a
+`using` on a worker can deadlock against it. A few seconds of frozen window is the honest
+cost, and the panel says so before the click.
+"""
+function _ensure_weakdep!(sh::ShellState, pkg::Symbol, available::Function,
+                          failed::Base.RefValue{Bool}, what::AbstractString,
+                          bundle_note::AbstractString, extname::AbstractString)
+    available() && return ""
+    failed[] && return "$(what) is not available in this installation ($(pkg) did not load)"
     # ASKED BEFORE IT IS TRIED. `identify_package` resolves against the active project — the
     # same thing the `using` below would consult — so a bundle answers `nothing` here and gets
     # a sentence that says what is wrong instead of a caught `ArgumentError` from `require`.
-    if Base.identify_package("LoopVectorization") === nothing
-        TURBO_LOAD_FAILED[] = true
-        return "this installation does not ship LoopVectorization, so the turbo kernel is " *
-               "unavailable — the exact reference kernel is used instead. A bundle cannot " *
-               "carry it: see app/Project.toml"
+    if Base.identify_package(String(pkg)) === nothing
+        failed[] = true
+        return "this installation does not ship $(pkg), so $(what) is unavailable. " *
+               bundle_note
     end
-    console!(sh, "loading LoopVectorization for the turbo kernel (one-time)…")
+    console!(sh, "loading $(pkg) for $(what) (one-time)…")
     try
-        # Into `Main`, whose load path is the ACTIVE PROJECT — `bin`, which carries
-        # LoopVectorization as a direct dep for exactly this. An extension module resolves
-        # only the parent's deps plus its own triggers, so a `using` in here would not find a
-        # weakdep of ROTIR that is not one of ROTIRGUIExt's triggers. The binding is not what
-        # is wanted anyway: loading the package is what activates ROTIRLoopVectorizationExt
-        # and gives `_cvis_turbo!` and the two adjoints their methods.
-        @eval Main using LoopVectorization
+        # Into `Main`, whose load path is the ACTIVE PROJECT — `bin`, which carries these as
+        # direct deps for exactly this. An extension module resolves only the parent's deps
+        # plus its own triggers, so a `using` in here would not find a weakdep of ROTIR that
+        # is not one of ROTIRGUIExt's triggers. The binding is not what is wanted anyway:
+        # loading the package is what activates the extension and gives the stubs their
+        # methods.
+        Core.eval(Main, Expr(:using, Expr(:., pkg)))
         # The documented way to force extension activation. Not needed in practice — loading
-        # the trigger activates ROTIRLoopVectorizationExt synchronously — but harmless, and
-        # the check below is what actually reports a failure.
+        # the trigger activates the extension synchronously — but harmless, and the check
+        # below is what actually reports a failure.
         Base.retry_load_extensions()
     catch e
-        TURBO_LOAD_FAILED[] = true
-        return "turbo needs LoopVectorization, which failed to load: " * sprint(showerror, e)
+        failed[] = true
+        return "$(what) needs $(pkg), which failed to load: " * sprint(showerror, e)
     end
-    if !ROTIR.turbo_available()
-        TURBO_LOAD_FAILED[] = true
-        return "LoopVectorization loaded but ROTIRLoopVectorizationExt did not"
+    if !available()
+        failed[] = true
+        return "$(pkg) loaded but $(extname) did not"
     end
     return ""
 end
@@ -1666,22 +1717,28 @@ better than the quadrature's 6.8e-7 at HEALPix 3.
 function shell_set_polyft_backend(kind)
     sh = _sh()
     k = Symbol(_qmlstr(kind))
-    k in (:auto, :nufft, :turbo, :scalar) ||
-        return "backend must be auto, nufft, turbo or scalar"
+    k in (:auto, :t3, :nufft, :turbo, :scalar) ||
+        return "backend must be auto, t3, nufft, turbo or scalar"
     # AUTO IS NOT A KERNEL, so it does not go into `POLYFT_BACKEND`, which the library reads
     # and the test suite assigns to. It sets the process default back to the one the forward
     # paths want and lets each fit scope its own — and it deliberately does NOT load
     # LoopVectorization here: that cost belongs to the first fit that needs it, not to a click.
     if k === :auto
         sh.kernel_auto[] = true
-        ROTIR.POLYFT_BACKEND[] = :nufft
+        ROTIR.POLYFT_BACKEND[] = :t3
         sh.chi2key[] = nothing
-        console!(sh, "polyft backend: auto (nufft here, turbo for gradient fits and samplers)")
+        console!(sh, "polyft backend: auto (t3 here, turbo for gradient fits and samplers)")
         refresh_both!(sh)
         return "polyft backend: auto"
     end
     if k === :turbo
         err = _ensure_turbo!(sh)
+        isempty(err) || return err
+    end
+    if k === :nufft
+        # FINUFFT is a weak dependency now, so `:nufft` is loaded on demand exactly as
+        # `:turbo` is. `:t3` — the default — needs nothing.
+        err = _ensure_finufft!(sh)
         isempty(err) || return err
     end
     sh.kernel_auto[] = false
@@ -2742,6 +2799,12 @@ const STOP_AWARE = (:neldermead, :bobyqa)
 #     `shell_fit_start`, which calls `parametric_chi2` → `fused_cvis` → that branch. They are
 #     already on the fastest kernel there is (2.6/3.8/4.1 ms at HEALPix 3/4/5) and want
 #     nothing done to them.
+#   * `:t3` — ROTIR's own type 3 — is faster than `:nufft` everywhere and more accurate, and
+#     it is the only quadrature route with an adjoint. It is still NOT what a gradient fit
+#     wants: the shape gradient also calls `compute_adjoint_vertices!`, which computes
+#     ∂/∂vertex rather than a transpose and therefore has no type-3 form, so selecting `:t3`
+#     drops that kernel to the plain reference — MEASURED 3.07/12.0/48.7 ms at HEALPix 3/4/5
+#     against `:turbo`'s 0.41/1.57/6.37. Hence `:turbo` below, not `:t3`.
 #   * VMLMB (`fit_parametric` → `build_parametric_logπ`), NUTS and Pigeons all evaluate
 #     `interferometric_chi2`, and the shape route evaluates `shape_chi2_fg!`; both go through
 #     `_cvis_forward!` and the two adjoint kernels, NONE of which has a `:nufft` branch. Left

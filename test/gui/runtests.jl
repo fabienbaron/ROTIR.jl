@@ -1401,8 +1401,8 @@ end
     @test ROTIR.turbo_available()
     # SCOPED, not assigned: the panel is still on auto and the process default is untouched,
     # so the χ² this tab computes beside the fit is the one the panel says it is.
-    @test sh.kernel_auto[] && ROTIR.POLYFT_BACKEND[] === :nufft
-    @test ROTIR.polyft_backend() === :nufft
+    @test sh.kernel_auto[] && ROTIR.POLYFT_BACKEND[] === :t3
+    @test ROTIR.polyft_backend() === :t3
     # A FIT NO LONGER TOUCHES THE MODEL — the numbers are on the fit until Adopt is pressed —
     # so the radii are read off the recorded fit, and the model is checked to have stayed put.
     @test [m.params[n] for n in (:radius_x, :radius_y, :radius_z)] == before
@@ -1432,17 +1432,20 @@ end
 @testset "the polyft kernel is selectable" begin
     sh = fresh_shell()
     rows_ = rows(G.shell_polyft_backends())
-    @test length(rows_) == 4
-    # `auto` first and it is the DEFAULT, then the three in the order the measurements put
+    @test length(rows_) == 5
+    # `auto` first and it is the DEFAULT, then the four in the order the measurements put
     # them. The right kernel is a property of the code path — `:nufft` only has a branch in
-    # `fused_cvis`, so the gradient route cannot reach it — and no user can be expected to
-    # know that, so the panel picks by default and the three stay as cross-checks.
-    @test [cols(r)[1] for r in rows_] == ["auto", "nufft", "turbo", "scalar"]
+    # `fused_cvis`, so the gradient route cannot reach it at all — and no user can be expected
+    # to know that, so the panel picks by default and the rest stay as cross-checks.
+    #
+    # `t3` sits ahead of `nufft` because it is the faster and the more accurate of the two
+    # quadrature routes (0.20 ms against 1.7 at HEALPix 3; 1.1e-10 against 2.4e-9 on polaris).
+    @test [cols(r)[1] for r in rows_] == ["auto", "t3", "nufft", "turbo", "scalar"]
     @test G.shell_polyft_backend() == "auto"
     @test sh.kernel_auto[]
     # `auto` is not itself a kernel: the library Ref still names a real one, the one the
     # forward paths want.
-    @test ROTIR.POLYFT_BACKEND[] === :nufft
+    @test ROTIR.POLYFT_BACKEND[] === :t3
 
     # WHICH ENGINES GET WHICH KERNEL under auto. This is the whole point of the setting.
     for m in (:gradient, :hmc, :pigeons)
@@ -1463,12 +1466,12 @@ end
     @test all(G._fit_kernel(sh, m) === nothing
               for m in (:gradient, :hmc, :pigeons, :neldermead))
     @test G.shell_set_polyft_backend("rasterize") ==
-          "backend must be auto, nufft, turbo or scalar"
+          "backend must be auto, t3, nufft, turbo or scalar"
     # ALL THREE agree on a real χ². That is the only thing that makes offering a choice safe:
     # a backend that is fast and slightly wrong would bias every fit run through it.
     G.shell_open(LAM[1], "0"); G.shell_add_model(0)
     c_scalar = G.epoch_chi2(sh)[1].total
-    for b in ("turbo", "nufft")
+    for b in ("turbo", "nufft", "t3")
         # The RETURN and the selection, not only the number. This compared χ² alone, and
         # since all three agree, a backend that silently failed to be selected passed the
         # test — which is exactly what happened twice: once when `:turbo` moved into an
@@ -1495,9 +1498,14 @@ end
     # forced choice in place for whatever runs next.
     @test occursin("auto", G.shell_set_polyft_backend("auto"))
     @test sh.kernel_auto[]
-    @test ROTIR.POLYFT_BACKEND[] === :nufft
+    @test ROTIR.POLYFT_BACKEND[] === :t3
     @test G.shell_polyft_backend() == "auto"
     @test G._fit_kernel(sh, :hmc) === :turbo
+    # AND NOT `:t3` FOR A GRADIENT ROUTE, even though it is the faster forward kernel: the
+    # shape gradient also calls `compute_adjoint_vertices!`, which is ∂/∂vertex rather than a
+    # transpose and so has no type-3 form, and selecting `:t3` drops it to the plain reference
+    # — MEASURED 3.07/12.0/48.7 ms at HEALPix 3/4/5 against `:turbo`'s 0.41/1.57/6.37.
+    @test G._fit_kernel(sh, :gradient) !== :t3
 
     # AND WHEN TURBO CANNOT BE HAD. A BUNDLE ships without LoopVectorization by necessity —
     # `create_app` builds a multiversioned sysimage while VectorizationBase specialises to the

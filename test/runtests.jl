@@ -75,6 +75,8 @@ end
     # three mesh levels, three surface types, three datasets, and the degenerate cases.
     include(joinpath(TESTDIR, "test_fused_polyft.jl"))
 
+    include(joinpath(TESTDIR, "test_type3_nufft.jl"))
+
     # The binary forward model: the matrix-free route against the dense one it replaced.
     # AFTER the file above, which loads LoopVectorization — otherwise the `:turbo` case here
     # skips itself and the backend it is meant to pin goes untested.

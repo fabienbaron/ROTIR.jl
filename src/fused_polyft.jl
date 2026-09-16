@@ -84,7 +84,8 @@ function fused_cvis_parts(x, star, data; intensity_model::Symbol = :linear, band
     F = Vector{Complex{T}}(undef, length(kx))
     pf = zeros(T, length(indx))
     mpjx = Matrix(pjx); mpjy = Matrix(pjy)
-    if polyft_backend() === :nufft
+    bk = polyft_backend()
+    if bk === :nufft || bk === :t3
         # `polyflux` is the shoelace area and is needed for the flux normalisation whichever
         # backend runs, so it is computed here rather than inside the visibility kernel.
         @inbounds for q in 1:length(indx)
@@ -93,7 +94,8 @@ function fused_cvis_parts(x, star, data; intensity_model::Symbol = :linear, band
                               mpjx[q,3]*mpjy[q,4] - mpjx[q,4]*mpjy[q,3] +
                               mpjx[q,4]*mpjy[q,1] - mpjx[q,1]*mpjy[q,4])
         end
-        Fn = polyft_cvis_nufft(mpjx, mpjy, xw, kx, ky)
+        Fn = bk === :t3 ? type3_cvis(mpjx, mpjy, xw, kx, ky) :
+                          polyft_cvis_nufft(mpjx, mpjy, xw, kx, ky)
         return Complex{T}.(Fn), dot(pf, xw)
     end
     compute_polyflux_and_cvis!(F, pf, kx, ky, k2, mpjx, mpjy, xw)
@@ -103,7 +105,7 @@ end
 """
     POLYFT_BACKEND
 
-The PROCESS-WIDE forward kernel: `:nufft` (default), `:turbo`, or `:scalar`. A task can
+The PROCESS-WIDE forward kernel: `:t3` (default), `:nufft`, `:turbo`, or `:scalar`. A task can
 override it for its own duration with [`with_polyft_backend`](@ref); read the answer that
 applies here and now with [`polyft_backend`](@ref) rather than this Ref.
 
@@ -115,19 +117,34 @@ All three compute the SAME quantity and are asserted against each other in
 | `:scalar` | the reference, plain Julia               | 119 ms | 425 ms | 1472 ms |
 | `:turbo`  | the same sum, SIMD transcendentals       | 6.9 ms | 21.8 ms | 86 ms |
 | `:nufft`  | Gauss quadrature + type-3 NUFFT          | 2.6 ms | 3.8 ms | 4.1 ms |
+| `:t3`     | the same quadrature, ROTIR's own type 3  | 0.20 ms | 0.28 ms | 0.62 ms |
 
 `:scalar` and `:turbo` are EXACT — the closed-form polygon transform, no parameters.
-`:nufft` is a quadrature, accurate to 6.8e-7 at HEALPix 3 and 2.5e-9 above it, and its cost
-barely moves with the mesh because it is set by the source and target counts rather than their
-product. It is the default because those numbers say so, and because a fit is thousands of
-these.
+Both quadrature routes are accurate to a tolerance rather than exactly, and their cost barely
+moves with the mesh because it is set by the source and target counts rather than their
+product.
+
+`:t3` IS THE DEFAULT, and it is the default over `:nufft` on measurement rather than novelty:
+it is faster at every mesh level and in both precisions (0.20 ms against 1.7 at HEALPix 3, 2.3
+against 6.0 at HEALPix 6), MORE accurate on both test datasets (2.5e-11 against 5.8e-10 on
+lam And, 1.1e-10 against 2.4e-9 on polaris), needs no weak dependency, and is the only
+quadrature route with an adjoint. `:nufft` remains as the independent cross-check — it is a
+different implementation of the same idea through FINUFFT, which is what makes it worth
+keeping.
+
+`:t3` is the same quadrature through `src/type3_nufft.jl` instead of FINUFFT. It is faster than
+every other backend in double at every mesh level, more accurate than `:nufft` (2.5e-11 against
+5.8e-10), needs no weak dependency — and is the ONLY route with an adjoint, so it is the only
+one a gradient fit or a sampler can use. In SINGLE precision the picture differs: `:turbo`
+gains 3.5-5.6x from Float32 where `:t3` gains only 10-25 %, so `:turbo` wins the Float32
+adjoint at HEALPix 3-4 and `:t3` only from 5.
 
 `:turbo` is what to fall back on if a mesh is coarse enough to worry about the quadrature (see
 `polyft_cvis_nufft`: a 2-point rule is only good to 1.6e-3 at HEALPix 3), and `:scalar` is the
 definition the other two are tested against — worth being able to select without rebuilding
 when a fit looks wrong.
 """
-const POLYFT_BACKEND = Ref(:nufft)
+const POLYFT_BACKEND = Ref(:t3)
 
 """
     POLYFT_BACKEND_SCOPE
@@ -228,7 +245,7 @@ runtime dispatch left anywhere in the differentiable log-posterior, reported fro
 `_cvis_forward!`, the innermost visibility kernel.
 
 To be accurate about what that cost: the call sits inside `if polyft_backend() === :turbo`,
-and the default backend is `:nufft`, so the default path never reaches it. JET sees it because
+and the default backend is `:t3`, so the default path never reaches it. JET sees it because
 it analyses both branches. The fix is worth making for the `:turbo` path, which the GUI does
 offer, and because a clean report is what makes the next audit readable — not because the
 default was paying for it.
@@ -245,7 +262,7 @@ function _cvis_forward!(F, kx, ky, k2, pjx, pjy, xw)
             error("the :turbo kernel needs LoopVectorization loaded: add " *
                   "`using LoopVectorization` to this session. It is a weak dependency " *
                   "because loading it costs 1.8 s of GUI startup by invalidating OITOOLS' " *
-                  "precompiled plot pipeline, and `:nufft` — the default — is faster anyway.")
+                  "precompiled plot pipeline, and `:t3` — the default — is faster anyway.")
         # `invokelatest`, and it is NOT optional. `_cvis_turbo!` gets its methods when
         # LoopVectorization is loaded, and the GUI loads it ON DEMAND — in the middle of a
         # session, from a callback the Qt event loop dispatches. Methods added after the
@@ -264,7 +281,7 @@ end
 
 # `_cvis_turbo!` lives in src/turbo_polyft.jl, provided by ext/ROTIRLoopVectorizationExt.jl.
 # See that file for why it is not here: loading LoopVectorization costs 1.8 s of GUI startup,
-# and since `:nufft` became the default it buys a cross-check rather than the speed.
+# and since a quadrature route became the default it buys a cross-check rather than the speed.
 
 """
     _cvis_scalar!(F, kx, ky, k2_inv_im, proj_west, proj_north, xw)
@@ -320,13 +337,21 @@ Adjoint pass: compute gradient of chi2 w.r.t. weighted pixel values.
     k2_inv_im::Vector{Complex{T}},
     proj_west::AbstractMatrix{T}, proj_north::AbstractMatrix{T}, polyflux::Vector{T}) where T
 
-    if polyft_backend() === :turbo && turbo_available()
+    bk = polyft_backend()
+    if bk === :turbo && turbo_available()
         # `invokelatest` for the same reason the forward needs it: the GUI can load
         # LoopVectorization mid-session, and methods added after this frame's world age are
         # invisible to a direct call.
         return Base.invokelatest(_adj_cvis_turbo!, grad_xw, adj, kx, ky, k2_inv_im,
                                  proj_west, proj_north)
     end
+    # NO `:t3` BRANCH HERE, deliberately, even though `type3_cvis_adj!` exists and is tested.
+    # It is the adjoint of the QUADRATURE operator, and it is only meaningful paired with the
+    # quadrature FORWARD — but every caller of this function (`shape_chi2_fg!`, the
+    # `interferometric_chi2` rrule, `fused_spheroid_chi2_fg`) computes its forward with
+    # `compute_polyflux_and_cvis!`, which is the EXACT closed form. Wiring it in would pair an
+    # exact value with an approximate gradient of a different operator. It is exported for a
+    # future gradient route built on `fused_cvis`, which is where it would be consistent.
     nuv = length(kx)
     npix = size(proj_west, 1)
     grad_xw .= zero(T)

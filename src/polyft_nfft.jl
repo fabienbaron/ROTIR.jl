@@ -246,8 +246,13 @@ radians (`ngauss` beyond ~6 buys little on an oscillatory integrand).
 `target_rad = 2.5` is CALIBRATED, not chosen: on polaris the spans run 16.5 rad at HEALPix 1
 down to 1.3 at HEALPix 5, and the `nsub` this returns for each is the smallest that reaches
 the NUFFT's own tolerance — 2.1e-9 to 2.5e-9 at every level, where a fixed `nsub = 1` ranges
-from 2.0e-2 to 2.5e-9. Uniform accuracy across the mesh is the property that makes the backend
-safe to default to.
+from 2.0e-2 to 2.5e-9. Uniform accuracy across the mesh is the property that made this
+backend safe to default to.
+
+NOTE THAT `:nufft` IS NO LONGER THE DEFAULT — `:t3` is, and it reads its rule from
+[`quadrature_for_type3`](@ref) instead, which raises the Gauss ORDER where this one
+subdivides. This rule is unchanged so that `:nufft` keeps behaving exactly as it did and
+remains a usable independent cross-check.
 """
 function quadrature_for(proj_west::AbstractMatrix, proj_north::AbstractMatrix,
                         kx::AbstractVector, ky::AbstractVector; target_rad::Real = 2.5)
@@ -285,20 +290,156 @@ product of the two, so it overtakes the direct kernel as the mesh is refined: ME
 is what makes the accuracy uniform across meshes: 2.1e-9 to 2.5e-9 from HEALPix 1 to 5 on
 polaris, against 2.0e-2 to 2.5e-9 for a fixed 1-subdivision rule. Pass them explicitly only to
 override that.
+
+# Precision
+
+`T` is the float type the transform RUNS in, and it defaults to `Float64` even when the mesh
+is `Float32`. That pin is DELIBERATE and predates this note — it is here for accuracy — and
+the numbers below are the measurement that backs it, recorded because the file carried the
+choice without the reason and it read as an accidental promotion.
+
+Single precision is available (`T = Float32`, or `T = nufft_work_type(proj_west, kx)` to
+follow the inputs) and it is correct; it is simply not worth taking by default. MEASURED on one
+lam And epoch, Float32 inputs throughout:
+
+| | HEALPix 3 | HEALPix 5 |
+|---|---|---|
+| `T = Float64` | 1.720 ms, 1982 KiB | 2.279 ms, 3440 KiB |
+| `T = Float32` | 1.755 ms, 1270 KiB | 2.150 ms, 1999 KiB |
+
+So single buys 35-42 % of the memory and, at the mesh sizes in use, nothing at all in time —
+because the type-3's cost here is split between `setpts`, which bins and sorts the points and
+is index-bound rather than arithmetic-bound (~0.5 ms, unchanged by the word size), and an
+`exec` whose FFT grid is set by the space-bandwidth product rather than by the precision.
+
+What it costs is accuracy, against the exact closed-form kernel: 5.8e-10 in double against
+1.9e-6 in single on lam And and 1.0e-5 on polaris. That is the Float32 type-3's own floor and
+not slack — `nufft_tol(Float32)` is already at FINUFFT's single-precision limit, and asking
+double for the same 1e-6 gives 7.2e-8. It also puts the TRANSFORM above the quadrature's
+6.8e-7 as the limiting term, which inverts the error budget the adaptive rule was built for.
+
+So the pin stands. `Float32` is the right choice only where memory is the binding constraint
+rather than the last four digits.
+
+What WAS broken, separately from the default, is that single precision could not be reached at
+all: the targets were written `collect(Float64, 2π .* kx)`, and `2π` is a `Float64`, so a
+`Float32` request promoted anyway. That is fixed — the constant is typed and the work goes
+through a barrier — which is what makes `T = Float32` mean something when it is asked for.
 """
 function polyft_cvis_nufft(proj_west::AbstractMatrix, proj_north::AbstractMatrix,
                            xw::AbstractVector, kx::AbstractVector, ky::AbstractVector;
                            ngauss::Union{Nothing,Int} = nothing,
-                           nsub::Union{Nothing,Int} = nothing, tol::Real = 1e-9)
+                           nsub::Union{Nothing,Int} = nothing,
+                           T::Type = Float64,
+                           tol::Real = nufft_tol(T))
     # ADAPTIVE by default. A fixed rule is accurate at one mesh and not at another, and the
     # caller has no way to know which — `quadrature_for` reads it off the geometry.
     ag, as = quadrature_for(proj_west, proj_north, kx, ky)
     ng = ngauss === nothing ? ag : ngauss
     ns = nsub   === nothing ? as : nsub
+    # THROUGH A BARRIER, because `T::Type = …` in a keyword list without a `where T` infers
+    # `DataType` rather than the type itself, and everything built from it — `T(2π)`, the
+    # sample arrays — comes back `Any`. Same fix as `finish_star`/`_finish_star`.
+    return _polyft_cvis_nufft(T, proj_west, proj_north, xw, kx, ky, ng, ns, tol)
+end
+
+function _polyft_cvis_nufft(::Type{T}, proj_west, proj_north, xw, kx, ky,
+                            ngauss::Int, nsub::Int, tol::Real) where {T}
     xs, ys, fs = build_gauss_samples(proj_west, proj_north, xw;
-                                     ngauss = ng, nsub = ns, T = Float64)
+                                     ngauss = ngauss, nsub = nsub, T = T)
+    # TYPED, and this is what makes the Float32 path possible at all. `2π .* kx` on a Float32 `kx`
+    # returns Float64 — `2π` is a Float64 — so writing the targets the obvious way silently
+    # promoted the transform and every later array with it. Built element by element in `T`.
+    twopi = T(2π)
+    sk = Vector{T}(undef, length(kx)); tk = Vector{T}(undef, length(ky))
+    @inbounds for i in eachindex(kx)
+        sk[i] = twopi * T(kx[i])
+        tk[i] = twopi * T(ky[i])
+    end
+    finufft_available() ||
+        error("the :nufft kernel needs FINUFFT loaded: add `using FINUFFT` to this session. " *
+              "It is a weak dependency because loading it costs 464 ms on every `using ROTIR` " *
+              "and drags 455 MB of CUDA driver into an application bundle, and `:t3` — the " *
+              "default — is both faster and more accurate. `:nufft` is kept as the " *
+              "independent cross-check, not as the working kernel.")
     # FINUFFT type 3 computes Σ_j c_j exp(iσ(s_k x_j + t_k y_j)); σ = -1 with the 2π folded
     # into the targets gives exp(-2πi k·r), which is the polygon FT's convention.
-    return FINUFFT.nufft2d3(xs, ys, ComplexF64.(fs), -1, Float64(tol),
-                            collect(Float64, 2π .* kx), collect(Float64, 2π .* ky))
+    #
+    # `invokelatest` for the same reason `_cvis_forward!` needs it on `:turbo`: the GUI loads
+    # FINUFFT ON DEMAND, in the middle of a session, from a callback the Qt event loop
+    # dispatches — and methods added after the calling frame's world age are invisible to a
+    # direct call. The cost is one dynamic dispatch per visibility computation, not per element.
+    return Base.invokelatest(_finufft2d3, xs, ys, fs, -1, T(tol), sk, tk)
 end
+
+# Provided by ext/ROTIRFINUFFTExt.jl. Declared here so `:nufft` is a name this package knows
+# and the failure without FINUFFT is a sentence rather than a MethodError on an underscored
+# internal — the same arrangement as `_cvis_turbo!` in src/fused_polyft.jl.
+function _finufft2d3 end
+
+"""
+    FINUFFT_OK
+
+Set to `true` by `ROTIRFINUFFTExt.__init__` when that extension loads. See
+[`finufft_available`](@ref).
+"""
+const FINUFFT_OK = Ref(false)
+
+"""
+    finufft_available() -> Bool
+
+Whether the `:nufft` kernel will work here, i.e. whether `using FINUFFT` has loaded
+ROTIRFINUFFTExt.
+
+A CACHED FLAG set by the extension, not a `methods` lookup — same reasoning as
+[`turbo_available`](@ref), and the same staleness trap avoided: the GUI can load FINUFFT
+mid-session, so anything cached at ROTIR's own load time would be wrong afterwards.
+"""
+finufft_available() = FINUFFT_OK[]
+
+"""
+    nufft_work_type(proj_west, kx) -> Type
+
+The float type the type-3 runs in: `Float32` when BOTH the mesh and the uv coordinates are
+`Float32`, and `Float64` otherwise.
+
+FINUFFT supports exactly these two (`FINUFFT.finufftReal`), so anything else — `Float16`,
+`BigFloat` — resolves to `Float64` rather than failing inside the C call.
+"""
+function nufft_work_type(proj_west, kx)
+    T = promote_type(float(real(eltype(proj_west))), float(real(eltype(kx))))
+    return T === Float32 ? Float32 : Float64
+end
+
+"""
+    nufft_tol(::Type{T}) -> Real
+
+The tolerance to ask FINUFFT for when working in `T`.
+
+`1e-9` in double and `1e-6` in single, and the single-precision figure is a FLOOR rather than a
+preference: FINUFFT's single-precision kernels cannot deliver better than about `1e-6`, and
+asking for less simply widens the spreading kernel for an accuracy the arithmetic cannot hold.
+
+It is also not the binding term. The QUADRATURE's own error is 6.8e-7 at HEALPix 3 (see
+[`quadrature_for`](@ref)), so at that mesh the two are the same size and the transform is not
+what limits the answer.
+"""
+nufft_tol(::Type{Float32}) = 1.0e-6
+nufft_tol(::Type{T}) where {T} = 1.0e-9
+
+"""
+    polyft_cvis_nufft_f64(proj_west, proj_north, xw, kx, ky; kwargs...)
+
+[`polyft_cvis_nufft`](@ref) pinned to `Float64` — the reference the single-precision path is
+measured against, in accuracy and in speed.
+
+A PINNED ENTRY POINT rather than a frozen copy of the old body. The question it exists to
+answer is "what does dropping to Float32 cost, for the same algorithm", and a copy would
+answer it against whatever the algorithm used to be as soon as either changed. The exact
+reference for ACCURACY is neither of these: it is the closed-form kernel (`:scalar`/`:turbo`),
+which evaluates the polygon transform with no quadrature and no tolerance at all.
+"""
+polyft_cvis_nufft_f64(proj_west::AbstractMatrix, proj_north::AbstractMatrix,
+                      xw::AbstractVector, kx::AbstractVector, ky::AbstractVector;
+                      kwargs...) =
+    polyft_cvis_nufft(proj_west, proj_north, xw, kx, ky; T = Float64, kwargs...)

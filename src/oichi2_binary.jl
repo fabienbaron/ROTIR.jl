@@ -140,7 +140,7 @@ function binary_cvis(x1, star1, x2, star2, phase_shift;
     # MATRIX-FREE when `setup_oi!` has not been run, exactly as `observables` chooses for a
     # single star — and it needs `data` to do it, since the uv points are what the transform is
     # evaluated at. Whichever `POLYFT_BACKEND[]` is selected then applies to a binary too:
-    # :nufft (the default), :turbo or :scalar.
+    # :t3 (the default), :nufft, :turbo or :scalar.
     #
     # The dense route stays for the case it was built for — imaging, where the geometry is
     # fixed and the same matrix is reused over hundreds of iterations.

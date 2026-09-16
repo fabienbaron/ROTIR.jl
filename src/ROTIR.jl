@@ -16,7 +16,6 @@ using NLopt
 using Printf
 using PrecompileTools
 using ChainRulesCore
-import FINUFFT
 import FITSIO
 import FITSIO: read_header
 import Dates
@@ -56,6 +55,7 @@ include("orbit_fit.jl");
 # live in ext/ROTIRUltraNestExt.jl.
 include("rasterize.jl");
 include("polyft_nfft.jl");
+include("type3_nufft.jl");
 include("oiplot_spheroid_core.jl");  # mesh geometry shared by both plotting back-ends
 include("animation.jl");             # pure: frame maps, value ranges, ffmpeg driver
 
@@ -314,6 +314,13 @@ export rasterize_polygon_image!, rasterize_polygon_image, rasterize_adjoint!
 
 # NFFT (polygon -> Fourier grid via Gauss-Legendre quadrature + NFFT)
 export build_gauss_samples, polyft_nfft_forward, polyft_nfft_image, polyft_cvis_nufft, quadrature_for
+export polyft_cvis_nufft_f64, nufft_work_type, nufft_tol, finufft_available
+
+# A type-3 NUFFT written for the polygon transform: mesh-independent, and the only route with
+# an ADJOINT, which is what a gradient fit or a sampler needs.
+export Type3Plan, plan_type3, type3_quads!, type3_quads_adj!, type3_points!
+export type3_cvis, type3_cvis_adj!, type3_plan_for, quadrature_for_type3, t3_gauss_rule
+export type3_psihat_fit_error, es_kernel, es_kernel_ft
 
 # Shape gradients (joint shape + map optimization)
 export rotation_matrix, dR_dinc, dR_dPA
@@ -398,6 +405,12 @@ function __init__()
     catch err
         @debug "ROTIR: could not force single-threaded FFTW/NFFT" err
     end
+    # A CACHED TYPE-3 PLAN MUST NOT SURVIVE PRECOMPILATION. `Type3Plan` holds an FFTW plan,
+    # which is a pointer into a C library, and `@compile_workload` mutations to global state
+    # DO get serialised into the image — so a plan built during precompilation would come back
+    # as a dangling pointer in every later session. The workload clears the cache itself; this
+    # is the belt to that braces, and it costs one `empty!` on an empty Dict.
+    empty!(TYPE3_PLANS)
 end
 
 include("precompile.jl")

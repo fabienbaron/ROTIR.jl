@@ -73,6 +73,15 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 # bundle and not a rounding error. `_ensure_turbo!` in the GUI detects the absence once per
 # session (via `identify_package`, before trying to load) and says so rather than retrying.
 #
+# FINUFFT IS NOW ABSENT TOO, and that is the single largest saving in this file. It was never
+# listed here — it arrived as a hard dependency of ROTIR, and with it
+# `cufinufft_jll -> CUDA_Runtime_jll -> CUDA_Driver_jll`: 455 MB of NVIDIA driver, 14 % of a
+# 3.2 GB bundle, for a GPU NUFFT the application never calls. The artifact is not marked lazy
+# so `include_lazy_artifacts = false` could not exclude it, and deleting it after the build
+# kills startup inside `CUDA_Driver_jll.__init__` (tested). ROTIR's `:nufft` backend now lives
+# behind ROTIRFINUFFTExt, so a bundle simply does not offer it — which costs nothing, because
+# `:t3` is the default and is both faster at every mesh level and more accurate.
+#
 # PythonCall and PythonPlot are deliberately absent: they would pull a ~1.6 GB Conda
 # environment and map a SECOND Qt into the process, which is the conflict `check_qt_conflict`
 # exists to diagnose. The application therefore ships without UltraNest (Nautilus covers nested
