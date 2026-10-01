@@ -7,8 +7,7 @@ import OITOOLS: OIdata,
     DataBlocks, data_blocks, resample_blocks, block_counts, block_weights,
     apply_block_counts, apply_block_weights, perturb_data,
     BootstrapResult, bootstrap_driver,
-    visibility_ud, visibility_ldlin, visibility_ldquad, visibility_ldpow,
-    visibility_Gaussian,
+    dict_to_model, model_to_vis,
     cvis_to_chi2_f, cvis_to_chi2_fg
 using Statistics
 using LinearAlgebra
@@ -228,8 +227,10 @@ export ParametricLayout, parametric_layout, layout_theta, layout_merge,
 export parametric_posterior_spec
 # Analytic component visibilities — useful for quick parametric fits (e.g. per-epoch
 # binary astrometry) alongside ROTIR's tessellated surface models.
-export visibility_ud, visibility_ldlin, visibility_ldquad, visibility_ldpow
-export visibility_Gaussian
+# NOT re-exported any more: OITOOLS 0.15 removed the standalone `visibility_*` functions
+# (its commit 6f83ff4), so ROTIR cannot provide them either. `src/orbit_fit.jl` now goes
+# through OITOOLS' model API; users who called `ROTIR.visibility_ud` should use
+# `dict_to_model`/`model_to_vis`, re-exported above.
 
 # Tessellation
 export tessellation

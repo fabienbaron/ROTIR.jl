@@ -23,7 +23,11 @@ makedocs(;
             "Conventions"             => "guides/conventions.md",
             "Tessellation"            => "guides/tessellation.md",
             "Surface Types"           => "guides/surfaces.md",
-            "Model Atmospheres"       => "guides/atmospheres.md",
+            "Stellar Atmosphere models" => [
+                "Overview"             => "guides/atmospheres.md",
+                "Korg and MARCS"       => "guides/atmospheres_korg.md",
+                "Kurucz ATLAS9"        => "guides/atmospheres_kurucz.md",
+            ],
             "Parametric Fitting"      => "guides/parametric_fitting.md",
             "Image Reconstruction"    => "guides/reconstruction.md",
             "Direct Imaging Methods"  => "guides/imaging_methods.md",

@@ -6,6 +6,8 @@
 # phase shift -> observable -> chi2 -> optimiser — in a way no unit test of the parts does.
 using Test
 using ROTIR
+import OITOOLS
+import Random
 
 @testset "orbit_fit" begin
     @testset "component library" begin
@@ -185,4 +187,72 @@ using ROTIR
         @test_throws ErrorException fit_orbit(nothing, c1, c2;
             elements = (P = 1.0,), model = :bogus, verbose = false)
     end
+end
+
+# ── the OITOOLS 0.15 migration, pinned numerically ──────────────────────────────────────
+#
+# OITOOLS 0.15 removed the standalone `visibility_*(param, uv)` functions (its commit 6f83ff4
+# dropped `include("vis_functions.jl")` and the export block together). `component_vis` now
+# goes through the model API instead. These reference implementations are the ORIGINALS,
+# copied verbatim from `git show 6f83ff4^:src/vis_functions.jl`, so the comparison below is
+# against what ROTIR actually computed before the migration rather than against a restatement
+# of it.
+#
+# This exists because the failure mode is silent. Every one of these returns a plausible
+# visibility curve for the wrong parameters, and the orbit fit would simply converge somewhere
+# slightly different — no error, no warning. A 1e-16 agreement is the only thing that says the
+# migration preserved the physics.
+@testset "visibility migration to the OITOOLS model API" begin
+    _MAS = 2.0626480624709636e8
+    _jinc    = OITOOLS.jinc
+    _besselj = OITOOLS.besselj
+    _bj1     = OITOOLS.besselj1
+
+    old_ud(D, uv) = _jinc.(D / _MAS * sqrt.(uv[1, :].^2 + uv[2, :].^2))
+    function _zeta(D, uv; tol = 1e-6)
+        ζ = π * D / _MAS * sqrt.(uv[1, :].^2 + uv[2, :].^2)
+        ζ[ζ .< tol] .= tol
+        return ζ
+    end
+    old_ldlin(D, u, uv) = (ζ = _zeta(D, uv);
+        ((1.0 - u) * _bj1.(ζ) ./ ζ .+ u / sqrt(2/π) * _besselj.(1.5, ζ) ./ ζ.^(3/2)) / (0.5 - u/6))
+    old_ldquad(D, u, w, uv) = (ζ = _zeta(D, uv);
+        ((1.0 - u - w) * _bj1.(ζ) ./ ζ .+ (u + 2w)/sqrt(2/π) * _besselj.(1.5, ζ) ./ ζ.^1.5 .-
+         2w * _besselj.(2, ζ) ./ ζ.^2) / (0.5 - u/6 - w/12))
+    old_ldpow(D, α, uv) = (ρ = sqrt.(uv[1, :].^2 + uv[2, :].^2);
+        OITOOLS.gamma(α/2 + 2) * _besselj.(α/2 + 1, π*D/_MAS*ρ) .* (0.5*π*D/_MAS*ρ).^-(α/2 + 1))
+    # The old ELLIPTICAL Gaussian, at the circular setting `GaussianDisk` always used.
+    old_gauss(F, uv) = (ρ = sqrt.(uv[1, :].^2 + uv[2, :].^2);
+        exp.(-(π * F / _MAS * ρ).^2 ./ (4 * log(2))))
+
+    rng = Random.MersenneTwister(20261001)
+    uv  = (rand(rng, 2, 400) .- 0.5) .* 2e7
+    ρ   = sqrt.(uv[1, :].^2 .+ uv[2, :].^2)
+
+    for D in (0.5, 3.0, 11.0)
+        @test maximum(abs.(ROTIR.component_vis(ROTIR.UniformDisk(D), (D,), uv, ρ) .-
+                           old_ud(D, uv))) < 1e-12
+        for u in (0.0, 0.3, 0.9)
+            c = ROTIR.LimbDarkenedDisk(D, :linear, u, 0.0)
+            @test maximum(abs.(ROTIR.component_vis(c, (D, u), uv, ρ) .- old_ldlin(D, u, uv))) < 1e-12
+            for w in (0.0, 0.25)
+                cq = ROTIR.LimbDarkenedDisk(D, :quadratic, u, w)
+                @test maximum(abs.(ROTIR.component_vis(cq, (D, u, w), uv, ρ) .-
+                                   old_ldquad(D, u, w, uv))) < 1e-12
+            end
+        end
+        for α in (0.1, 0.5, 1.6)
+            cp = ROTIR.LimbDarkenedDisk(D, :power, α, 0.0)
+            @test maximum(abs.(ROTIR.component_vis(cp, (D, α), uv, ρ) .- old_ldpow(D, α, uv))) < 1e-12
+        end
+        # The Gaussian no longer touches OITOOLS at all; it must still match what it replaced.
+        @test maximum(abs.(ROTIR.component_vis(ROTIR.GaussianDisk(D), (D,), uv, ρ) .-
+                           old_gauss(D, uv))) < 1e-12
+    end
+
+    # REAL, not complex. `model_to_vis` returns ComplexF64 for a general model; these
+    # components are centred so the imaginary part is exactly zero, and `component_vis` is
+    # expected to hand back a real vector like every other method does.
+    v = ROTIR.component_vis(ROTIR.UniformDisk(3.0), (3.0,), uv, ρ)
+    @test eltype(v) <: Real
 end

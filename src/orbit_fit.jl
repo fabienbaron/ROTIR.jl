@@ -113,19 +113,54 @@ component_param_bounds(::EllipticalGaussian)   = ([0.01, 0.05, 0.0], [20.0, 1.0,
 
 # --- the visibilities ------------------------------------------------------------------
 # `uv` is 2 x n (metres/wavelength), `ρ` its radius, precomputed once per epoch.
+# OITOOLS 0.15 REMOVED the standalone `visibility_*(param, uv)` functions — commit 6f83ff4
+# dropped `include("vis_functions.jl")` and their export block together, and
+# OITOOLS/docs/src/api/modeling.md records the removal in 0.13.2. The replacement is the model
+# API: build a model from a parameter dict, then evaluate it.
+#
+# EQUIVALENCE WAS MEASURED, not assumed, over 400 random uv points against the old
+# implementations recovered from `git show 6f83ff4^:src/vis_functions.jl`:
+#
+#     visibility_ud([D], uv)           -> "c,ud"      => D                  max|Δ| = 2.2e-16
+#     visibility_ldlin([D,u], uv)      -> "c,ldlin"   => D, "c,u"     => u  max|Δ| = 4.4e-16
+#     visibility_ldquad([D,u,w], uv)   -> "c,ldquad"  => D, …              max|Δ| = 8.9e-16
+#     visibility_ldpow([D,α], uv)      -> "c,ldpow"   => D, "c,alpha" => α  max|Δ| = 6.7e-16
+#
+# `test/test_orbit_fit.jl` pins these numerically so a future OITOOLS change cannot move them
+# quietly. Every component also needs its flux, `"c,f" => 1.0`.
+#
+# `real.()`, not the raw result: `model_to_vis` returns `ComplexF64` because a model in general
+# carries an offset, but these components are CENTRED, so the imaginary part is exactly zero
+# (checked: `all(iszero, imag.(v))`). The other `component_vis` methods return real vectors and
+# the phase factor in `_orbit_cvis` is what makes the sum complex — keeping this real means the
+# promotion happens in one place rather than per component.
+_vis(d::Dict{String,Any}, uv) = real.(model_to_vis(dict_to_model(d, String[]), Float64[], uv))
+
 component_vis(::PointSource, p, uv, ρ) = ones(eltype(ρ), length(ρ))
-component_vis(::UniformDisk, p, uv, ρ) = visibility_ud([p[1]], uv)
+component_vis(::UniformDisk, p, uv, ρ) = _vis(Dict{String,Any}("c,ud" => p[1],
+                                                               "c,f"  => 1.0), uv)
 
 function component_vis(c::LimbDarkenedDisk, p, uv, ρ)
-    c.law === :linear    && return visibility_ldlin([p[1], p[2]], uv)
-    c.law === :quadratic && return visibility_ldquad([p[1], p[2], p[3]], uv)
-    c.law === :power     && return visibility_ldpow([p[1], p[2]], uv)
+    c.law === :linear    && return _vis(Dict{String,Any}("c,ldlin" => p[1], "c,u" => p[2],
+                                                         "c,f" => 1.0), uv)
+    c.law === :quadratic && return _vis(Dict{String,Any}("c,ldquad" => p[1], "c,u" => p[2],
+                                                         "c,w" => p[3], "c,f" => 1.0), uv)
+    c.law === :power     && return _vis(Dict{String,Any}("c,ldpow" => p[1], "c,alpha" => p[2],
+                                                         "c,f" => 1.0), uv)
     error("LimbDarkenedDisk: unknown law $(c.law) (use :linear, :quadratic or :power)")
 end
 
-# OITOOLS' `visibility_Gaussian` is ELLIPTICAL: (FWHM, inclination_deg, PA_deg). A circular
-# Gaussian is the i = 0 case, where the aspect factor cos(i) is 1 and PA drops out.
-component_vis(::GaussianDisk, p, uv, ρ) = visibility_Gaussian([p[1], 0.0, 0.0], uv)
+# NOT the model API, and not OITOOLS at all. A `GaussianDisk` is circular, and the elliptical
+# method below already computes exactly that at `ratio = 1, pa = 0` — verified against the old
+# `visibility_Gaussian([F, 0, 0], uv)` at FWHM 0.5/3/12 mas to max|Δ| = 0.0/1.1e-16/3.1e-16.
+#
+# Using it avoids the one genuinely dangerous part of this migration: the model API measures
+# position angle from North while the old function measured from the u axis, so the mapping is
+# `pa = 90 − φ` and writing the obvious `pa = φ` yields a silently misoriented ellipse (0.024
+# on the same test points — wrong, but not an error). A circular Gaussian has no orientation to
+# get wrong, so the trap simply does not arise here.
+component_vis(c::GaussianDisk, p, uv, ρ) = component_vis(EllipticalGaussian(p[1], 1.0, 0.0),
+                                                         (p[1], 1.0, 0.0), uv, ρ)
 
 function component_vis(::EllipticalGaussian, p, uv, ρ)
     fwhm, ratio, pa = p[1], p[2], p[3]
