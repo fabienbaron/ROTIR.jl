@@ -13,7 +13,8 @@ using LinearAlgebra
 using Printf
 
 import ROTIR: fit_parametric, bootstrap_parametric, default_parametric_bounds,
-              parametric_param_names, parametric_free_indices, build_parametric_logπ
+              parametric_param_names, parametric_free_indices, build_parametric_logπ,
+              parametric_layout, layout_free_indices, ParametricLayout, θindex
 
 """
     fit_parametric(data_epochs, tessels, tepochs, base_params; kwargs...) -> (θ̂, chi2r, info)
@@ -53,6 +54,8 @@ function fit_parametric(data_epochs::AbstractVector, tessels, tepochs, base_para
     tpole_free      ::Bool   = false,
     gravity_law              = nothing,
     logprior                 = nothing,
+    provider                 = nothing,
+    layout                   = nothing,
     maxiter         ::Int    = 200,
     gtol                     = (0.0, 1e-6),
     xtol                     = (0.0, 1e-9),
@@ -62,20 +65,24 @@ function fit_parametric(data_epochs::AbstractVector, tessels, tepochs, base_para
 )
     T  = eltype(tessels.unit_xyz)     # vonzeipel_map_and_derivs needs one shared type
     θ  = collect(T, θ0)
-    dlb, dub = default_parametric_bounds(; tpole_free=tpole_free)
-    length(θ) == length(dlb) ||
-        error("fit_parametric: θ0 has $(length(θ)) entries, expected $(length(dlb)) " *
-              "for tpole_free=$tpole_free")
-    lower = collect(T, lb === nothing ? dlb : lb)
-    upper = collect(T, ub === nothing ? dub : ub)
+    # The layout is the single source of θ's length, order and bounds. Passing one is how a
+    # fit reaches the parameters the legacy 7-vector has no room for — `d` above all, which
+    # is what makes a model-atmosphere `logg` fittable.
+    L = layout === nothing ? parametric_layout(; tpole_free=tpole_free) : layout
+    length(θ) == length(L) ||
+        error("fit_parametric: θ0 has $(length(θ)) entries, expected $(length(L)) " *
+              "for the layout $(L.names)")
+    lower = collect(T, lb === nothing ? L.lower : lb)
+    upper = collect(T, ub === nothing ? L.upper : ub)
 
-    idx = parametric_free_indices(free; tpole_free=tpole_free)
+    idx = layout_free_indices(L, free)
 
     # Likelihood only: the prior (if any) is added to the objective, never to χ².
     logπ = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                  intensity_model=intensity_model, band=band,
                                  κ=κ, GM=GM, tpole_free=tpole_free,
-                                 gravity_law=gravity_law, logprior=nothing)
+                                 gravity_law=gravity_law, logprior=nothing,
+                                 provider=provider, layout=L)
     # Scale the objective by 1/npoints. χ² here is O(10⁶) and its gradient O(10⁵); at that
     # magnitude vmlmb's bound-constrained line search trips its own `stp == ls.stp`
     # assertion. A uniform rescale moves neither the minimiser nor the relative gradient
@@ -152,6 +159,8 @@ function bootstrap_parametric(data_epochs::AbstractVector, tessels, tepochs, bas
     tpole_free      ::Bool   = false,
     gravity_law              = nothing,
     logprior                 = nothing,
+    provider                 = nothing,
+    layout                   = nothing,
     maxiter         ::Int    = 200,
     gtol                     = (0.0, 1e-6),
     mem             ::Int    = 7,
@@ -159,15 +168,18 @@ function bootstrap_parametric(data_epochs::AbstractVector, tessels, tepochs, bas
     verb            ::Bool   = true,
     kwargs...
 )
-    dlb, dub = default_parametric_bounds(; tpole_free=tpole_free)
-    lower = lb === nothing ? dlb : lb
-    upper = ub === nothing ? dub : ub
-    idx   = parametric_free_indices(free; tpole_free=tpole_free)
-    names = parametric_param_names(; tpole_free=tpole_free)[idx]
+    # One layout for the bounds, the names and the free set, and it is passed on to every
+    # replicate fit — `provider`/`layout` were previously accepted here and silently dropped,
+    # so a bootstrap of a predicted-limb-darkening fit would have resampled the wrong model.
+    L     = layout === nothing ? parametric_layout(; tpole_free=tpole_free) : layout
+    lower = lb === nothing ? copy(L.lower) : lb
+    upper = ub === nothing ? copy(L.upper) : ub
+    idx   = layout_free_indices(L, free)
+    names = L.names[idx]
     fitkw = (free=idx, lb=lower, ub=upper, intensity_model=intensity_model, band=band,
              κ=κ, GM=GM, tpole_free=tpole_free, gravity_law=gravity_law,
              logprior=logprior, maxiter=maxiter,
-             gtol=gtol, mem=mem)
+             gtol=gtol, mem=mem, provider=provider, layout=L)
 
     # Full-data fit first: it seeds every replicate and warms up Zygote's pullback
     # compilation on this thread, before any replicate task is spawned. Pass

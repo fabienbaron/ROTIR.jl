@@ -1484,6 +1484,24 @@ function shell_set_tie(name, expr)
 end
 
 """
+    shell_derived_summary() -> String
+
+[`derived_summary_text`](@ref) for the model the panel is showing. Empty string when there is
+nothing to say, which is what makes the QML label hide itself.
+"""
+function shell_derived_summary()
+    sh = _sh()
+    m = current_model(sh.session)
+    m === nothing && return ""
+    return try
+        ROTIR.derived_summary_text(star_params(m))
+    catch
+        # A half-edited model (a cleared field, a period of 0) must not take the panel down.
+        ""
+    end
+end
+
+"""
     shell_validate_model() -> String
 
 Every problem the schema can see with the current model, one per line. Empty means it builds.
@@ -1492,7 +1510,10 @@ function shell_validate_model()
     sh = _sh()
     m = current_model(sh.session)
     m === nothing && return "no model"
-    return join(validate_star_params(star_params(m)), "\n")
+    # BOTH lists: the user should see plausibility advice too. Only `validate_star_params`
+    # gates whether the model can be built (see `advise_star_params` for why they are split).
+    p = star_params(m)
+    return join(vcat(validate_star_params(p), advise_star_params(p)), "\n")
 end
 
 # ── the plots ───────────────────────────────────────────────────────────────────────────
@@ -3023,8 +3044,11 @@ function shell_fit_methods()
         k == "nautilus" && !nautilus_available() && continue
         # Tempering runs on the same parametric log-posterior NUTS does, so it is offered in
         # the same place: the rapid rotator, with the gradient stack loaded.
-        k == "pigeons" && !(pigeons_available() && m !== nothing && m.surface_type == 2) &&
-            continue
+        # Tempering runs on the same three log-posteriors NUTS does, and needs LESS: with the
+        # slice explorer it uses no gradient at all. It was offered on the rapid rotator alone
+        # only because `_fit_pigeons` was hardcoded to that surface's θ.
+        k == "pigeons" && !(pigeons_available() && m !== nothing &&
+                            m.surface_type in (0, 1, 2)) && continue
         # NUTS needs the analytic gradient, so it is offered exactly where the gradient path
         # is: the rapid rotator, with Zygote loaded.
         # All three non-Roche surfaces have a differentiable log-posterior now:
@@ -3042,6 +3066,16 @@ end
 
 "Whether ROTIRZygoteExt has loaded, i.e. whether `fit_parametric` exists."
 fit_parametric_available() = !isempty(methods(ROTIR.fit_parametric))
+
+"""
+    _fit_ok(p) -> Bool
+
+Whether a derivative-free objective should accept `p` at all: buildable AND inside its
+plausible ranges. The range half is a soft barrier — it is what keeps a Nelder-Mead search
+from wandering into `beta = 12` — and is deliberately NOT applied by the display and compute
+paths, which gate on `validate_star_params` alone.
+"""
+_fit_ok(p) = isempty(validate_star_params(p)) && isempty(advise_star_params(p))
 
 """
     gradient_fit_kind(model) -> :parametric | :shape | :none
@@ -3122,10 +3156,45 @@ set under different names — `omega` is `frac_escapevel`, `inc` is `inclination
 lets the two meet, and a free parameter with no entry here is what makes the fast path
 inapplicable.
 """
-const PARAMETRIC_THETA = Dict(
-    :rpole => "rpole", :frac_escapevel => "omega", :inclination => "inc",
-    :position_angle => "PA", :beta => "beta", :ld1 => "ld1", :ld2 => "ld2",
-    :tpole => "tpole")
+# DERIVED from `ParametricLayout` rather than written out, so it cannot drift from the θ the
+# fit actually takes. Built from the `tpole_free` layout because that is the longest legacy
+# one and the GUI always passes the full vector, moving only the named entries.
+# The WIDEST layout — everything the gradient path CAN fit, which is what this table is for:
+# it answers "could this parameter be freed at all", and the per-fit layout (built from what
+# the user actually freed) answers "which slot is it in". Narrower here and `d`/`vgamma` would
+# show in the form but be refused on free, which is exactly the trap this fixes.
+const PARAMETRIC_THETA = let L = ROTIR.parametric_layout(; tpole_free = true,
+                                                           distance_free = true,
+                                                           vgamma_free = true)
+    Dict(L.fields[i] => L.names[i] for i in eachindex(L.names))
+end
+
+"""
+    _fit_layout(snap, names) -> ParametricLayout
+
+The parameter vector for ONE fit: the rapid rotator's base θ plus exactly the optional
+entries the user freed, and with the limb-darkening coefficients dropped when `ldtype` does
+not read them.
+
+Built per fit rather than once, because the layout IS the choice of what is being fitted —
+`d` is only in θ if the user freed it, and under `ldtype = 0` (a model-atmosphere intensity)
+`ld1`/`ld2` leave θ altogether.
+"""
+_fit_layout(snap, names) =
+    ROTIR.parametric_layout(; tpole_free     = true,
+                              ldtype        = round(Int, get(snap.params, :ldtype, 3.0)),
+                              distance_free = :d in names,
+                              vgamma_free   = :vgamma in names)
+
+# Panel parameter symbol -> its slot in `L`. Direct on the FIELD, with no detour through the
+# θ alias, so a layout that omits an entry simply has no index for it.
+function _theta_slot(L, n)
+    j = findfirst(==(n), L.fields)
+    j === nothing && error("$(n) is not a parameter of the gradient path for this model " *
+                           "(θ is $(L.names)); if it is `ld1`/`ld2`, note ldtype = 0 " *
+                           "removes them because the intensity provider owns limb darkening")
+    return j
+end
 
 # ── fitting a binary ────────────────────────────────────────────────────────────────────
 #
@@ -3291,6 +3360,61 @@ function shell_free_count()
 end
 
 """
+    _sampler_theta_error(model, sh, names, what) -> String
+
+`""` if every free parameter is one this surface's sampler θ contains, and a sentence saying
+why not otherwise.
+
+SHARED BY NUTS AND PIGEONS, because they sample the same three log-posteriors and the check is
+about the θ layout rather than the algorithm. It is a function rather than two copies for a
+specific reason: the copies drifted, and Pigeons spent a while offered on the rapid rotator
+alone while NUTS ran on all three.
+
+Refused rather than dropped silently: a parameter you believe is being sampled and is not is
+worse than being told you cannot sample it.
+"""
+function _sampler_theta_error(m, sh, names, what::AbstractString)
+    if m.surface_type == 0
+        # A SPHERE samples `[radius, ld…]` and nothing else, because that is all a sphere puts
+        # into normalised visibilities — its orientation is flat to within the mesh's faceting
+        # and its temperature is a scale the normalisation divides out (both measured; see
+        # `build_sphere_logπ`).
+        θn = ROTIR.sphere_param_names(round(Int, get(m.params, :ldtype, 3.0)))
+        bad = filter(n -> !(String(n) in θn), names)
+        isempty(bad) ||
+            return "$(what) on a sphere samples " * join(θn, ", ") * " — " *
+                   join(bad, ", ") * " carries no information in the visibilities"
+    elseif m.surface_type == 1
+        ldt = round(Int, get(m.params, :ldtype, 3.0))
+        # `tpole` only under `:planck`: a uniform scale on the map divides out of the
+        # normalised visibility, so under `:linear` it is a flat direction. The panel's
+        # intensity law decides, which is why this is checked here and not in the layout.
+        tpf = :tpole in names && sh.intensity_model[] === :planck
+        # THIS TEST COMES FIRST, and it did not used to. With `tpole` free under `:linear`,
+        # `tpf` is false, so `ellipsoid_free_indices` throws "`tpole` is not an ellipsoid
+        # parameter" and the `catch` below returned THAT — leaving the sentence underneath
+        # unreachable. The lower-level message is accurate and useless: it names the θ layout
+        # rather than the reason, and does not say what to do. This one says both.
+        (:tpole in names && !tpf) &&
+            return "tpole is a pure scale under a linear intensity law and divides out of " *
+                   "the normalised visibility — switch the intensity model to planck or fix " *
+                   "tpole"
+        try
+            ROTIR.ellipsoid_free_indices([String(n) for n in names], ldt; tpole_free = tpf)
+        catch err
+            return "$(what) on an ellipsoid: " * first(split(sprint(showerror, err), '\n'))
+        end
+    elseif m.surface_type == 2
+        bad = filter(n -> !haskey(PARAMETRIC_THETA, n), names)
+        isempty(bad) || return "not parameters of the $(what) path: " * join(bad, ", ")
+    else
+        return "$(what) runs on a sphere, an ellipsoid or a rapid rotator; surface type " *
+               "$(m.surface_type) has no differentiable log-posterior"
+    end
+    return ""
+end
+
+"""
     shell_fit(method, budget) -> String
 
 Fit the FREE parameters of the current model against every epoch of the current dataset.
@@ -3333,50 +3457,19 @@ function shell_fit(method, maxeval)
         pigeons_available() ||
             return "Pigeons needs Pigeons, Distributions, LogDensityProblems, ADTypes and " *
                    "Zygote in this session"
-        m.surface_type == 2 ||
-            return "Pigeons runs on the parametric rapid-rotator model (surface_type 2)"
-        bad = filter(n -> !haskey(PARAMETRIC_THETA, n), names)
-        isempty(bad) || return "not parameters of the tempering path: " * join(bad, ", ")
+        # THE SAME CHECK NUTS MAKES, through the same function. `_fit_pigeons` used to be
+        # hardcoded to the rapid rotator's θ and this branch refused everything else; it
+        # dispatches on `model` now, and sharing the validation is what stops the two drifting
+        # apart again — which is how Pigeons came to be offered on one surface while NUTS ran
+        # on three.
+        err = _sampler_theta_error(m, sh, names, "Pigeons")
+        isempty(err) || return err
     end
     if meth === :hmc
         hmc_available() ||
             return "NUTS needs AdvancedHMC, LogDensityProblems and Zygote in this session"
-        # TWO MODELS, each with its own θ. The rapid rotator samples the parametric vector;
-        # a SPHERE samples `[radius, ld…]` and nothing else, because that is all a sphere puts
-        # into normalised visibilities — its orientation is flat to within the mesh's faceting
-        # and its temperature is a scale the normalisation divides out (both measured; see
-        # `build_sphere_logπ`). Refused here rather than dropped silently: a parameter you
-        # believe is being sampled and is not is worse than being told you cannot sample it.
-        if m.surface_type == 0
-            θn = ROTIR.sphere_param_names(round(Int, get(m.params, :ldtype, 3.0)))
-            bad = filter(n -> !(String(n) in θn), names)
-            isempty(bad) ||
-                return "NUTS on a sphere samples " * join(θn, ", ") * " — " *
-                       join(bad, ", ") * " carries no information in the visibilities"
-        elseif m.surface_type == 1
-            ldt = round(Int, get(m.params, :ldtype, 3.0))
-            # `tpole` only under `:planck`: a uniform scale on the map divides out of the
-            # normalised visibility, so under `:linear` it is a flat direction. The panel's
-            # intensity law decides, which is why this is checked here and not in the layout.
-            tpf = :tpole in names && sh.intensity_model[] === :planck
-            try
-                ROTIR.ellipsoid_free_indices([String(n) for n in names], ldt;
-                                             tpole_free = tpf)
-            catch err
-                return "NUTS on an ellipsoid: " *
-                       first(split(sprint(showerror, err), '\n'))
-            end
-            (:tpole in names && !tpf) &&
-                return "tpole is a pure scale under a linear intensity law and divides out " *
-                       "of the normalised visibility — switch the intensity model to planck " *
-                       "or fix tpole"
-        elseif m.surface_type == 2
-            bad = filter(n -> !haskey(PARAMETRIC_THETA, n), names)
-            isempty(bad) || return "not parameters of the NUTS path: " * join(bad, ", ")
-        else
-            return "NUTS runs on a sphere, an ellipsoid or a rapid rotator; " *
-                   "surface type $(m.surface_type) has no differentiable log-posterior"
-        end
+        err = _sampler_theta_error(m, sh, names, "NUTS")
+        isempty(err) || return err
     end
     if meth === :gradient
         kind = gradient_fit_kind(m)
@@ -3487,7 +3580,14 @@ function shell_fit(method, maxeval)
         best, chi2, extra, post, nevals = if meth === :hmc
             _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
         elseif meth === :pigeons
-            _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
+            # Same three-way split as `:hmc` above: the θ layout is the surface's.
+            if snap.surface_type == 0
+                _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, it)
+            elseif snap.surface_type == 1
+                _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, it)
+            else
+                _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
+            end
         elseif meth !== :gradient
             _run_fit(meth, obj, θ0, lb, ub, names, it)
         elseif gradient_fit_kind(snap) === :parametric
@@ -3546,31 +3646,28 @@ Restricted to `surface_type = 2` because that is the parameter vector `fit_param
 written for; `shell_fit_methods` only offers it there.
 """
 function _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval)
-    θnames = ROTIR.parametric_param_names(; tpole_free = true)
     # Full theta from the model, INCLUDING the frozen entries: `fit_parametric` wants the whole
     # vector and moves only the indices named in `free`.
+    L = _fit_layout(snap, names)
     getp(k) = Float64(get(snap.params, k, 0.0))
-    θfull = Float64[getp(:rpole), getp(:frac_escapevel), getp(:inclination),
-                    getp(:position_angle), getp(:beta), getp(:ld1), getp(:ld2), getp(:tpole)]
-    lo = copy(ROTIR.default_parametric_bounds(; tpole_free = true)[1])
-    hi = copy(ROTIR.default_parametric_bounds(; tpole_free = true)[2])
+    θfull = Float64[getp(f) for f in L.fields]
+    lo = copy(L.lower); hi = copy(L.upper)
     free = String[]
     for (k, n) in enumerate(names)
-        haskey(PARAMETRIC_THETA, n) || error("$(n) is not a parameter of the gradient path")
-        j = findfirst(==(PARAMETRIC_THETA[n]), θnames)
-        push!(free, θnames[j])
-        # The panel's bounds win over the defaults; `default_parametric_bounds` carries an
-        # infinite upper bound on rpole and tpole, which a box-constrained search accepts but
-        # which throws away whatever the user typed.
+        j = _theta_slot(L, n)
+        push!(free, L.names[j])
+        # The panel's bounds win over the defaults; the layout carries an infinite upper
+        # bound on rpole and tpole, which a box-constrained search accepts but which throws
+        # away whatever the user typed.
         lo[j] = lb[k]; hi[j] = ub[k]
     end
     tess = tessellation_healpix(nexp; T = prec)
     base = star_params(snap)
     θ̂, chi2r, info = ROTIR.fit_parametric(data, tess, tepochs, base;
                                           θ0 = θfull, free = free, lb = lo, ub = hi,
-                                          tpole_free = true, maxiter = max(10, maxeval),
-                                          verb = true)
-    best = [θ̂[findfirst(==(PARAMETRIC_THETA[n]), θnames)] for n in names]
+                                          tpole_free = true, layout = L,
+                                          maxiter = max(10, maxeval), verb = true)
+    best = [θ̂[_theta_slot(L, n)] for n in names]
     nd = sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data)
     return best, chi2r * nd, Dict{Symbol,Float64}(), nothing, 0
 end
@@ -3597,27 +3694,25 @@ function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxev
         return _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
     snap.surface_type == 1 &&
         return _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
-    θnames = ROTIR.parametric_param_names(; tpole_free = true)
+    L = _fit_layout(snap, names)
     getp(k) = Float64(get(snap.params, k, 0.0))
-    θfull = Float64[getp(:rpole), getp(:frac_escapevel), getp(:inclination),
-                    getp(:position_angle), getp(:beta), getp(:ld1), getp(:ld2), getp(:tpole)]
-    lo, hi = ROTIR.default_parametric_bounds(; tpole_free = true)
-    lo = copy(lo); hi = copy(hi)
+    θfull = Float64[getp(f) for f in L.fields]
+    lo = copy(L.lower); hi = copy(L.upper)
     free = String[]
     for (k, n) in enumerate(names)
-        j = findfirst(==(PARAMETRIC_THETA[n]), θnames)
-        push!(free, θnames[j])
+        j = _theta_slot(L, n)
+        push!(free, L.names[j])
         lo[j] = lb[k]; hi[j] = ub[k]
     end
     tess = tessellation_healpix(nexp; T = prec)
     base = star_params(snap)
     ndraw = clamp(Int(maxeval), 50, 20_000)
     r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
-                       tpole_free = true, n_samples = ndraw, n_adapt = 3ndraw ÷ 4,
-                       verb = true)
+                       tpole_free = true, layout = L, n_samples = ndraw,
+                       n_adapt = 3ndraw ÷ 4, verb = true)
     # `_fit_hmc` returns the free parameters in the order `parametric_free_indices` sorts them,
     # which is not the order the panel listed them in.
-    order = sortperm([findfirst(==(PARAMETRIC_THETA[n]), θnames) for n in names])
+    order = sortperm([_theta_slot(L, n) for n in names])
     best = zeros(length(names)); errs = Dict{Symbol,Float64}()
     for (slot, k) in enumerate(order)
         best[k] = r.median[slot]
@@ -3731,6 +3826,101 @@ function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, 
 end
 
 """
+    _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+
+Tempering on a SPHERE's θ, `[radius, ld…]`.
+
+Pigeons was offered on the rapid rotator alone because `_fit_pigeons` was hardcoded to that
+surface's θ, not because tempering needs anything the sphere cannot give — with the default
+slice explorer it needs no gradient at all, which is a weaker requirement than the NUTS that
+has been offered here all along. What tempering adds over NUTS on a short, near-unimodal θ is
+not mixing but the EVIDENCE: comparing a sphere against an ellipsoid against a rapid rotator
+by `log(Z)` needs a `log(Z)` from each, and Nautilus was the only other source (measured at
+836 s against Nelder-Mead's 4.4 s on a lam And sphere).
+"""
+function _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+    base = star_params(snap)
+    θnames = ROTIR.sphere_param_names(base.ldtype)
+    lo, hi = ROTIR.default_sphere_bounds(base.ldtype)
+    lo = collect(Float64, lo); hi = collect(Float64, hi)
+    θfull = Float64[get(snap.params, Symbol(n), 0.0) for n in θnames]
+    free = String[]
+    for (k, n) in enumerate(names)
+        j = findfirst(==(String(n)), θnames)
+        push!(free, θnames[j])
+        lo[j] = lb[k]; hi[j] = ub[k]
+        θfull[j] = clamp(θfull[j], lb[k], ub[k])
+    end
+    tess = tessellation_healpix(nexp; T = prec)
+    nr = clamp(Int(maxeval), 6, 12)
+    r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                           model = :sphere, n_rounds = nr, n_chains = 8, explorer = :slice,
+                           multithreaded = Threads.nthreads() > 1, verb = true)
+    return _pigeons_result(r, names, θnames, nr)
+end
+
+"""
+    _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+
+Tempering on an ELLIPSOID's θ.
+
+`tpole_free` IS NOT UNCONDITIONAL HERE, and that is the one place this cannot simply copy the
+rapid-rotator runner. Under `:linear` the polar temperature is a pure scale that the flux
+normalisation divides out, so `build_ellipsoid_logπ` REFUSES to free it; it carries information
+only under `:planck`, where the map's contrast depends on it. The same `tpf` test as
+`_run_ellipsoid_hmc_fit`, for the same reason.
+"""
+function _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+    sh = _sh()
+    base = star_params(snap)
+    tpf = :tpole in names && sh.intensity_model[] === :planck
+    θnames = ROTIR.ellipsoid_param_names(; tpole_free = tpf)
+    lo, hi = ROTIR.default_ellipsoid_bounds(; tpole_free = tpf)
+    lo = collect(Float64, lo); hi = collect(Float64, hi)
+    θfull = Float64[Float64(get(snap.params, Symbol(n), 0.0)) for n in θnames]
+    free = String[]
+    for (k, n) in enumerate(names)
+        j = findfirst(==(String(n)), θnames)
+        push!(free, θnames[j])
+        lo[j] = lb[k]; hi[j] = ub[k]
+        θfull[j] = clamp(θfull[j], lb[k], ub[k])
+    end
+    tess = tessellation_healpix(nexp; T = prec)
+    nr = clamp(Int(maxeval), 6, 12)
+    r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                           model = :ellipsoid, tpole_free = tpf,
+                           intensity_model = sh.intensity_model[],
+                           band = sh.band[] > 0 ? sh.band[] : nothing,
+                           n_rounds = nr, n_chains = 8, explorer = :slice,
+                           multithreaded = Threads.nthreads() > 1, verb = true)
+    return _pigeons_result(r, names, θnames, nr)
+end
+
+"""
+    _pigeons_result(r, names, θnames, n_rounds) -> (best, chi2, errs, post, nevals)
+
+The shared tail of the three Pigeons runners: reorder the sampler's columns into the panel's
+order, take the median and a half-interquantile width, and print the evidence.
+
+Sampler columns come back in sorted-index order, not the order the panel listed them.
+"""
+function _pigeons_result(r, names, θnames, nr::Int)
+    Printf.@printf("Pigeons: log(Z) = %.4f, %d round trips over 2^%d scans\n",
+                   r.logz, r.round_trips, nr)
+    order = sortperm([findfirst(==(String(n)), θnames) for n in names])
+    best = zeros(length(names)); errs = Dict{Symbol,Float64}()
+    for (slot, k) in enumerate(order)
+        best[k] = r.median[slot]
+        errs[names[k]] = (r.q84[slot] - r.q16[slot]) / 2
+    end
+    return best, r.chi2, errs,
+           _posterior(r; order = invperm(order),
+                      diagnostics = Printf.@sprintf("%d draws, %d chains, %d round trips",
+                                                    size(r.samples, 1), r.n_chains,
+                                                    r.round_trips)), 0
+end
+
+"""
     _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval) -> (best, chi2, extra)
 
 Non-reversible parallel tempering over the free parametric parameters, returning the posterior
@@ -3748,16 +3938,14 @@ explorer is the slice sampler — no gradient — since ROTIR posteriors are bad
 often enough that a preconditioned MALA is the riskier default (see `_fit_pigeons`).
 """
 function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval)
-    θnames = ROTIR.parametric_param_names(; tpole_free = true)
+    L = _fit_layout(snap, names)
     getp(k) = Float64(get(snap.params, k, 0.0))
-    θfull = Float64[getp(:rpole), getp(:frac_escapevel), getp(:inclination),
-                    getp(:position_angle), getp(:beta), getp(:ld1), getp(:ld2), getp(:tpole)]
-    lo, hi = ROTIR.default_parametric_bounds(; tpole_free = true)
-    lo = copy(lo); hi = copy(hi)
+    θfull = Float64[getp(f) for f in L.fields]
+    lo = copy(L.lower); hi = copy(L.upper)
     free = String[]
     for (k, n) in enumerate(names)
-        j = findfirst(==(PARAMETRIC_THETA[n]), θnames)
-        push!(free, θnames[j])
+        j = _theta_slot(L, n)
+        push!(free, L.names[j])
         lo[j] = lb[k]; hi[j] = ub[k]
     end
     tess = tessellation_healpix(nexp; T = prec)
@@ -3770,9 +3958,11 @@ function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, m
                            tpole_free = true, n_rounds = nr, n_chains = 8,
                            explorer = :slice, multithreaded = Threads.nthreads() > 1,
                            verb = true)
+    # The rapid rotator's panel names are not its θ names — `PARAMETRIC_THETA` maps between
+    # them — so this one reorders on the mapped name rather than the panel's.
     Printf.@printf("Pigeons: log(Z) = %.4f, %d round trips over 2^%d scans\n",
                    r.logz, r.round_trips, nr)
-    order = sortperm([findfirst(==(PARAMETRIC_THETA[n]), θnames) for n in names])
+    order = sortperm([_theta_slot(L, n) for n in names])
     best = zeros(length(names)); errs = Dict{Symbol,Float64}()
     for (slot, k) in enumerate(order)
         best[k] = r.median[slot]

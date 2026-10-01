@@ -250,7 +250,18 @@ end
 function compute_ldmap(μ, star_params; T = float(real(eltype(μ))))
   p = convert_params(T, star_params)
   # Limb-darkening map
-  if (p.ldtype == 1) # 1: linear,  I(μ)/I(1) = 1 − u(1−μ)
+  if (p.ldtype == 0)
+    # 0: NONE. The intensity provider owns the μ dependence — a model-atmosphere
+    # I(Teff, logg, μ, λ) already contains limb darkening, so multiplying a law on top of
+    # it double-counts. `src/di.jl`'s `setup_di` defaults to `ld = true` and does exactly
+    # that; this branch is how the interferometric path avoids the same mistake.
+    #
+    # Returning ones rather than short-circuiting the multiplication keeps every call site
+    # untouched: `xw = I .* vis_weights .* ldmap` stays one expression at all eight places
+    # it appears, and the identity is folded away by the compiler in neither case — an
+    # npix-long multiply by 1.0 is not worth eight divergent code paths.
+    ldmap = ones(T, length(μ))
+  elseif (p.ldtype == 1) # 1: linear,  I(μ)/I(1) = 1 − u(1−μ)
     ldmap = T(1.0) .- p.ld1*(T(1.0) .-μ)
   elseif (p.ldtype == 2) # 2: quadratic, I(μ)/I(1) = 1 − a(1−μ) − b(1−μ)²
     # NB (1−μ)², not (1−μ²). This was `(1−μ²)` until the α Cen test: that is a DIFFERENT

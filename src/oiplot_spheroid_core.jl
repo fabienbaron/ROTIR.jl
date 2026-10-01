@@ -392,13 +392,46 @@ end
 """
     _map_range(values; vmin = nothing, vmax = nothing) -> (lo, hi)
 
-The colour range for a map, with the guard both back-ends need: a uniform map gives
-`lo == hi`, which Makie rejects as a colorrange and matplotlib renders as a single flat
-colour with no indication that the scale collapsed.
+The colour range for a map, with the three guards both back-ends need.
+
+A uniform map gives `lo == hi`, which Makie rejects as a colorrange and matplotlib renders as
+one flat colour with no sign that the scale collapsed. That is the guard this started as.
+
+**TOTAL BY CONSTRUCTION**, which the other two are about. The GUI calls this from inside QML
+callbacks, where a throw does not print — it freezes the window — so two inputs that a
+plotting helper would not expect have to come out as a usable range instead:
+
+  * **Nothing finite.** `rpole = 0` on a Roche surface takes the equipotential through a zero
+    radius and the temperature map comes back entirely NaN. `minimum` PROPAGATES NaN rather
+    than erroring, the `pmax - pmin < 1.0` widening below never fires because `NaN < 1.0` is
+    false, and the NaN reaches a Makie `Colorbar` — whose tick machinery is not total either:
+    PlotUtils reports "No strict ticks found" and Ryu then throws
+    `InexactError: convert(UInt64, …)` from `writefixed`. Measured, not hypothetical.
+  * **Empty.** Every tessel masked (a total eclipse) or an orthographic view with nothing
+    visible. `minimum([])` throws "reducing over an empty collection".
+
+Non-finite values are DROPPED, not mapped to zero: a map that is finite everywhere except a
+few bad tessels should keep the range its good tessels set, and the Mollweide already paints
+the bad ones with `bad_color`. An explicit `vmin`/`vmax` that is itself non-finite falls back
+to the data, and an inverted pair is swapped rather than returned inside out.
+
+`values` must be an array — `eltype` is what keeps the result in the map's own precision.
 """
 function _map_range(projmap; vmin = nothing, vmax = nothing)
-    pmin = vmin === nothing ? minimum(projmap) : vmin
-    pmax = vmax === nothing ? maximum(projmap) : vmax
+    T = float(eltype(projmap))
+    lo, hi = T(Inf), T(-Inf)
+    for v in projmap
+        isfinite(v) || continue
+        v < lo && (lo = v)
+        v > hi && (hi = v)
+    end
+    # Empty, or finite nowhere. Any range will do as long as it is a range.
+    (isfinite(lo) && isfinite(hi)) || ((lo, hi) = (zero(T), one(T)))
+    pmin = vmin === nothing ? lo : vmin
+    pmax = vmax === nothing ? hi : vmax
+    isfinite(pmin) || (pmin = lo)
+    isfinite(pmax) || (pmax = hi)
+    pmax >= pmin || ((pmin, pmax) = (pmax, pmin))
     if pmax - pmin < 1.0
         # SYMMETRIC about the value, not open-ended upwards. Widening only the top puts every
         # value on the floor of the colormap, so a uniform-temperature star — a legitimate

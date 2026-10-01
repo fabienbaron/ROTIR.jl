@@ -70,6 +70,7 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
                   θ0, free = nothing, lb = nothing, ub = nothing,
                   tpole_free::Bool = false, intensity_model::Symbol = :linear, band = nothing,
                   κ = 50, GM = 1, gravity_law = nothing,
+                  provider = nothing, layout = nothing,
                   n_samples::Int = 400, n_adapt::Int = 300,
                   target_accept::Real = 0.8, verb::Bool = false,
                   model::Symbol = :rapid_rotator)
@@ -102,12 +103,13 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
          lbe, ube,
          ellipsoid_free_indices(free, base_params.ldtype; tpole_free = tpole_free))
     else
-        (build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
-                               intensity_model = intensity_model, band = band,
-                               κ = κ, GM = GM, tpole_free = tpole_free,
-                               gravity_law = gravity_law, logprior = nothing),
-         default_parametric_bounds(; tpole_free = tpole_free)...,
-         parametric_free_indices(free; tpole_free = tpole_free))
+        # The RAPID ROTATOR's θ, its bounds and its free set all come from one place, so
+        # `provider`/`layout` reach it without this branch knowing what is in them.
+        parametric_posterior_spec(data_epochs, tessels, tepochs, base_params;
+                                  free = free, intensity_model = intensity_model,
+                                  band = band, κ = κ, GM = GM, tpole_free = tpole_free,
+                                  gravity_law = gravity_law, logprior = nothing,
+                                  provider = provider, layout = layout)[1:4]
     end
     lower = collect(T, lb === nothing ? dlb : lb)
     upper = collect(T, ub === nothing ? dub : ub)

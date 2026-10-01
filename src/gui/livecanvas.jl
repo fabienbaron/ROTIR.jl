@@ -966,9 +966,13 @@ closed ellipse through a pair placed by hand would be a claim the data do not ma
 function show_binary3d!(c::StarCanvas, star1, v1, star2, v2, offset::NTuple{3,<:Real};
                         colorrange = nothing, track = Makie.Point3f[])
     busy!(c)
-    lo = colorrange === nothing ? min(minimum(v1), minimum(v2)) : colorrange[1]
-    hi = colorrange === nothing ? max(maximum(v1), maximum(v2)) : colorrange[2]
-    hi - lo < 1 && (hi = lo + max(abs(hi) * 0.01, 1.0))
+    # `_map_range` over both components, not a hand-rolled min/max pair. This was the one
+    # canvas computing its own range, and it differed from every other one in two ways that
+    # both mattered: it widened only UPWARDS (which puts a uniform map on the floor of the
+    # colormap — see `_map_range`'s comment on why that reads as a failed draw), and it called
+    # `minimum` directly, so an all-NaN map propagated NaN straight into the Colorbar below
+    # and threw out of Makie's tick formatter. `rpole = 0` is exactly that map.
+    lo, hi = colorrange === nothing ? _map_range(vcat(vec(v1), vec(v2))) : colorrange
     off = (Float64(offset[1]), Float64(offset[2]), Float64(offset[3]))
     m1, c1 = star_mesh(star1; values = v1)
     m2, c2 = star_mesh(star2; offset = off, values = v2)

@@ -948,9 +948,11 @@ ApplicationWindow {
                            picker.purpose = mode
                            picker.canAdd = false
                     picker.saveMode = false
-                           // Orbits have a folder of their own, seeded with the ones that
-                           // ship — so "Load orbit…" opens on β Lyr and Spica rather than on
-                           // whatever directory Julia was started from.
+                           // Orbits have a writable folder of their own, seeded once with
+                           // the ones that ship, so "Load orbit…" opens on β Lyr and Spica
+                           // rather than on whatever directory Julia was started from. It can
+                           // still be empty — a deleted preset stays deleted — which is why
+                           // the picker also lists "Shipped orbits" as a place of its own.
                            picker.openAt(mode === "orbit" ? Julia.orbit_dir() : initialFolder)
                        } }
         }

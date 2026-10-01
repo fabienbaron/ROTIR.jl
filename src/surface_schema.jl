@@ -105,13 +105,20 @@ const _GRAVITY_LAW = ParamSpec(:gravity_law, "Gravity law", "", 1.0, 1.0, 2.0, :
                                choices = [1 => "von Zeipel", 2 => "Espinosa Lara-Rieutord"])
 
 const _LIMBDARK = [
-    ParamSpec(:ldtype, "LD law", "", 3.0, 1.0, 4.0, :limbdark,
-              "Which law `compute_ldmap` applies: 1 linear, 1 − u(1−μ); 2 quadratic, " *
-              "1 − a(1−μ) − b(1−μ)²; 3 Hestroffer power law, μ^α; 4 Claret four-parameter. " *
-              "Anything outside 1–4 silently returns nothing and fails later in the " *
-              "visibility model.";
+    ParamSpec(:ldtype, "LD law", "", 3.0, 0.0, 4.0, :limbdark,
+              "Which law `compute_ldmap` applies: 0 none; 1 linear, 1 − u(1−μ); " *
+              "2 quadratic, 1 − a(1−μ) − b(1−μ)²; 3 Hestroffer power law, μ^α; " *
+              "4 Claret four-parameter. Anything outside 0–4 silently returns nothing " *
+              "and fails later in the visibility model. " *
+              "0 is for a MODEL-ATMOSPHERE intensity, which already carries the full μ " *
+              "dependence — applying a law on top of it double-counts limb darkening. It " *
+              "also removes ld1/ld2 from the fit, which is the point: gravity and limb " *
+              "darkening both take flux out of the limb, an interferometer measures only " *
+              "their sum, and a fitted ld1 absorbs the error in whichever " *
+              "gravity-darkening law was assumed.";
               kind = :choice,
-              choices = [1 => "linear",
+              choices = [0 => "none (from atmosphere)",
+                         1 => "linear",
                          2 => "quadratic",
                          3 => "power law",
                          4 => "Claret-4"]),
@@ -150,12 +157,20 @@ const _ORBIT = [
               "for the secondary. NOT the same convention on both components."),
 ]
 
+# The distance, shared by every surface type that needs a physical scale. A factory rather
+# than a constant because the two consumers file it under different form groups — for the
+# Roche surface it belongs with the orbit, for a rapid rotator it IS a geometry parameter,
+# since it is what converts the angular `rpole` into a length. Label, unit and bounds stay
+# in one place either way.
+_distance_spec(group::Symbol, doc::String; default::Float64 = 100.0) =
+    ParamSpec(:d, "Distance", "pc", default, 0.1, 1e6, group, doc)
+
 const _ORBIT_OPTIONAL = [
     ParamSpec(:dP, "Ṗ, period rate", "d/d", 0.0, -1.0, 1.0, :orbit,
               "Quadratic ephemeris. 0 for a constant period."),
     ParamSpec(:dω, "ω̇, apsidal", "deg/d", 0.0, -1.0, 1.0, :orbit,
               "Unicode dω. 0 for a fixed apsidal line."),
-    ParamSpec(:d, "Distance", "pc", 100.0, 0.1, 1e6, :orbit,
+    _distance_spec(:orbit,
               "Carried for physical-unit conversions; the geometry is in mas throughout."),
 ]
 
@@ -216,8 +231,42 @@ const SURFACE_TYPES = Dict{Int,SurfaceSpec}(
                         "the equatorial radius diverges as it is approached.")],
              _THERMAL, [_BETA, _GRAVITY_LAW], _LIMBDARK, _ORIENTATION),
         [ParamSpec(:B_rot, "Diff. rotation B", "", 0.0, -1.0, 1.0, :orientation,
-                   "Carried by `starparameters` but NOT currently read: the " *
-                   "differential-rotation path is not wired in (see rotate_star).")],
+                   "Surface differential rotation: Ω(θ) = Ω₀(1 − B_rot·cos²θ), so " *
+                   "`rotation_period` is the EQUATORIAL period and B_rot > 0 makes the " *
+                   "poles lag. Read by `los_velocity` (src/velocity_field.jl) and so by " *
+                   "every velocity-resolved observable; still NOT read by `rotate_star`, " *
+                   "which spins the surface rigidly for spot phasing. Note a " *
+                   "differentially rotating surface has no rotational potential, so its " *
+                   "SHAPE does not follow the Roche factor — B_rot is a kinematic " *
+                   "perturbation on a figure that is not self-consistent with it."),
+         # Label kept short: the form's column fits `label + unit + 3 <= 20` characters and
+         # elides silently past it, which `test/gui/runtests.jl:274` exists to catch.
+         ParamSpec(:vgamma, "γ, systemic", "km/s", 0.0, -2000.0, 2000.0,
+                   :orientation,
+                   "Adds to every tessel's line-of-sight velocity, positive RECEDING. " *
+                   "Shifts a line profile bodily without changing its shape, so it is what " *
+                   "a spectroscopic dataset constrains and the interferometric " *
+                   "observables (V², T3) are blind to. Read by `los_velocity`."),
+         # 16 pc, NOT the 100 pc the Roche surface uses, and the value is COUPLED to the
+         # other defaults on this surface type. Adding `d` gave `rotation_period` physical
+         # meaning it did not have before — it used to only set a rotation phase — so the
+         # defaults now have to be jointly possible. At 100 pc, rpole = 1 mas with
+         # fev = 0.95 and P = 1 d implies a 499 Msun star, because M scales as d³; at 16 pc
+         # it is 2.04 Msun, an ordinary F-type rapid rotator, and the whole default set
+         # describes a real object (compare beta Cas: 0.849 mas, 16.8 pc, 0.92, 0.893 d).
+         # `test_gravity_darkening.jl:68` asserts these defaults validate cleanly, which is
+         # what caught the inconsistency.
+         _distance_spec(:geometry,
+                   "Converts the angular `rpole` into a length, which is what makes MASS " *
+                   "and absolute `logg` available — see src/stellar_physics.jl. Mass is " *
+                   "DERIVED, not fitted: (rpole, d, fev, rotation_period) are four " *
+                   "quantities and Ω = fev·√(8GM/27R_p³) = 2π/P is one relation, so " *
+                   "M = 27R_p³Ω²/(8G·fev²). That also ties `rotation_period` to " *
+                   "`frac_escapevel`, which were previously free to disagree about how " *
+                   "fast the star turns. Optional: a model using :linear or :planck " *
+                   "intensity never needs it. The 16 pc default is chosen so that it, " *
+                   "`rpole`, `frac_escapevel` and `rotation_period` together imply a " *
+                   "2.04 Msun star rather than an impossible one."; default = 16.0)],
         "Roche-model oblate rotator, gravity-darkened by von Zeipel or by Espinosa Lara & "  *
         "Rieutord (2011) — see `gravity_law`."),
 
@@ -342,10 +391,11 @@ function validate_star_params(p)
                         "$(s.code) ($(s.name))")
         end
     end
-    if hasproperty(p, :ldtype) && !(Int(p.ldtype) in (1, 2, 3, 4))
-        push!(msgs, "ldtype = $(p.ldtype) is not one of 1 (linear), 2 (quadratic), " *
-                    "3 (power law), 4 (Claret); `compute_ldmap` returns nothing for it and " *
-                    "the failure surfaces much later, in the visibility model")
+    if hasproperty(p, :ldtype) && !(Int(p.ldtype) in (0, 1, 2, 3, 4))
+        push!(msgs, "ldtype = $(p.ldtype) is not one of 0 (none), 1 (linear), " *
+                    "2 (quadratic), 3 (power law), 4 (Claret); `compute_ldmap` returns " *
+                    "nothing for it and the failure surfaces much later, in the " *
+                    "visibility model")
     end
     if hasproperty(p, :gravity_law)
         try
@@ -354,12 +404,31 @@ function validate_star_params(p)
             push!(msgs, sprint(showerror, e))
         end
     end
-    for spec in vcat(s.required, s.optional)
+    # NUMERIC SANITY over every declared field of this surface type. BLOCKING, and driving the
+    # GUI's build gate is the whole point: `build_epoch_star` does
+    # `isempty(validate_star_params(p)) || return nothing`, so this is the only thing between a
+    # half-typed number and a degenerate mesh.
+    #
+    # THE CASE THIS EXISTS FOR, measured rather than imagined. `rpole = 0` on a Roche binary
+    # takes the equipotential through a zero radius and the temperature map comes back
+    # ENTIRELY NaN — and nothing downstream raises. `_map_range`'s `minimum` PROPAGATES NaN
+    # instead of erroring, its `pmax - pmin < 1.0` widening never fires because `NaN < 1.0` is
+    # false, and the NaN lands in a Makie Colorbar whose tick machinery is not total either:
+    # PlotUtils reports "No strict ticks found" and Ryu then throws
+    # `InexactError: convert(UInt64, …)` out of `writefixed`. That happens inside a QML
+    # callback, so the window freezes with nothing printed. The range half of this loop is
+    # what used to prevent it; `test/gui/runtests.jl`'s shape fuzz is what noticed when it
+    # stopped. The non-finite half is new, because the range half SKIPS non-finite values (a
+    # NaN fails every comparison, so `!(lo <= v <= hi)` would report it as "outside the
+    # plausible range", which is true but useless) and `rpole = NaN` reaches the same crash.
+    for spec in Iterators.flatten((s.required, s.optional))
         hasproperty(p, spec.name) || continue
         spec.kind === :choice && continue
         v = getproperty(p, spec.name)
         v isa Number || continue
-        if !(spec.lo <= v <= spec.hi)
+        if v isa AbstractFloat && !isfinite(v)
+            push!(msgs, "`$(spec.name)` is $v, which cannot describe a surface")
+        elseif !(spec.lo <= v <= spec.hi)
             push!(msgs, "$(spec.name) = $v is outside the plausible range " *
                         "[$(spec.lo), $(spec.hi)]$(isempty(spec.unit) ? "" : " " * spec.unit)")
         end
@@ -372,6 +441,84 @@ function validate_star_params(p)
                         "Unicode name and will not see this field")
         end
     end
+    return msgs
+end
+
+"A field that is present, numeric, finite and strictly positive — the four things the derived
+mass needs before it can be computed at all."
+_finite_pos(p, f) = hasproperty(p, f) && (v = getproperty(p, f); v isa Number &&
+                                          isfinite(float(v)) && float(v) > 0)
+
+"""
+    advise_star_params(p) -> Vector{String}
+
+Things worth telling the user about `p` that do NOT make the model unbuildable.
+
+SEPARATE FROM [`validate_star_params`](@ref) FOR A CONCRETE REASON: the GUI uses that one as
+a hard GATE — `isempty(validate_star_params(p)) || return nothing` guards `epoch_chi2` and the
+plot paths — so any message added there silently disables functionality rather than informing
+anyone. Both checks below are observations about plausibility, not validity: the geometry
+builds fine either way, and a fitter is entitled to walk through implausible values on its way
+somewhere sensible.
+
+A caller that wants everything a user should see joins the two lists; a caller deciding
+whether the model can be BUILT consults `validate_star_params` alone.
+"""
+function advise_star_params(p)
+    msgs = String[]
+    # TOTAL BY CONSTRUCTION. `shell_validate_model` calls this on EVERY keystroke, from inside
+    # `shell_set_param`, and the GUI test suite feeds those callbacks every shape QML can send —
+    # empty strings, "NaN", huge numbers, a surface_type that is not a surface type. A throw
+    # here propagates out of `shell_set_param` and the form dies on a typo. `validate_star_params`
+    # is total for the same reason and guards its `surface_spec` call the same way. Both of the
+    # guards below were added after an unguarded `surface_spec` call here threw out of 46 of
+    # those callback tests.
+    hasproperty(p, :surface_type) || return msgs
+    stype = try Int(p.surface_type) catch; return msgs end
+    haskey(SURFACE_TYPES, stype) || return msgs
+    # LDTYPE = 0 WITHOUT AN ATMOSPHERE. The zero branch of `compute_ldmap` returns ones, which
+    # is correct only when an `IntensityProvider` supplies the μ dependence instead. On its own
+    # it means the star has NO limb darkening — and that does not raise anywhere, it just fits
+    # a worse model. The GUI offers `ldtype = 0` in a combo box, so this message is the only
+    # thing between a click and a silently wrong model. It cannot see the provider (that is a
+    # fit argument, not a model field), so it always fires for ldtype = 0;
+    # `check_provider_consistency` is the complement, firing when a provider IS present and
+    # ldtype is NOT 0.
+    ldt = hasproperty(p, :ldtype) ? (try Int(p.ldtype) catch; nothing end) : nothing
+    if ldt == 0
+        push!(msgs, "ldtype = 0 applies NO limb darkening. That is intended only when an " *
+                    "`IntensityProvider` supplies the μ dependence instead — see " *
+                    "`check_provider_consistency` and src/intensity_provider.jl. Without one, " *
+                    "the model has a limb as bright as the disc centre.")
+    end
+    # THE DERIVED MASS. For a rapid rotator carrying a distance, (rpole, d, fev,
+    # rotation_period) over-determine the mass — see src/stellar_physics.jl. An implausible
+    # value is the visible symptom of `rotation_period` disagreeing with `frac_escapevel`,
+    # which nothing used to catch because the two were read by different functions and never
+    # compared.
+    if stype == 2 && has_physical_scale(p) && _finite_pos(p, :frac_escapevel) &&
+       _finite_pos(p, :rpole) && _finite_pos(p, :d) && _finite_pos(p, :rotation_period)
+        m = derive_mass(float(p.rpole), float(p.d), float(p.frac_escapevel),
+                        float(p.rotation_period))
+        # `isfinite` first: a zero period or radius gives Inf/NaN, and a NaN fails every
+        # comparison so the `!(lo <= m <= hi)` form would report it as out of range with a
+        # "NaN Msun" message. Saying nothing is better than saying that.
+        if isfinite(m) && !(0.05 <= m <= 200.0)
+            push!(msgs, "the mass implied by rpole = $(p.rpole) mas, d = $(p.d) pc, " *
+                        "frac_escapevel = $(p.frac_escapevel) and rotation_period = " *
+                        "$(p.rotation_period) d is $(round(m, sigdigits=3)) Msun, outside " *
+                        "[0.05, 200]; for a Roche rotator these four are not independent " *
+                        "(M = 27R_p³Ω²/(8G·fev²)), so this usually means rotation_period " *
+                        "and frac_escapevel disagree about how fast the star turns")
+        end
+    end
+    # NO RANGE PASS HERE. It lives in `validate_star_params`, which is where it has always
+    # lived and where it has to stay: the GUI gates the build on that list, and a value outside
+    # a `ParamSpec`'s declared bounds is how a degenerate mesh gets built (see the comment on
+    # that loop). Moving it here to stop the DERIVED-MASS message below from disabling
+    # `epoch_chi2` took the geometry guard with it, and `rpole = 0` went back to freezing the
+    # window. Only the mass check needed to move; it is the one that fires on a model that
+    # builds perfectly well.
     return msgs
 end
 

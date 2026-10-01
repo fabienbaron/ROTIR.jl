@@ -57,6 +57,8 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     logprior                 = nothing,
     min_num_live_points::Int = 400,
     frac_remain              = 1e-3,
+    provider                 = nothing,
+    layout                   = nothing,
     use_stepsampler ::Bool   = false,
     nsteps          ::Int    = 400,
     log_dir                  = nothing,
@@ -65,11 +67,15 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
 )
     T   = eltype(tessels.unit_xyz)
     θ   = collect(T, θ0)
-    idx = parametric_free_indices(free; tpole_free=tpole_free)
-    names = parametric_param_names(; tpole_free=tpole_free)[idx]
+    # One layout drives the names, the bounds and the free set — see `parametric_layout`.
+    L     = layout === nothing ? parametric_layout(; tpole_free=tpole_free) : layout
+    idx   = layout_free_indices(L, free)
+    names = L.names[idx]
 
-    dlb, dub = default_parametric_bounds(; tpole_free=tpole_free)
-    dub[1] = rpole_max                      # nested sampling cannot use an infinite prior
+    dlb, dub = copy(L.lower), copy(L.upper)
+    # Nested sampling cannot use an infinite prior, so `rpole`'s open upper bound is closed
+    # here. Located by NAME, not by index 1: with a layout the slot order is not fixed.
+    dub[θindex(L, "rpole")] = rpole_max
     lo = Float64.(collect(lb === nothing ? dlb : lb)[idx])
     hi = Float64.(collect(ub === nothing ? dub : ub)[idx])
     all(isfinite, lo) && all(isfinite, hi) ||
@@ -80,7 +86,8 @@ function fit_parametric_ultranest(data_epochs::AbstractVector, tessels, tepochs,
     logπ = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                  intensity_model=intensity_model, band=band,
                                  κ=κ, GM=GM, tpole_free=tpole_free,
-                                 gravity_law=gravity_law, logprior=logprior)
+                                 gravity_law=gravity_law, logprior=logprior,
+                                 provider=provider, layout=L)
 
     # VECTORISED likelihood and transform, following OITOOLS' fit_model_ultranest. UltraNest
     # hands over a whole BATCH of points as an n x d numpy array and expects arrays back, so

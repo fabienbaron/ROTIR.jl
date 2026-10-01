@@ -1525,6 +1525,122 @@ end
     @test G._fit_kernel(sh, :gradient) === :turbo
 end
 
+@testset "tempering is offered wherever NUTS is" begin
+    # Pigeons used to be gated on `surface_type == 2` while NUTS ran on 0, 1 and 2. That was
+    # never a property of the METHOD — with the slice explorer Pigeons uses no gradient at all,
+    # so its requirement is strictly weaker than NUTS's — but of `_fit_pigeons`, which was
+    # hardcoded to the rapid rotator's θ. What it costs is the EVIDENCE: comparing a sphere
+    # against an ellipsoid against a rapid rotator by log(Z) needs a log(Z) from each.
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    meths() = Set(cols(r)[1] for r in rows(G.shell_fit_methods()))
+    for st in (0, 1, 2)
+        G.shell_add_model(st)
+        # The two samplers must be offered on exactly the same surfaces; they read the same
+        # three log-posteriors.
+        @test ("pigeons" in meths()) == ("hmc" in meths())
+        if G.pigeons_available()
+            @test "pigeons" in meths()
+        end
+    end
+    # …and on neither for a Roche surface, which has no differentiable log-posterior.
+    G.shell_add_model(3)
+    @test !("pigeons" in meths())
+    @test !("hmc" in meths())
+
+    # THE θ CHECK IS SHARED, which is the thing that stops them drifting apart again. A name
+    # the surface's sampler θ does not contain is refused with the same sentence for both.
+    G.shell_add_model(0)
+    m = G.current_model(sh.session)
+    @test isempty(G._sampler_theta_error(m, sh, [:radius], "NUTS"))
+    for what in ("NUTS", "Pigeons")
+        e = G._sampler_theta_error(m, sh, [:inclination], what)
+        @test !isempty(e)
+        @test occursin(what, e)
+        # A sphere's orientation carries no information in normalised visibilities, and the
+        # message says so rather than just refusing.
+        @test occursin("carries no information", e)
+    end
+    # An ELLIPSOID's `tpole` is the one that depends on the panel's intensity law: a pure scale
+    # under `:linear`, informative under `:planck`. Both samplers must agree on that too.
+    G.shell_add_model(1)
+    me = G.current_model(sh.session)
+    sh.intensity_model[] = :linear
+    for what in ("NUTS", "Pigeons")
+        @test occursin("pure scale", G._sampler_theta_error(me, sh, [:tpole], what))
+    end
+    sh.intensity_model[] = :planck
+    for what in ("NUTS", "Pigeons")
+        @test isempty(G._sampler_theta_error(me, sh, [:tpole], what))
+    end
+    sh.intensity_model[] = :linear
+    # And a Roche surface is refused by name for both.
+    G.shell_add_model(3)
+    mr = G.current_model(sh.session)
+    for what in ("NUTS", "Pigeons")
+        @test occursin("no differentiable log-posterior",
+                       G._sampler_theta_error(mr, sh, [:rpole], what))
+    end
+end
+
+@testset "the orbit folder seeds itself, once" begin
+    # THE BUG THIS PINS. `orbit_dir` used to return early the moment the folder existed
+    # (`isdir(dir) && return dir`), so a folder that came into being empty — created before the
+    # function seeded anything, or in a moment when `resource("demos", "orbits")` answered
+    # `nothing` — stayed empty for ever. "Load orbit…" then opened on a listing with no files
+    # in it and both shipped orbits were unreachable, while `demos/orbits` held them all along.
+    shipped = ROTIR.resource("demos", "orbits")
+    @test shipped !== nothing
+    @test !isempty(filter(f -> endswith(f, ".toml"), readdir(shipped)))
+
+    mktempdir() do cfg
+        withenv("XDG_CONFIG_HOME" => cfg, "APPDATA" => cfg) do
+            # (1) A folder that ALREADY EXISTS AND IS EMPTY still gets seeded — the case the
+            # early return made permanent.
+            pre = joinpath(cfg, "rotir", "orbits"); mkpath(pre)
+            @test isempty(readdir(pre))
+            d = G.orbit_dir()
+            @test d == pre
+            orbits = sort(filter(f -> endswith(f, ".toml"), readdir(d)))
+            @test orbits == sort(filter(f -> endswith(f, ".toml"), readdir(shipped)))
+            # And the picker can now see them, which is the symptom that was reported.
+            # DISTINCT NAME. `rows = rows(...)` makes `rows` local to this block, so the
+            # right-hand side would resolve to the unassigned local rather than the helper —
+            # the same shadowing trap recorded in test_ellipsoid_map_derivs.jl.
+            listed = rows(G.picker_list(d, "0", "orbit"))
+            @test length(listed) == length(orbits)
+            @test all(cols(r)[1] == "file" for r in listed)
+
+            # (2) THE MARKER MAKES A DELETION PERMANENT, which is the property the early return
+            # was there for and the reason this is not simply "seed whenever empty".
+            @test isfile(joinpath(d, G.ORBIT_SEED_MARKER))
+            gone = first(orbits)
+            rm(joinpath(d, gone))
+            @test G.orbit_dir() == d
+            @test !isfile(joinpath(d, gone))
+            # Even emptied completely, nothing comes back.
+            for f in filter(f -> endswith(f, ".toml"), readdir(d)); rm(joinpath(d, f)); end
+            @test G.orbit_dir() == d
+            @test isempty(filter(f -> endswith(f, ".toml"), readdir(d)))
+        end
+    end
+
+    # (3) THE SHIPPED FOLDER IS A PLACE OF ITS OWN, so the presets stay reachable however the
+    # writable folder ends up — emptied as above, or replaced by `pwd()` when the home is
+    # read-only.
+    places = Dict(cols(r)[1] => cols(r)[2] for r in rows(G.picker_places()))
+    @test haskey(places, "Shipped orbits")
+    @test places["Shipped orbits"] == shipped
+    @test haskey(places, "Orbits")
+    # `.toml` only, and the marker is hidden so it is not offered as an orbit.
+    lst = rows(G.picker_list(shipped, "0", "orbit"))
+    @test !isempty(lst)
+    @test all(endswith(cols(r)[2], ".toml") for r in lst)
+    # The same folder under the DATA purpose shows nothing — the filter is per purpose, which
+    # is what keeps an orbit out of a dataset listing and the reverse.
+    @test isempty(G.picker_list(shipped, "0", "data"))
+end
+
 @testset "the orbit tab" begin
     sh = fresh_shell()
 

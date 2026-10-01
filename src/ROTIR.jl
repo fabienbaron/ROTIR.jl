@@ -42,6 +42,26 @@ include("oichi2_spheroid.jl");
 include("oichi2_binary.jl");
 include("fused_polyft.jl");
 include("shape_gradient.jl");
+# Absolute mass, radius and surface gravity. AFTER shape_gradient.jl for the Roche shape
+# factor `f_rapid_rot_and_deriv`, and BEFORE the maps so `logg` is available to whatever
+# indexes a model atmosphere by it.
+include("stellar_physics.jl");
+# Where the emergent intensity comes from: I(Teff, logg, mu, lambda). AFTER
+# stellar_physics.jl (it asks `has_physical_scale` whether a logg is even available) and
+# after intensity.jl (PlanckProvider wraps `planck_and_dT` rather than restating it).
+include("intensity_provider.jl");
+# Kurucz ATLAS9 intensity packs -> RectGrid4, for the stars Korg's MARCS grid cannot reach
+# (it stops at 8000 K; Kurucz runs to 50000 K). AFTER intensity_provider.jl, which defines
+# the RectGrid4 it builds.
+include("kurucz_intensity.jl");
+# Per-tessel line-of-sight velocity. AFTER stellar_physics.jl for the mas->m conversion
+# and the day->second constant; it needs no geometry derivatives of its own because it is
+# a function of `proj_west`/`proj_north`, which already have one.
+include("velocity_field.jl");
+# Velocity-resolved observables. AFTER fused_polyft.jl (it loops the matrix-free kernel over
+# wavelength channels), oichi2_spheroid.jl (`setup_polyflux_single`,
+# `parametric_temperature_map`, `mod360`) and velocity_field.jl.
+include("spectral_cube.jl");
 # Gravity darkening beyond von Zeipel (Espinosa Lara & Rieutord 2011). AFTER
 # shape_gradient.jl, which defines the Roche shape factor `f_rapid_rot_and_deriv` it
 # expresses ω and r̃ through.
@@ -202,6 +222,10 @@ export plot_v2_residuals, plot_t3amp_residuals, plot_t3phi_residuals, plot_resid
 export DataBlocks, data_blocks, resample_blocks, block_counts, block_weights
 export apply_block_counts, apply_block_weights, perturb_data
 export BootstrapResult, bootstrap_driver
+# The parametric parameter vector, declared once (src/bootstrap.jl).
+export ParametricLayout, parametric_layout, layout_theta, layout_merge,
+       layout_free_indices, θindex
+export parametric_posterior_spec
 # Analytic component visibilities — useful for quick parametric fits (e.g. per-epoch
 # binary astrometry) alongside ROTIR's tessellated surface models.
 export visibility_ud, visibility_ldlin, visibility_ldquad, visibility_ldpow
@@ -223,7 +247,7 @@ export starparameters, binaryparameters
 # form-generating front-end both read (src/surface_schema.jl).
 export ParamSpec, SurfaceSpec, SURFACE_TYPES, SURFACE_TYPE_ORDER,
        surface_spec, surface_params, default_star_params, validate_star_params,
-       ld_coefficients_used
+       ld_coefficients_used, advise_star_params
 
 # A surface map as a file, with the tessellation and the parameters that reproduce its χ²
 # (src/surface_map_io.jl).
@@ -253,6 +277,24 @@ export reflection_kernels, solve_radiosity, handle_reflection
 
 # Temperature -> band intensity (intensity.jl)
 export intensity, planck_and_dT, band_of
+# Model-atmosphere intensity, I(Teff, logg, mu, lambda) — src/intensity_provider.jl.
+# `owns_mu` is the guard against counting limb darkening twice.
+export IntensityProvider, PlanckProvider, TabulatedProvider, RectGrid4
+export provider_intensity, provider_intensity_and_derivs, provider_map
+export owns_mu, needs_logg, provider_support, check_provider_consistency
+export interp4_and_grad, analytic_test_grid
+export save_intensity_grid, load_intensity_grid
+# Kurucz ATLAS9 intensity packs (src/kurucz_intensity.jl).
+export KuruczModel, KURUCZ_MU, read_kurucz_models, read_kurucz_intensity
+# Implemented in ext/ROTIRKorgExt.jl; `using Korg` activates them.
+export build_korg_grid, korg_provider
+# Line-of-sight velocity field (src/velocity_field.jl). Positive = receding.
+export los_velocity, los_velocity_from_proj, doppler_lambda, velocity_field_summary
+# Velocity-resolved observables: one surface -> visibilities AND a line profile
+# (src/spectral_cube.jl).
+export rest_lambda, SurfaceState, surface_state, channel_intensity
+export line_profile, spectral_cvis
+export continuum_mask, differential_observables, normalize_profile, line_equivalent_width
 
 # Geometry: Roche lobe
 export update_roche_radii, get_surface_potential, synchronicity
@@ -265,6 +307,16 @@ export roche_volume, roche_area, roche_equivalent_radius, romberg_integrate
 # Geometry: rapid rotators
 export temperature_map_vonZeipel_rapid_rotator
 export calc_rotspin, calc_omega
+
+# Physical units: absolute mass, radius, surface gravity (src/stellar_physics.jl).
+# `logg_map` is what lets a model atmosphere be indexed by (Teff, logg) instead of
+# leaving limb darkening to be fitted.
+export polar_radius_m, polar_radius_rsun, angular_rate
+export derive_mass, derive_mass_and_dlog
+export roche_gravity_and_derivs, logg_map, logg_map_and_derivs, logg_pole
+export equatorial_velocity, projected_veq, has_physical_scale, derived_quantities
+export derived_summary_text
+export limb_mu_vec
 
 # Geometry: temperature maps
 export temperature_map_vonZeipel_roche_single, compute_gravity_primary, compute_gravity_secondary

@@ -904,7 +904,16 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
   moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=cmap_obj)
   # graticule
   ax.set_longitude_grid(20);
-  ax.set_latitude_grid(20);
+  # LATITUDE GRID: the spacing must DIVIDE 90, or the labels will not match the ticks.
+  #
+  # matplotlib's GeoAxes.set_latitude_grid(d) places parallels at arange(-90+d, 90, d) and then
+  # labels them with ThetaFormatter(d), which rounds to multiples of d.  With d = 20 the ticks land
+  # at +-10, +-30, +-50, +-70 — none of them multiples of 20 — and they came out labelled
+  # -80, -40, -20, 0, 0, 20, 40, 80: a duplicated 0, no +-60, and every label wrong by 10-20 deg.
+  # Verified by a fiducial map (bands at latitude 0 and +60): the DATA is placed correctly, the
+  # equator at the ellipse centre and +60 at 76.5% of the way to the pole against an expected
+  # 78.6%, so only the labels were wrong.  15 and 30 both divide 90 and are safe; 20 is not.
+  ax.set_latitude_grid(15);
   ax.set_longitude_grid_ends(90);
   spacing = 0.04
   subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing);

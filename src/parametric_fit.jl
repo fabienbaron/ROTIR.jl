@@ -29,6 +29,38 @@
 # Against: no gradients are used, cost grows steeply with dimension, and PythonCall is not
 # thread-safe. Safe to call from a multithreaded session (see the note in the body).
 """
+    parametric_posterior_spec(data_epochs, tessels, tepochs, base_params; kwargs...)
+        -> (logπ, lower, upper, free_idx, layout)
+
+The rapid rotator's log-posterior together with everything a sampler needs around it: box
+bounds, the resolved free-parameter indices, and the [`ParametricLayout`](@ref) they all
+refer to.
+
+Factored out because `_fit_hmc` and `_fit_pigeons` carried a byte-identical copy of this and
+`fit_parametric_ultranest` a third variant, so every new physical parameter had to be added
+to all three — and a missed one does not fail loudly, it just indexes a vector of the wrong
+length. Lives in the core rather than in an extension for the same reason
+[`_box_transform`](@ref) does: sibling package extensions cannot import from one another.
+
+`provider` and `layout` are what let a sampler reach the parameters the legacy 7-vector has
+no room for — `d` above all, which is what makes a model-atmosphere `logg` fittable. See
+[`build_parametric_logπ`](@ref).
+"""
+function parametric_posterior_spec(data_epochs, tessels, tepochs, base_params;
+                                   free = nothing, intensity_model::Symbol = :linear,
+                                   band = nothing, κ = 50, GM = 1,
+                                   tpole_free::Bool = false, gravity_law = nothing,
+                                   logprior = nothing, provider = nothing, layout = nothing)
+    L = layout === nothing ? parametric_layout(; tpole_free = tpole_free) : layout
+    lp = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
+                               intensity_model = intensity_model, band = band,
+                               κ = κ, GM = GM, tpole_free = tpole_free,
+                               gravity_law = gravity_law, logprior = logprior,
+                               provider = provider, layout = L)
+    return lp, copy(L.lower), copy(L.upper), layout_free_indices(L, free), L
+end
+
+"""
     _box_transform(lo, hi) -> (to_θ, to_z, logabsjac)
 
 An unconstrained reparameterisation of a box, and its log-Jacobian.

@@ -276,6 +276,7 @@ Pane {
         root.refreshMethods()
         root.freeCount = parseInt(Julia.shell_free_count())
         warnLabel.text = Julia.shell_validate_model()
+        derivedLabel.text = Julia.shell_derived_summary()
         // `resultModel` belongs to `refreshSelectedFit()` now. It used to be refilled here
         // from `shell_last_fit`, which is always the NEWEST fit — so selecting an older row in
         // the history showed its numbers until the next keystroke in the form silently put the
@@ -905,6 +906,19 @@ Pane {
                             delegate: paramRow
                         }
                     }
+                }
+
+                // The PHYSICAL consequences of the four angular/dimensionless numbers above:
+                // mass, radii, logg and rotation velocity. Muted, and above the red warning
+                // label, because it is information rather than a problem — conflating the two
+                // trains people to ignore the warnings.
+                Label {
+                    id: derivedLabel
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: "#5b7a8c"
+                    font.pointSize: root.fontPt - 1
+                    visible: text.length > 0
                 }
 
                 Label {

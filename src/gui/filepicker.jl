@@ -46,6 +46,13 @@ function picker_places()
         ""
     end
     isempty(o) || !isdir(o) || push!(rows, "Orbits\t$(o)")
+    # AND THE SHIPPED ONES, as their own place. The folder above is the writable one and is
+    # where saving goes, but it can legitimately be empty — a deleted preset stays deleted, and
+    # a read-only home makes `orbit_dir` fall back to the working directory entirely. Without
+    # this row the orbits that ship with ROTIR were then unreachable through the picker even
+    # though they were sitting in `demos/orbits`, which is exactly what happened.
+    so = ROTIR.resource("demos", "orbits")
+    so === nothing || so == o || push!(rows, "Shipped orbits\t$(so)")
     im = try
         image_dir()
     catch

@@ -1214,23 +1214,44 @@ orbit is a description of a SYSTEM, not of a dataset, and the β Lyr elements ar
 whichever night's data is open. It also has to be writable, which a package directory under a
 system-wide depot is not.
 
-Seeded, the first time it is created, with the orbits that ship in `demos/orbits` — so the
-picker opens on something rather than on an empty folder. Only on creation: a file deleted
-from here stays deleted.
+Seeded with the orbits that ship in `demos/orbits`, so the picker opens on something rather
+than on an empty folder. A file deleted from here stays deleted.
+
+SEEDING IS GATED ON A MARKER FILE, not on whether the folder had to be created. It used to
+return early the moment the folder existed —
+
+    isdir(dir) && return dir
+
+— which made any folder that came into existence empty stay empty for ever, silently and with
+no way to find out why. That is not hypothetical: a folder created before this function seeded
+anything, or created in a moment when `resource("demos", "orbits")` happened to answer
+`nothing`, left "Load orbit…" opening on a listing with no files in it and both shipped orbits
+unreachable, while `demos/orbits` held them all along.
+
+The marker keeps the property the early return was there for — a deletion is permanent —
+without tying it to a one-shot event that cannot be retried or inspected.
 """
 function orbit_dir()
     base = Sys.iswindows() ? get(ENV, "APPDATA", homedir()) :
            get(ENV, "XDG_CONFIG_HOME", joinpath(homedir(), ".config"))
     dir = joinpath(base, "rotir", "orbits")
-    isdir(dir) && return dir
+    marker = joinpath(dir, ORBIT_SEED_MARKER)
+    isdir(dir) && isfile(marker) && return dir
     try
-        mkpath(dir)
-        shipped = ROTIR.resource("demos", "orbits")
-        if shipped !== nothing
-            for f in readdir(shipped)
-                endswith(f, ".toml") || continue
-                cp(joinpath(shipped, f), joinpath(dir, f); force = false)
+        isdir(dir) || mkpath(dir)
+        if !isfile(marker)
+            shipped = ROTIR.resource("demos", "orbits")
+            if shipped !== nothing
+                for f in readdir(shipped)
+                    endswith(lowercase(f), ".toml") || continue
+                    # `force = false`: an orbit the user has edited under a shipped name is
+                    # theirs, and seeding must not overwrite it.
+                    cp(joinpath(shipped, f), joinpath(dir, f); force = false)
+                end
             end
+            # Written LAST, so a seeding that throws half way is retried rather than recorded
+            # as done.
+            touch(marker)
         end
     catch err
         # A read-only home is not a reason to fail to open a picker.
@@ -1239,6 +1260,15 @@ function orbit_dir()
     end
     return dir
 end
+
+"""
+    ORBIT_SEED_MARKER
+
+Name of the file [`orbit_dir`](@ref) writes once it has copied the shipped orbits in. Hidden,
+so it does not appear in the picker — which filters `.toml` anyway, and skips dotfiles unless
+"show all" is on.
+"""
+const ORBIT_SEED_MARKER = ".seeded"
 
 """
     image_dir() -> String

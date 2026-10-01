@@ -45,6 +45,59 @@ end
         @test m.zygote_ran[]     # the extension section must run, not silently skip
     end
 
+    # Absolute mass / radius / logg, and the ldtype = 0 identity on both the forward and
+    # the gradient path. Same convention as above: the script counts its own failures.
+    # `fd_ran[]` is NOT asserted — FiniteDifferences is a demos-environment dependency, so
+    # requiring it would fail the suite under `--project=.`, where every other section of
+    # this file still runs and still checks the closed forms and the symmetries.
+    @testset "stellar physics" begin
+        m = run_script("test_stellar_physics.jl")
+        @test m.nfail[] == 0
+    end
+
+    # I(Teff, logg, mu, lambda): the interpolant, its four exact partials, the rrule, and
+    # the guard that refuses to count limb darkening twice. Zygote and FiniteDifferences
+    # sections self-skip, so this runs under `--project=.` too (32 of 37 checks).
+    @testset "intensity provider" begin
+        m = run_script("test_intensity_provider.jl")
+        @test m.nfail[] == 0
+    end
+
+    # Line-of-sight velocity. Cross-checked against `projected_veq`, which is derived by a
+    # different route, and against R_eq/R_p — the check that the field follows the Roche
+    # shape rather than the surface normals.
+    @testset "velocity field" begin
+        m = run_script("test_velocity_field.jl")
+        @test m.nfail[] == 0
+    end
+
+    # Velocity-resolved observables: Doppler sign, rotational broadening against the
+    # analytic elliptical kernel, equivalent-width conservation, differential visibilities,
+    # and the identity that one channel of the cube equals `fused_cvis`.
+    @testset "spectral cube" begin
+        m = run_script("test_spectral_cube.jl")
+        @test m.nfail[] == 0
+    end
+
+    # Kurucz ATLAS9 intensity packs — the hot-star grids Korg cannot reach. Runs on
+    # synthetic fixtures written in-test, so it needs no 67 MB download; the two distributed
+    # packs differ by one column and both layouts are covered.
+    @testset "Kurucz intensity" begin
+        m = run_script("test_kurucz_intensity.jl")
+        @test m.nfail[] == 0
+    end
+
+    # Korg-synthesised grids. OPT-IN via ROTIR_TEST_KORG=1: Korg pulls a MARCS artifact and
+    # a 42k-line VALD linelist and costs ~40 s, so it is deliberately not in [targets] test.
+    # The script self-skips, so this testset is a no-op without the flag.
+    @testset "Korg grid (opt-in)" begin
+        m = run_script("test_korg_grid.jl")
+        @test m.nfail[] == 0
+        if get(ENV, "ROTIR_TEST_KORG", "0") == "1"
+            @test m.korg_ran[]
+        end
+    end
+
     # Binary frame + mutual irradiation. Self-contained @test assertions (analytic limits
     # and conservation laws, no recorded reference values), so it is included directly
     # rather than through run_script.

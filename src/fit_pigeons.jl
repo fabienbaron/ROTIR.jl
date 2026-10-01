@@ -125,23 +125,52 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
                       tpole_free::Bool = false, gravity_law = nothing,
                       intensity_model::Symbol = :linear,
                       band = nothing, κ = 50, GM = 1,
+                      provider = nothing, layout = nothing,
                       n_rounds::Int = 10, n_chains::Int = 10, explorer::Symbol = :slice,
                       multithreaded::Bool = true, reference_sigma::Real = 3.0,
-                      seed::Union{Nothing,Integer} = nothing, verb::Bool = false)
+                      seed::Union{Nothing,Integer} = nothing, verb::Bool = false,
+                      model::Symbol = :rapid_rotator)
     explorer in (:slice, :mala) ||
         throw(ArgumentError("_fit_pigeons: explorer must be :slice or :mala (got $explorer)"))
+    model in (:rapid_rotator, :sphere, :ellipsoid) ||
+        error("_fit_pigeons: model must be :rapid_rotator, :sphere or :ellipsoid (got $(model))")
     T = eltype(tessels.unit_xyz)
     θfull = collect(T, θ0)
-    dlb, dub = default_parametric_bounds(; tpole_free = tpole_free)
+    # THE SAME THREE-WAY CHOICE `_fit_hmc` MAKES, and for the same reason: everything below the
+    # log-posterior — the box transform, the free subspace, the reference, the ladder and the
+    # explorer — is indifferent to what the parameters mean. Only the builder, the bounds and
+    # the free-index map change with the surface.
+    #
+    # This was hardcoded to the rapid rotator, which is why the GUI offered tempering on that
+    # surface alone. That was never a restriction of the METHOD: with the default `:slice`
+    # explorer Pigeons needs no gradient at all, so its requirement is strictly weaker than
+    # NUTS's — and NUTS has been offered on all three since the sphere and the ellipsoid gained
+    # `build_sphere_logπ` and `build_ellipsoid_logπ`.
+    logπ, dlb, dub, idx = if model === :sphere
+        lbs, ubs = default_sphere_bounds(base_params.ldtype)
+        nθ = length(lbs)
+        (build_sphere_logπ(data_epochs, tessels, tepochs, base_params; κ = κ),
+         lbs, ubs,
+         free === nothing ? collect(1:nθ) : sphere_free_indices(free, base_params.ldtype))
+    elseif model === :ellipsoid
+        lbe, ube = default_ellipsoid_bounds(; tpole_free = tpole_free)
+        (build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params;
+                              intensity_model = intensity_model, band = band,
+                              κ = κ, tpole_free = tpole_free, logprior = nothing),
+         lbe, ube,
+         ellipsoid_free_indices(free, base_params.ldtype; tpole_free = tpole_free))
+    else
+        # The RAPID ROTATOR's θ, its bounds and its free set all come from one place, so
+        # `provider`/`layout` reach it without this branch knowing what is in them.
+        parametric_posterior_spec(data_epochs, tessels, tepochs, base_params;
+                                  free = free, intensity_model = intensity_model,
+                                  band = band, κ = κ, GM = GM, tpole_free = tpole_free,
+                                  gravity_law = gravity_law, logprior = nothing,
+                                  provider = provider, layout = layout)[1:4]
+    end
     lower = collect(T, lb === nothing ? dlb : lb)
     upper = collect(T, ub === nothing ? dub : ub)
-    idx = parametric_free_indices(free; tpole_free = tpole_free)
     isempty(idx) && error("_fit_pigeons: nothing is free")
-
-    logπ = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
-                                 intensity_model = intensity_model, band = band,
-                                 κ = κ, GM = GM, tpole_free = tpole_free,
-                                 gravity_law = gravity_law, logprior = nothing)
 
     # The reduced problem, exactly as `_fit_hmc` builds it: θ = θ_frozen + S·θ_free with a
     # constant scatter matrix, so Zygote differentiates through it with no special handling.

@@ -81,7 +81,18 @@ end
 Compute per-baseline phase shift for a star displaced by (offset_x, offset_y) mas
 in ROTIR's projected frame (West, North).
 
-Uses the same kx/ky sign convention as the polygon FT in `setup_polyft_single`.
+Uses the same kx/ky sign convention as the polygon FT in `setup_polyft_single`, and the
+same 2π in the exponent — which is the part that is easy to get wrong. The polygon kernel
+reads `cis(-π·(kx·(xⱼ+xⱼ₊₁) + ky·(yⱼ+yⱼ₊₁)))`, whose argument is a SUM OF TWO VERTICES, i.e.
+twice the edge midpoint; the transform it implements is `exp(-2πi(kx·x + ky·y))`. Copying
+that `-π` onto a single offset halves the exponent, which displaces the companion by half
+its true separation — undetectable in |V| for a single component (a shift does not change
+the modulus) and wrong in every binary.
+
+Two independent checks pin it, both in `test/test_binary_cvis.jl`: translating a mesh by
+(Δx, Δy) and transforming it must equal transforming it at the origin and multiplying by
+this factor, and for two unresolved components it must reduce to the textbook
+`exp(-2πi(u·Δα + v·δ))` with Δα = -offset_x (West = -East) in radians.
 """
 # The phase argument kx·Δx + ky·Δy runs to many radians at long baselines, so its precision
 # is set here, not downstream. Follow the inputs.
@@ -91,7 +102,7 @@ function binary_phase_shift(uv, offset_x, offset_y;
     C = T(180 * 3600000)
     kx = uv[1,:] .* T(-pi / C)
     ky = uv[2,:] .* T( pi / C)
-    return cis.(-T(pi) .* (kx .* offset_x .+ ky .* offset_y))
+    return cis.(-2 * T(pi) .* (kx .* offset_x .+ ky .* offset_y))
 end
 
 """

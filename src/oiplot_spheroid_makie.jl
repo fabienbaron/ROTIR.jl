@@ -72,10 +72,18 @@ Resolve values to explicit colours. Two reasons not to hand Makie the raw number
     plot, which under QMLMakie means allocating GPU buffers with no context bound. A canvas
     that is always fed `Vector{RGBAf}` never changes type.
 """
-function map_colors(values, cmap, colorrange)
+function map_colors(values, cmap, colorrange;
+                    bad_color = Makie.RGBAf(0.83, 0.83, 0.83, 1))
     lo, hi = colorrange
     s = hi > lo ? 1 / (hi - lo) : 0.0
-    return [Makie.RGBAf(Makie.to_color(cmap[clamp((v - lo) * s, 0, 1)])) for v in values]
+    # NON-FINITE VALUES GO TO `bad_color`, the same light grey the Mollweide already paints
+    # them (`mollweide_mesh`, and matplotlib's `set_bad("lightgray")` before it). Without the
+    # branch, `clamp(NaN, 0, 1)` is NaN and indexing a colormap with NaN throws — from inside
+    # a QML callback, which freezes the window rather than printing anything. A grey tessel
+    # is also the honest rendering: mapping NaN onto the bottom of the colormap would show a
+    # cold surface where there is in fact no value at all.
+    return [isfinite(v) ? Makie.RGBAf(Makie.to_color(cmap[clamp((v - lo) * s, 0, 1)])) :
+                          bad_color for v in values]
 end
 
 "Value range for a map, with the degenerate/uniform guard the matplotlib layer uses."

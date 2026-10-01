@@ -101,3 +101,67 @@ using ROTIR: binary_cvis, binary_chi2_f, binary_phase_shift, POLYFT_BACKEND
         @test maximum(abs.(pair .- solo)) / maximum(abs, solo) > 0.05
     end
 end
+
+# =======================================================================================
+# The SCALE of the phase shift, which nothing above constrains.
+# =======================================================================================
+# Every test above passes an arbitrary offset to `binary_phase_shift` and compares two routes
+# that both use it, so any factor in its exponent cancels. It shipped with half the right one
+# for that reason: `-π` copied from the polygon kernel, whose argument is a SUM OF TWO
+# VERTICES and therefore already twice the midpoint. The companion sat at half its separation,
+# and no test — and no |V| — could see it.
+#
+# These two can. Neither compares ROTIR to ROTIR.
+
+@testset "binary_phase_shift: the exponent" begin
+    tess = tessellation_healpix(3)
+    p = default_star_params(0; radius = 0.3, tpole = 9000.0)
+    # uv spanning CHARA: ±3e8 cycles/rad is ~330 m at 1.1 μm.
+    nuv = 64
+    uv = permutedims(hcat(collect(range(-3e8, 3e8, length = nuv)),
+                          collect(range( 2e8, -2e8, length = nuv))))
+    d  = (uv = uv,)
+    Δx, Δy = 0.37, -0.52     # mas, deliberately asymmetric so a swapped axis shows
+
+    @testset "shift theorem: transforming a moved mesh == moving the transform" begin
+        # The definition of a phase shift, tested on the actual transform rather than on a
+        # model of it. `proj_west`/`proj_north` are per-component coordinates with the
+        # placement held in `center_offsets`, so translating them IS displacing the star.
+        s = create_star(tess, p, 0.0)
+        m = fill(9000.0, s.npix)
+        F0, fl0 = fused_cvis_parts(m, s, d)
+        s2 = deepcopy(s)
+        s2.proj_west  .= s.proj_west  .+ Δx
+        s2.proj_north .= s.proj_north .+ Δy
+        F1, fl1 = fused_cvis_parts(m, s2, d)
+        # The shoelace area is translation-invariant, so the flux must not move.
+        @test abs(fl1 - fl0) / fl0 < 1e-5
+        pred = (F0 ./ fl0) .* binary_phase_shift(uv, Δx, Δy)
+        # Tolerance is set by `proj_west` being Float32, not by the phase.
+        @test maximum(abs.(F1 ./ fl1 .- pred)) < 1e-5
+        # And it is genuinely sensitive to the factor that was wrong: half the exponent has
+        # to FAIL, or this test would not have caught the bug it exists for.
+        half = (F0 ./ fl0) .* cis.(angle.(binary_phase_shift(uv, Δx, Δy)) ./ 2)
+        @test maximum(abs.(F1 ./ fl1 .- half)) > 1e-2
+    end
+
+    @testset "two unresolved components reduce to the textbook binary" begin
+        # For components far smaller than λ/B, each |V| ≈ 1 and the pair must give exactly
+        # `(f1 + f2·exp(-2πi(u·Δα + v·Δδ)))/(f1+f2)` with Δα EAST. ROTIR's offset_x is WEST,
+        # so Δα = -Δx. This is the check that fixes the sign of both axes as well as the scale.
+        tiny1 = default_star_params(0; radius = 0.002, tpole = 9000.0)
+        tiny2 = default_star_params(0; radius = 0.002, tpole = 9000.0)
+        s1 = create_star(tess, tiny1, 0.0); s2 = create_star(tess, tiny2, 0.0)
+        m1 = fill(9000.0, s1.npix);         m2 = fill(9000.0, s2.npix)
+        ph = binary_phase_shift(uv, Δx, Δy)
+        got = binary_cvis(m1, s1, m2, s2, ph; data = d)
+        mas2rad = pi / (180 * 3600000)
+        α = -Δx * mas2rad            # East
+        δ =  Δy * mas2rad            # North
+        _, f1 = fused_cvis_parts(m1, s1, d)
+        _, f2 = fused_cvis_parts(m2, s2, d)
+        want = (f1 .+ f2 .* cis.(-2π .* (uv[1, :] .* α .+ uv[2, :] .* δ))) ./ (f1 + f2)
+        # 2e-3 is the residual resolution of a 0.002 mas disk at 3e8 cycles/rad, not slack.
+        @test maximum(abs.(got .- want)) < 2e-3
+    end
+end

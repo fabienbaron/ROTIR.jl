@@ -129,7 +129,18 @@ function ld_and_derivs(nz::AbstractVector{T}, ldtype::Integer, ld1::T, ld2::T,
     dld_dld2 = Vector{T}(undef, n)
     @inbounds for i in 1:n
         μ, dμ = mu_and_dmu(nz[i])
-        if ldtype == 1                       # linear: 1 − ld1(1−μ)
+        if ldtype == 0
+            # 0: NONE — the intensity provider owns the μ dependence (see compute_ldmap).
+            # This branch is NOT optional cosmetics: the fallback below is `else`, i.e.
+            # ldtype 3, so without it an ldtype = 0 model silently gets the Hestroffer law
+            # μ^ld1 on the gradient path while `compute_ldmap` returns ones on the forward
+            # path — the two would disagree about the model and the fit would optimise
+            # something that is never reported.
+            ld[i]       = one(T)
+            dld_dμ      = zero(T)
+            dld_dld1[i] = zero(T)
+            dld_dld2[i] = zero(T)
+        elseif ldtype == 1                   # linear: 1 − ld1(1−μ)
             ld[i]       = one(T) - ld1*(one(T) - μ)
             dld_dμ      = ld1
             dld_dld1[i] = -(one(T) - μ)
@@ -401,12 +412,35 @@ pass it explicitly only to override. β is θ[5] under either law, and holding i
 recover Espinosa Lara & Rieutord's published exponent is done by leaving `beta` out of the
 fit's `free` set, not by changing the law.
 
+## `layout` and `provider`: fitting with PREDICTED limb darkening
+
+`layout` is a [`ParametricLayout`](@ref); the default reproduces the historical
+`[rpole, ω, inc, PA, β, ld1, ld2]` (+`tpole`) exactly. Any parameter absent from the layout is
+held at its `base_params` value, so a layout is also how a parameter gets frozen structurally
+rather than through `free`.
+
+`provider` is an [`IntensityProvider`](@ref). Given one, the per-tessel intensity becomes
+`I(Teff, logg, μ, band)` from a model atmosphere instead of `intensity(Teff, model, band)`,
+and three things change:
+
+  * `logg` is computed per tessel by [`logg_map`](@ref) from `(rpole, d, fev, rotation_period)`
+    — which is why `d` belongs in the layout (`distance_free = true`) for it to be fitted.
+  * **the intensity moves INSIDE the epoch loop.** Without a provider `Imap` depends only on
+    the temperature map and is hoisted out; with one it depends on μ, hence on `nz`, hence on
+    the rotation phase, so it must be recomputed per epoch. That is a real cost and the reason
+    the two branches below are written separately rather than unified.
+  * **no limb-darkening factor is applied.** The provider already carries the μ dependence, so
+    `ldtype` must be 0 and `ld1`/`ld2` leave θ. This is the point: a fitted `ld1` absorbs the
+    error in whichever gravity-darkening law was assumed, and removing it is what breaks the
+    β/ld1 degeneracy (measured at +0.67 to +0.99; see `demos/betcas_fisher_predicted_ld.jl`).
+
 Compute the gradient with `Zygote.gradient(logπ, θ)` (load Zygote yourself).
 """
 function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                intensity_model::Symbol = :linear, band = nothing,
                                κ = 50, GM = 1, tpole_free::Bool = false,
-                               gravity_law = nothing, logprior = nothing)
+                               gravity_law = nothing, logprior = nothing,
+                               provider = nothing, layout = nothing)
     T = eltype(tessels.unit_xyz)
     colat = tessels.unit_spherical[:, 5, 2]
     sinθ = T.(sin.(colat)); cosθ = T.(cos.(colat))
@@ -424,6 +458,32 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
     ld4_base = T(hasproperty(base_params, :ld4) ? base_params.ld4 : 0)
     tpole_base = T(base_params.tpole)
     κT = T(κ); GMT = T(GM)
+
+    # θ SLOTS, resolved once. 0 means "absent from the layout", in which case the parameter is
+    # held at its base_params value. Precomputed out here so the closure does no name lookup
+    # and Zygote sees plain integer indexing.
+    L = layout === nothing ? parametric_layout(; tpole_free = tpole_free) : layout
+    slot(n) = (i = θindex(L, n); i === nothing ? 0 : i)
+    i_rp, i_fev, i_inc, i_pa, i_β = slot("rpole"), slot("omega"), slot("inc"),
+                                    slot("PA"), slot("beta")
+    i_ld1, i_ld2, i_tp, i_d = slot("ld1"), slot("ld2"), slot("tpole"), slot("d")
+    i_rp == 0 && error("build_parametric_logπ: the layout must contain `rpole`")
+    base_of(f, dflt) = T(hasproperty(base_params, f) ? getproperty(base_params, f) : dflt)
+    b_rp  = T(base_params.rpole);       b_fev = T(base_params.frac_escapevel)
+    b_inc = T(base_params.inclination); b_pa  = T(base_params.position_angle)
+    b_β   = base_of(:beta, 0.25);       b_ld1 = base_of(:ld1, 0.0)
+    b_ld2 = base_of(:ld2, 0.0);         b_d   = base_of(:d, 0.0)
+    prot  = T(base_params.rotation_period)
+
+    if provider !== nothing
+        # Refuse the combination that would count limb darkening twice, with the same message
+        # the forward path gives.
+        msgs = check_provider_consistency(provider, base_params)
+        isempty(msgs) || error("build_parametric_logπ: " * join(msgs, "; "))
+        band === nothing && error("build_parametric_logπ: a provider needs `band` " *
+                                  "(wavelength in metres) to index its λ axis")
+    end
+    bandT = band === nothing ? nothing : T(band)
     nepochs = length(data_epochs)
     kxs = Vector{Vector{T}}(undef, nepochs)
     kys = Vector{Vector{T}}(undef, nepochs)
@@ -438,16 +498,39 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
 
     return function logπ(θ)
         R = eltype(θ)
-        rpole = θ[1]; fev = θ[2]; inc = θ[3]; PA = θ[4]; β = θ[5]; ld1 = θ[6]; ld2 = θ[7]
-        tpole = tpole_free ? θ[8] : R(tpole_base)
+        rpole = i_rp  == 0 ? R(b_rp)  : θ[i_rp]
+        fev   = i_fev == 0 ? R(b_fev) : θ[i_fev]
+        inc   = i_inc == 0 ? R(b_inc) : θ[i_inc]
+        PA    = i_pa  == 0 ? R(b_pa)  : θ[i_pa]
+        β     = i_β   == 0 ? R(b_β)   : θ[i_β]
+        tpole = i_tp  == 0 ? R(tpole_base) : θ[i_tp]
         x = gravity_map(lawv, rpole, fev, β, tpole, sinθ, cosθ; GM = GMT)
-        Imap = intensity(x, intensity_model, band)
-        chi2 = sum(1:nepochs) do ep
-            pw, pn, nz = project_geometry(rpole, fev, inc, PA, tessels, ts[ep], base_params)
-            ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
-            vw = visibility_weight(nz, κT)
-            xw = Imap .* vw .* ld
-            interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+        chi2 = if provider === nothing
+            ld1 = i_ld1 == 0 ? R(b_ld1) : θ[i_ld1]
+            ld2 = i_ld2 == 0 ? R(b_ld2) : θ[i_ld2]
+            # The intensity is geometry-independent here, so it is hoisted out of the loop.
+            Imap = intensity(x, intensity_model, band)
+            sum(1:nepochs) do ep
+                pw, pn, nz = project_geometry(rpole, fev, inc, PA, tessels, ts[ep],
+                                              base_params)
+                ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
+                vw = visibility_weight(nz, κT)
+                xw = Imap .* vw .* ld
+                interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+            end
+        else
+            dist = i_d == 0 ? R(b_d) : θ[i_d]
+            lg = logg_map(rpole, dist, fev, R(prot), sinθ, cosθ)
+            sum(1:nepochs) do ep
+                pw, pn, nz = project_geometry(rpole, fev, inc, PA, tessels, ts[ep],
+                                              base_params)
+                vw = visibility_weight(nz, κT)
+                # Inside the loop, unavoidably: μ depends on nz and so on the rotation phase.
+                # No `ld` factor — the provider owns the μ dependence (ldtype = 0, checked).
+                Imap = provider_map(provider, x, lg, limb_mu_vec(nz), bandT)
+                xw = Imap .* vw
+                interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+            end
         end
         val = -R(0.5) * chi2
         return logprior === nothing ? val : val + logprior(θ)
