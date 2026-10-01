@@ -351,7 +351,28 @@ Pane {
                         readonly property int rowComp: pcomp
 
                         Label {
-                            Layout.preferredWidth: dp(118)
+                            // dp(168), not dp(118). The cell renders `label (unit)`, and at 118
+                            // the budget is ~17 characters — which elides THIRTEEN of the
+                            // schema's labels across the four surface types, including
+                            // "Position angle (deg)" and "Rotation period (d)" on ALL of them.
+                            //
+                            // The width is set by MEASUREMENT, not by a characters-times-width
+                            // estimate: the font is proportional, so the budget depends on which
+                            // glyphs a label happens to use. dp(152) was tried first and still
+                            // clipped the two 20-character labels, "Position angle (deg)" and
+                            // the Roche surface's "Ṗ, period rate (d/d)", while clearing every
+                            // 19-character one. dp(168) clears both.
+                            //
+                            // The row then totals 168+120+74+58+58 + 4×4 spacing = 494 against
+                            // the pane's dp(520), so the bounds columns still fit — the pane's
+                            // horizontal scrollbar policy is AlwaysOff, so an overflowing row
+                            // would be silently CLIPPED rather than scrollable.
+                            //
+                            // Elision here is particularly bad because the unit is the part
+                            // that gets cut: "Rotation perio…" loses the "(d)" that says
+                            // whether it wants days or hours, and the tooltip is the only other
+                            // place that says so.
+                            Layout.preferredWidth: dp(168)
                             text: plabel + (punit.length > 0 ? " (" + punit + ")" : "")
                             elide: Text.ElideRight
                             font.pointSize: root.fontPt

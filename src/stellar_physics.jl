@@ -130,7 +130,7 @@ Effective gravity magnitude at one colatitude on a Roche surface, in the same un
 
 `q` enters only through the three sensitivities passed in — `dRp_dq`, `dGM_dq`, `dΩ_dq`
 — plus, for `q = fev`, the shape factor's own `f'`, which is why `fev` is passed
-separately from its sensitivity. `f` is [`f_rapid_rot_and_deriv`](@ref), which is
+separately from its sensitivity. `f` is `f_rapid_rot_and_deriv`, which is
 series-guarded near zero (the textbook form cancels catastrophically there).
 """
 @inline function roche_gravity_and_derivs(Rp::T, GM::T, Ω::T, fev::T,
@@ -179,7 +179,7 @@ end
 no new plumbing.
 
 The chain is short because the mass's log-derivatives are bare powers
-([`derive_mass_and_dlog`](@ref)) and because Ω comes straight from the period:
+(`derive_mass_and_dlog`) and because Ω comes straight from the period:
 
     ∂logg/∂q = (1/ln10) · (1/g) · ∂g/∂q
 
@@ -326,7 +326,7 @@ end
 `max.(nz, 0)` as a named function, for the μ a provider is indexed by.
 
 Written as a broadcast rather than a hand-written primitive because Zygote differentiates
-`max` correctly on its own — the subgradient at `nz = 0` is what [`mu_and_dmu`](@ref) already
+`max` correctly on its own — the subgradient at `nz = 0` is what `mu_and_dmu` already
 picks (zero on the back side), so the AD and the forward paths agree without a rule.
 """
 limb_mu_vec(nz) = max.(nz, zero(eltype(nz)))

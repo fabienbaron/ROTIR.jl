@@ -70,7 +70,7 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
                   θ0, free = nothing, lb = nothing, ub = nothing,
                   tpole_free::Bool = false, intensity_model::Symbol = :linear, band = nothing,
                   κ = 50, GM = 1, gravity_law = nothing,
-                  provider = nothing, layout = nothing,
+                  provider = nothing, layout = nothing, weights = (1, 1, 1),
                   n_samples::Int = 400, n_adapt::Int = 300,
                   target_accept::Real = 0.8, verb::Bool = false,
                   model::Symbol = :rapid_rotator)
@@ -88,7 +88,8 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
     logπ, dlb, dub, idx = if model === :sphere
         lbs, ubs = default_sphere_bounds(base_params.ldtype)
         nθ = length(lbs)
-        (build_sphere_logπ(data_epochs, tessels, tepochs, base_params; κ = κ),
+        (build_sphere_logπ(data_epochs, tessels, tepochs, base_params; κ = κ,
+                            weights = weights),
          lbs, ubs,
          free === nothing ? collect(1:nθ) : sphere_free_indices(free, base_params.ldtype))
     elseif model === :ellipsoid
@@ -97,7 +98,7 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
         # contrast depends on it — under `:linear` it is a scale the normalisation divides out,
         # and `build_ellipsoid_logπ` refuses to pretend otherwise.
         lbe, ube = default_ellipsoid_bounds(; tpole_free = tpole_free)
-        (build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params;
+        (build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params; weights = weights,
                               intensity_model = intensity_model, band = band,
                               κ = κ, tpole_free = tpole_free, logprior = nothing),
          lbe, ube,
@@ -105,7 +106,7 @@ function _fit_hmc(data_epochs, tessels, tepochs, base_params;
     else
         # The RAPID ROTATOR's θ, its bounds and its free set all come from one place, so
         # `provider`/`layout` reach it without this branch knowing what is in them.
-        parametric_posterior_spec(data_epochs, tessels, tepochs, base_params;
+        parametric_posterior_spec(data_epochs, tessels, tepochs, base_params; weights = weights,
                                   free = free, intensity_model = intensity_model,
                                   band = band, κ = κ, GM = GM, tpole_free = tpole_free,
                                   gravity_law = gravity_law, logprior = nothing,

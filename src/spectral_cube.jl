@@ -154,7 +154,7 @@ throws away with `data = data_all[1, :]`. Each channel carries its own `uv`, bec
 `B/λ` and so is channel-specific; that is why the transform has to be redone per channel
 while the geometry is not.
 
-`cvis[c]` is normalised (`F/flux`) exactly as [`fused_cvis`](@ref) is, so it is directly
+`cvis[c]` is normalised (`F/flux`) exactly as `fused_cvis` is, so it is directly
 comparable to `poly_to_cvis` on a single channel. `flux[c]` is the same quantity
 [`line_profile`](@ref) returns — computed here as a by-product of the normalisation rather
 than a second time.

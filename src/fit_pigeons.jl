@@ -125,9 +125,11 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
                       tpole_free::Bool = false, gravity_law = nothing,
                       intensity_model::Symbol = :linear,
                       band = nothing, κ = 50, GM = 1,
-                      provider = nothing, layout = nothing,
+                      provider = nothing, layout = nothing, weights = (1, 1, 1),
                       n_rounds::Int = 10, n_chains::Int = 10, explorer::Symbol = :slice,
                       multithreaded::Bool = true, reference_sigma::Real = 3.0,
+                      variational::Bool = false, n_chains_variational::Int = 0,
+                      variational_first_round::Int = 2,
                       seed::Union{Nothing,Integer} = nothing, verb::Bool = false,
                       model::Symbol = :rapid_rotator)
     explorer in (:slice, :mala) ||
@@ -149,12 +151,13 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
     logπ, dlb, dub, idx = if model === :sphere
         lbs, ubs = default_sphere_bounds(base_params.ldtype)
         nθ = length(lbs)
-        (build_sphere_logπ(data_epochs, tessels, tepochs, base_params; κ = κ),
+        (build_sphere_logπ(data_epochs, tessels, tepochs, base_params; κ = κ,
+                            weights = weights),
          lbs, ubs,
          free === nothing ? collect(1:nθ) : sphere_free_indices(free, base_params.ldtype))
     elseif model === :ellipsoid
         lbe, ube = default_ellipsoid_bounds(; tpole_free = tpole_free)
-        (build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params;
+        (build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params; weights = weights,
                               intensity_model = intensity_model, band = band,
                               κ = κ, tpole_free = tpole_free, logprior = nothing),
          lbe, ube,
@@ -162,7 +165,7 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
     else
         # The RAPID ROTATOR's θ, its bounds and its free set all come from one place, so
         # `provider`/`layout` reach it without this branch knowing what is in them.
-        parametric_posterior_spec(data_epochs, tessels, tepochs, base_params;
+        parametric_posterior_spec(data_epochs, tessels, tepochs, base_params; weights = weights,
                                   free = free, intensity_model = intensity_model,
                                   band = band, κ = κ, GM = GM, tpole_free = tpole_free,
                                   gravity_law = gravity_law, logprior = nothing,
@@ -202,9 +205,48 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
     expl = explorer === :mala ?
            Pigeons.AutoMALA(default_autodiff_backend = ADTypes.AutoZygote()) :
            Pigeons.SliceSampler()
+    # THE VARIATIONAL REFERENCE, and why it is not an optional nicety here.
+    #
+    # The ladder anneals FROM `reference` TO the posterior. With the fixed N(0, σ²I) above that
+    # reference spans, for a sphere under `default_sphere_bounds`, radius 0.05–20 mas — against
+    # a posterior 5.9e-4 mas wide. Measured consequence on α Cen A: `mean(α) ≈ 0.5` across the
+    # ladder but `min(α) ≈ 3e-28`, i.e. ONE link — the reference-adjacent one — is severed, and
+    # `round_trips = 0` follows necessarily however many chains are added. Pigeons' own
+    # documentation names this case: "if there is a sharp peak close to a reference constructed
+    # from the prior, it may be useful to switch to a variational approximation"
+    # (docs/src/output-pt.md, on the LOCAL communication barrier).
+    #
+    # `variational = true` replaces the fixed reference with a Gaussian FITTED to the target as
+    # the run proceeds, which collapses that barrier rather than trying to bridge it with more
+    # rungs. `n_chains_variational > 0` instead gives the STABILIZED variant of
+    # Surjanovic et al. (2022): a fixed and a variational reference, each with its own leg,
+    # swapped non-reversibly. That costs a second leg but guards against the variational fit
+    # collapsing onto one mode and forgetting the others — which is the failure that matters on
+    # a multimodal target, and the reason this is not simply the default.
+    #
+    # NOTE n_chains ≈ 2Λ remains the sizing rule (Syed et al. 2021) — but Λ is estimated from
+    # observed rejection rates, so a severed link biases it LOW. Size chains against a Λ
+    # measured once the ladder actually communicates, not against one from a broken run.
+    # `first_tuning_round = 2`, NOT Pigeons' default of 6. The variational reference does
+    # nothing at all until that round, so with the default a run of `n_rounds = 6` tunes it
+    # only in its last round and returns a result BIT-IDENTICAL to the fixed reference —
+    # measured, and it is a silent no-op rather than an error. Anything below `n_rounds` works;
+    # 2 leaves the most rounds to adapt in, and the early rounds are the cheap ones.
+    gref = Pigeons.GaussianReference(first_tuning_round = variational_first_round)
+    vkw = if n_chains_variational > 0
+        (variational = gref, n_chains_variational = n_chains_variational)
+    elseif variational
+        (variational = gref,)
+    else
+        NamedTuple()
+    end
+    (variational || n_chains_variational > 0) && variational_first_round >= n_rounds &&
+        @warn "_fit_pigeons: variational_first_round = $(variational_first_round) is not less " *
+              "than n_rounds = $(n_rounds), so the variational reference will never be tuned " *
+              "and the run is equivalent to a fixed reference.
     kw = (target = ℓ, n_chains = n_chains, n_rounds = n_rounds, multithreaded = multithreaded,
           explorer = expl, record = [Pigeons.traces, Pigeons.round_trip],
-          show_report = verb)
+          show_report = verb, vkw...)
     pt = seed === nothing ? Pigeons.pigeons(; kw...) :
                             Pigeons.pigeons(; kw..., seed = Int(seed))
 

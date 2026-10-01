@@ -50,13 +50,14 @@ function parametric_posterior_spec(data_epochs, tessels, tepochs, base_params;
                                    free = nothing, intensity_model::Symbol = :linear,
                                    band = nothing, κ = 50, GM = 1,
                                    tpole_free::Bool = false, gravity_law = nothing,
-                                   logprior = nothing, provider = nothing, layout = nothing)
+                                   logprior = nothing, provider = nothing, layout = nothing,
+                                   weights = (1, 1, 1))
     L = layout === nothing ? parametric_layout(; tpole_free = tpole_free) : layout
     lp = build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                intensity_model = intensity_model, band = band,
                                κ = κ, GM = GM, tpole_free = tpole_free,
                                gravity_law = gravity_law, logprior = logprior,
-                               provider = provider, layout = L)
+                               provider = provider, layout = L, weights = weights)
     return lp, copy(L.lower), copy(L.upper), layout_free_indices(L, free), L
 end
 

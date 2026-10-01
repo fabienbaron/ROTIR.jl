@@ -245,6 +245,18 @@ end
 # The face normal is unit-length (see create_star), so nz is exactly cos(emergent
 # angle) = the limb cosine; visible-side μ = max(nz, 0), back-facing tessels clamp to 0.
 @inline limb_mu(nz::T) where {T} = nz > zero(T) ? nz : zero(T)
+"""
+    mu_and_dmu(nz) -> (μ, dμ/dnz)
+
+The emergent-angle cosine and its derivative, from a tessel's sky-frame normal `z` component.
+
+`μ = max(nz, 0)`: a tessel facing away from the observer contributes nothing, and clamping here
+rather than at the call sites is what keeps the derivative consistent with the value — the
+gradient paths need `dμ/dnz = 0` exactly where the clamp bites, not a one-sided limit.
+
+Returned as a pair because every caller that needs μ in a differentiated model needs the
+derivative in the same breath; `limb_mu` is the value-only form.
+"""
 @inline mu_and_dmu(nz::T) where {T} = nz > zero(T) ? (nz, one(T)) : (zero(T), zero(T))
 
 function compute_ldmap(μ, star_params; T = float(real(eltype(μ))))

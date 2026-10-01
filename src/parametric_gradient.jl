@@ -302,9 +302,33 @@ Single-epoch interferometric χ² (V² + T3amp + T3phi) from LD/visibility-weigh
 per-tessel values `xw` and projected vertices. Real-valued Zygote primitive.
 `kx, ky, k2_inv_im` are the pre-scaled UV frequencies (see `precompute_k2_inv_im`).
 """
+# WEIGHTS, as `(V², T3amp, T3φ)`. A zero SKIPS the term outright rather than multiplying it by
+# zero, in the primal and in the pullback alike — disabling an observable should cost nothing,
+# and for T3φ the skipped block is the most expensive of the three.
+#
+# WHY THIS EXISTS. `parametric_chi2` (src/parametric_fit.jl) has always taken weights and
+# `fit_sphere_ld` DEFAULTS to `[1, 1, 0]`, with measured justification in its docstring: on
+# RW Cep, adding T3φ moved the fitted diameter 2.93 → 2.56 mas and took χ²v2/n from 8.9 to
+# 24.8. This primitive — which every sampler and the whole gradient path reach through
+# `build_sphere_logπ`, `build_ellipsoid_logπ` and `build_parametric_logπ` — hardcoded all three
+# at weight 1 and offered no way to say otherwise. So a point fit and a posterior over the SAME
+# model were optimising different likelihoods, which is exactly the drift
+# `parametric_posterior_spec` exists to prevent.
+#
+# The default stays `(1, 1, 1)`, so nothing changes for any existing caller. It is deliberately
+# NOT `(1, 1, 0)`: that would silently alter every sampler result already in this repository.
+# For a SPHERE or an ELLIPSOID the projection is centrosymmetric and T3φ is identically 0° or
+# 180°, so `(1, 1, 0)` is the physically right choice and callers should pass it. For the RAPID
+# ROTATOR it is not: an inclined, oblate, gravity-darkened figure has the bright pole displaced
+# from the projected centre, so its closure phases are genuinely non-zero and carry the
+# inclination and position angle. Do not blanket-disable T3φ there.
+interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data) =
+    interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data, (1, 1, 1))
+
 function interferometric_chi2(xw::AbstractVector{T}, proj_west::AbstractMatrix{T},
                               proj_north::AbstractMatrix{T}, kx::Vector{T}, ky::Vector{T},
-                              k2_inv_im::Vector{Complex{T}}, data) where {T}
+                              k2_inv_im::Vector{Complex{T}}, data,
+                              weights::Tuple{<:Real,<:Real,<:Real}) where {T}
     nuv = length(kx); npix = length(xw)
     F  = Vector{Complex{T}}(undef, nuv)
     pf = zeros(T, npix)   # zeros: compute_polyflux_and_cvis! skips xw==0 pixels, leaving
@@ -316,16 +340,22 @@ function interferometric_chi2(xw::AbstractVector{T}, proj_west::AbstractMatrix{T
     t3   = cvis[data.indx_t3_1] .* cvis[data.indx_t3_2] .* cvis[data.indx_t3_3]
     t3a  = abs.(t3)
     t3p  = angle.(t3) .* T(180/π)
-    return sum(abs2, (v2 .- data.v2) ./ data.v2_err) +
-           sum(abs2, (t3a .- data.t3amp) ./ data.t3amp_err) +
-           sum(abs2, mod360(t3p .- data.t3phi) ./ data.t3phi_err)
+    c = iszero(weights[1]) ? zero(T) :
+        T(weights[1]) * sum(abs2, (v2 .- data.v2) ./ data.v2_err)
+    iszero(weights[2]) ||
+        (c += T(weights[2]) * sum(abs2, (t3a .- data.t3amp) ./ data.t3amp_err))
+    iszero(weights[3]) ||
+        (c += T(weights[3]) * sum(abs2, mod360(t3p .- data.t3phi) ./ data.t3phi_err))
+    return c
 end
 
 function ChainRulesCore.rrule(::typeof(interferometric_chi2),
                               xw::AbstractVector{T}, proj_west::AbstractMatrix{T},
                               proj_north::AbstractMatrix{T}, kx::Vector{T}, ky::Vector{T},
-                              k2_inv_im::Vector{Complex{T}}, data) where {T}
+                              k2_inv_im::Vector{Complex{T}}, data,
+                              weights::Tuple{<:Real,<:Real,<:Real} = (1, 1, 1)) where {T}
     nuv = length(kx); npix = length(xw)
+    w1, w2, w3 = T(weights[1]), T(weights[2]), T(weights[3])
     F  = Vector{Complex{T}}(undef, nuv)
     pf = zeros(T, npix)   # zeros: compute_polyflux_and_cvis! skips xw==0 pixels, leaving
                           # them here at 0 (correct: their flux contribution pf·xw is 0)
@@ -336,20 +366,24 @@ function ChainRulesCore.rrule(::typeof(interferometric_chi2),
     t3model = cvis[data.indx_t3_1] .* cvis[data.indx_t3_2] .* cvis[data.indx_t3_3]
     t3amod  = abs.(t3model)
     t3pmod  = angle.(t3model) .* T(180/π)
-    chi2 = sum(abs2, (v2model .- data.v2) ./ data.v2_err) +
-           sum(abs2, (t3amod .- data.t3amp) ./ data.t3amp_err) +
-           sum(abs2, mod360(t3pmod .- data.t3phi) ./ data.t3phi_err)
+    chi2 = (iszero(w1) ? zero(T) : w1 * sum(abs2, (v2model .- data.v2) ./ data.v2_err)) +
+           (iszero(w2) ? zero(T) : w2 * sum(abs2, (t3amod .- data.t3amp) ./ data.t3amp_err)) +
+           (iszero(w3) ? zero(T) :
+            w3 * sum(abs2, mod360(t3pmod .- data.t3phi) ./ data.t3phi_err))
 
     function chi2_pullback(c̄raw)
         c̄ = unthunk(c̄raw)                         # real scalar (usually 1)
         # ∂χ²/∂cvis  (same construction as shape_chi2_fg!)
         adj_cvis = zeros(Complex{T}, nuv)
-        @inbounds for i in eachindex(data.indx_v2)
+        # EACH BLOCK SCALED BY ITS OWN WEIGHT, and skipped entirely at zero. The scaling has to
+        # be here and not on `chi2`: the three terms contribute to the same `adj_cvis`, so a
+        # single factor applied afterwards would weight all of them together.
+        iszero(w1) || @inbounds for i in eachindex(data.indx_v2)
             k = data.indx_v2[i]
-            adj_cvis[k] += 4*(v2model[i]-data.v2[i])/data.v2_err[i]^2 * conj(cvis[k])
+            adj_cvis[k] += w1*4*(v2model[i]-data.v2[i])/data.v2_err[i]^2 * conj(cvis[k])
         end
-        t3amp_res = 2 .* (t3amod .- data.t3amp) ./ data.t3amp_err.^2
-        @inbounds for i in eachindex(data.indx_t3_1)
+        t3amp_res = iszero(w2) ? T[] : w2 .* 2 .* (t3amod .- data.t3amp) ./ data.t3amp_err.^2
+        iszero(w2) || @inbounds for i in eachindex(data.indx_t3_1)
             k1=data.indx_t3_1[i]; k2=data.indx_t3_2[i]; k3=data.indx_t3_3[i]
             c1=cvis[k1]; c2=cvis[k2]; c3=cvis[k3]
             a1=abs(c1); a2=abs(c2); a3=abs(c3)
@@ -357,8 +391,8 @@ function ChainRulesCore.rrule(::typeof(interferometric_chi2),
             adj_cvis[k2] += t3amp_res[i]*conj(c2)/a2*a1*a3
             adj_cvis[k3] += t3amp_res[i]*conj(c3)/a3*a1*a2
         end
-        t3phi_res = mod360(t3pmod .- data.t3phi) ./ data.t3phi_err.^2
-        @inbounds for i in eachindex(data.indx_t3_1)
+        t3phi_res = iszero(w3) ? T[] : w3 .* mod360(t3pmod .- data.t3phi) ./ data.t3phi_err.^2
+        iszero(w3) || @inbounds for i in eachindex(data.indx_t3_1)
             k1=data.indx_t3_1[i]; k2=data.indx_t3_2[i]; k3=data.indx_t3_3[i]
             c1=cvis[k1]; c2=cvis[k2]; c3=cvis[k3]; t3i=t3model[i]
             factor = t3phi_res[i]/abs2(t3i)*conj(t3i)
@@ -387,7 +421,7 @@ function ChainRulesCore.rrule(::typeof(interferometric_chi2),
         end
 
         return (NoTangent(), c̄ .* grad_xw, c̄ .* gpw, c̄ .* gpn,
-                NoTangent(), NoTangent(), NoTangent(), NoTangent())
+                NoTangent(), NoTangent(), NoTangent(), NoTangent(), NoTangent())
     end
     return chi2, chi2_pullback
 end
@@ -440,7 +474,7 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                intensity_model::Symbol = :linear, band = nothing,
                                κ = 50, GM = 1, tpole_free::Bool = false,
                                gravity_law = nothing, logprior = nothing,
-                               provider = nothing, layout = nothing)
+                               provider = nothing, layout = nothing, weights = (1, 1, 1))
     T = eltype(tessels.unit_xyz)
     colat = tessels.unit_spherical[:, 5, 2]
     sinθ = T.(sin.(colat)); cosθ = T.(cos.(colat))
@@ -516,7 +550,7 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                 ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
                 vw = visibility_weight(nz, κT)
                 xw = Imap .* vw .* ld
-                interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+                interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep], weights)
             end
         else
             dist = i_d == 0 ? R(b_d) : θ[i_d]
@@ -529,7 +563,7 @@ function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                 # No `ld` factor — the provider owns the μ dependence (ldtype = 0, checked).
                 Imap = provider_map(provider, x, lg, limb_mu_vec(nz), bandT)
                 xw = Imap .* vw
-                interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+                interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep], weights)
             end
         end
         val = -R(0.5) * chi2
@@ -675,7 +709,7 @@ temperature map is `ones` because a uniform map cancels in `cvis = F/flux`, so t
 the same value for every `tpole` — which is the honest statement, not a shortcut.
 """
 function build_sphere_logπ(data_epochs, tessels, tepochs, base_params;
-                           κ = 50, logprior = nothing)
+                           κ = 50, logprior = nothing, weights = (1, 1, 1))
     T = eltype(tessels.unit_xyz)
     ldtype = base_params.ldtype
     nld = _sphere_nld(ldtype)
@@ -714,7 +748,7 @@ function build_sphere_logπ(data_epochs, tessels, tepochs, base_params;
             # UNIFORM map, hence no `Imap` factor: a constant divides out of the normalised
             # visibility, so `tpole` is not a parameter of this problem at all.
             xw = vw .* ld
-            interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+            interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep], weights)
         end
         val = -R(0.5) * chi2
         return logprior === nothing ? val : val + logprior(θ)
@@ -890,7 +924,8 @@ flat direction.
 """
 function build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params;
                               intensity_model::Symbol = :linear, band = nothing,
-                              κ = 50, tpole_free::Bool = false, logprior = nothing)
+                              κ = 50, tpole_free::Bool = false, logprior = nothing,
+                              weights = (1, 1, 1))
     (tpole_free && intensity_model !== :planck) &&
         error("build_ellipsoid_logπ: `tpole` is a pure scale under intensity_model = " *
               ":$(intensity_model) and divides out of the normalised visibility — it is only " *
@@ -927,7 +962,7 @@ function build_ellipsoid_logπ(data_epochs, tessels, tepochs, base_params;
             ld = ld_weight(nz, ldtype, ld1, ld2, ld3_base, ld4_base)
             vw = visibility_weight(nz, κT)
             xw = Imap .* vw .* ld
-            interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep])
+            interferometric_chi2(xw, pw, pn, kxs[ep], kys[ep], k2s[ep], data_epochs[ep], weights)
         end
         val = -R(0.5) * chi2
         return logprior === nothing ? val : val + logprior(θ)

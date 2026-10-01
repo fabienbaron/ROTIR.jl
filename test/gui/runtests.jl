@@ -2309,4 +2309,216 @@ end
     @test [cols(r)[2] for r in maplist] == ["a_map.fits"]
 end
 
+@testset "the callbacks QML reads but nothing drove" begin
+    # Twenty-one callbacks had ZERO references in this file. Most are getters QML polls, which
+    # is exactly why they went uncovered: nothing in the Julia-driven flow needs them, and a
+    # throw in one surfaces as a blank field or a frozen window rather than as a test failure.
+    # `shell_derived_summary` is the cautionary one — it was added, shipped and never called
+    # here, while the function it wraps was tested in the core.
+    sh = fresh_shell()
+    @test occursin("ROTIR v", G.shell_version()) && occursin("Julia", G.shell_version())
+    @test !isempty(G.shell_ui_font_files())
+    @test G.shell_ui_scale(1.0, 96.0) == ""
+
+    # BEFORE ANY DATA OR MODEL. Every one of these is reachable from a window that has just
+    # opened, so "" or a placeholder is the contract, never a throw.
+    @test G.shell_derived_summary() == ""
+    @test G.shell_fit_has_posterior() == "0"
+    @test G.shell_companion_surface_type() == ""
+    @test occursin("not a binary", G.shell_companion_type(3))
+    @test G.shell_obs_kinds() == ""
+    @test length(cols(G.shell_imaging_context())) == 5
+    @test startswith(G.shell_imaging_context(), "—\t0\t—\t—\t")
+    @test G.shell_reset_zoom() == ""
+    @test G.shell_refresh() isa String
+
+    # `shell_tessellation` is the Imaging tab's readout of what the model is evaluated on, and
+    # the tessel count must be the one the mesh actually has, not a restatement of nside.
+    G.shell_open(LAM[1], "0")
+    G.shell_add_model(2)
+    t = cols(G.shell_tessellation())
+    @test t[1] == "healpix" && parse(Int, t[3]) == 12 * (2^parse(Int, t[2]))^2
+    @test t[4] == string(sh.precision[])
+    # Now that there IS a model, the derived readout appears — a rapid rotator carries `d`, so
+    # the mass is derivable. This is the assertion `shell_derived_summary` never had.
+    @test occursin("M = ", G.shell_derived_summary())
+    @test occursin("rapid_rotator", G.shell_imaging_context())
+    @test occursin("uv", G.shell_obs_kinds())
+
+    # SELECTION. Out of range is a no-op returning the status, not an error and not a silent
+    # move to a neighbour — QML sends an index from a list that may have been rebuilt.
+    #
+    # And there is only ever ONE model: `shell_add_model` does `empty!(sh.session.models)` on
+    # purpose ("+ model" means replace), because a second model silently decided what the χ²
+    # column and the reconstruction were about. So index 1 is the only valid one, which is
+    # precisely why the out-of-range branch is the whole behaviour worth testing here.
+    G.shell_add_model(0)
+    @test length(sh.session.models) == 1
+    @test G.shell_select_model(1) isa String
+    @test sh.session.current_model == 1
+    for bad in (0, 2, 99, -1)
+        G.shell_select_model(bad)
+        @test sh.session.current_model == 1          # unmoved
+    end
+    @test G.shell_select_dataset(1) isa String
+    @test sh.session.current_dataset == 1
+    G.shell_select_dataset(99)
+    @test sh.session.current_dataset == 1
+    # Selecting a dataset resets the epoch, because epoch 7 of a 40-night file is not epoch 7
+    # of a 2-night one.
+    @test sh.session.current_epoch == 1
+
+    # A COMPANION's surface type, read from the field rather than the parameter dict — the
+    # constructor excludes `:surface_type` from `params`, so reading it there returned the
+    # fallback and the combo reported the wrong kind.
+    G.shell_add_model(2)
+    G.shell_set_binary("1", 3)
+    @test G.shell_companion_surface_type() == "3"
+    @test G.shell_companion_type(0) isa String
+    @test G.shell_companion_surface_type() == "0"
+
+    # THE LIVE TYPOGRAPHY. Zero means "from the screen" on both, which is the value QML sends
+    # when the user clears the box.
+    @test occursin("plot scale", G.shell_set_plot_scale(1.5))
+    @test occursin("from the screen", G.shell_set_plot_scale(0.0))
+    @test occursin("zoom", G.shell_set_zoom_step(1.2))
+    @test occursin("default", G.shell_set_zoom_step(0.0))
+    # No OITOOLS GUI canvas in this harness, so this reports that rather than throwing — the
+    # refusal IS the behaviour under test, since QML calls it during `onCompleted`.
+    @test G.shell_set_marker_size(6.0) isa String
+end
+
+@testset "settings round-trip, in a sandboxed config dir" begin
+    # XDG_CONFIG_HOME IS REDIRECTED FIRST. `gui_settings_file()` resolves to
+    # `$XDG_CONFIG_HOME/rotir/gui.toml`, and `shell_reset_settings` DELETES it — so running this
+    # against the real environment would remove the developer's own saved appearance defaults.
+    # `gui_settings_file` reads ENV on every call, so the redirect is enough; it is restored
+    # afterwards whatever happens.
+    old = get(ENV, "XDG_CONFIG_HOME", nothing)
+    tmp = mktempdir()
+    try
+        ENV["XDG_CONFIG_HOME"] = tmp
+        sh = fresh_shell()
+        @test G.shell_load_settings() == ""           # nothing saved yet
+        @test G.shell_reset_settings() == ""          # and removing nothing is not an error
+        path = G.shell_save_settings("plotScale\t1.25\nmarkerSize\t7")
+        @test !isempty(path) && isfile(path)
+        @test startswith(path, tmp)                  # the sandbox held
+        back = Dict(cols(r)[1] => cols(r)[2] for r in rows(G.shell_load_settings()))
+        # Numeric values round-trip as Float64 — `shell_save_settings` parses what it can, so
+    # "7" comes back "7.0". That is the contract QML is written against.
+    @test back["plotScale"] == "1.25" && back["markerSize"] == "7.0"
+        # A second save MERGES rather than replacing: QML owns what the keys mean, and a
+        # version that does not know a key must not drop it.
+        G.shell_save_settings("theme\tdark")
+        back2 = Dict(cols(r)[1] => cols(r)[2] for r in rows(G.shell_load_settings()))
+        @test back2["theme"] == "dark" && back2["plotScale"] == "1.25"
+        # A corrupt file is not an error — the built-in defaults are a good answer, and a bad
+        # settings file must not stop the window opening.
+        write(path, "this is not TOML {{{")
+        @test G.shell_load_settings() == ""
+        @test G.shell_reset_settings() == path
+        @test !isfile(path)
+    finally
+        old === nothing ? delete!(ENV, "XDG_CONFIG_HOME") : (ENV["XDG_CONFIG_HOME"] = old)
+    end
+end
+
+@testset "the session exports as a runnable script" begin
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    G.shell_add_model(2)
+    G.shell_set_param_state("rpole", "free")
+    G.shell_fit("neldermead", 40); drain!()
+    # `shell_script` is the string; `shell_export` is the same thing written somewhere, and it
+    # had no test at all. Both must name the fit, or the exported script does not reproduce the
+    # session it claims to.
+    src = G.shell_script()
+    # The DATASET and the MODEL are what the log records; a fit is reported on the console but
+    # is not replayed, so asserting a fit call here would be asserting something false.
+    @test occursin("readoifits", src) && occursin("surface_type", src)
+    d = mktempdir(); f = joinpath(d, "session.jl")
+    @test occursin("wrote", G.shell_export(f))
+    @test isfile(f) && read(f, String) == src
+    # `unique_path` means a second export beside the first does not overwrite it.
+    G.shell_export(f)
+    @test length(filter(x -> endswith(x, ".jl"), readdir(d))) == 2
+    # A path QML sends as a URL, which is how the file dialog returns one.
+    @test occursin("wrote", G.shell_export("file://" * joinpath(d, "url.jl")))
+    @test isfile(joinpath(d, "url.jl"))
+    # And an unwritable destination is reported, not thrown — this runs on a GUI thread.
+    @test occursin("could not write", G.shell_export("/no/such/dir/x.jl"))
+end
+
+@testset "BOBYQA, the engine nothing ran" begin
+    # `bobyqa` was in FIT_METHODS and in the budget table, and no test had ever CALLED it. It
+    # is NLopt's quadratic-model local search, so it takes a different path through NLopt than
+    # Nelder–Mead and has its own failure modes on a flat objective.
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    G.shell_add_model(0)
+    @test occursin("nothing is free", G.shell_fit("bobyqa", 100))
+    G.shell_set_param("radius", "1.2")
+    G.shell_set_param_state("radius", "free")
+    G.shell_set_bound("radius", "0.5", "3.0")
+    @test G.shell_fit("bobyqa", 150) == ""
+    drain!()
+    @test occursin("χ²", sh.status)
+    @test occursin("radius", sh.lastfit)
+    fe = G.current_fit(sh.session)
+    @test fe !== nothing
+    @test :radius in fe.names
+    r = fe.best[findfirst(==(:radius), fe.names)]
+    @test 0.5 <= r <= 3.0                            # inside the bounds it was given
+    @test isfinite(fe.chi2) && fe.chi2 > 0
+    @test G.shell_fit_has_posterior() == "0"         # a point estimate, not a sample
+    # BOBYQA is interruptible the same way Nelder–Mead is: both are NLopt searches that check
+    # the stop Ref inside the objective.
+    @test :bobyqa in G.STOP_AWARE
+end
+
+@testset "the orbit fit runs, and refuses what it cannot do" begin
+    # `shell_fit_orbit` is a whole optimizer entry point with ZERO references in this file. It
+    # is a different fitter from the model tab's (`fit_orbit`, on an analytic component pair,
+    # not a tessellated surface), with its own free set, bounds and ties.
+    sh = fresh_shell()
+    @test occursin("no dataset", G.shell_fit_orbit("neldermead", 50))
+    G.shell_open(LAM[1], "0")
+    # THE ORBIT TAB ARRIVES WITH A FREE SET, which is worth pinning: the four elements an
+    # astrometric orbit actually constrains from one epoch's worth of uv coverage. A change here
+    # changes what the Fit button does by default, silently.
+    @test sort(collect(sh.orbit.free)) == [:Omega, :T0, :a, :i]
+    # So "nothing is free" has to be ARRANGED, by fixing them. It is still the branch to test —
+    # it is the only thing between an empty vector and whatever `fit_orbit` does with one.
+    for n in ("a", "i", "Omega", "T0"); G.shell_set_orbit_state(n, "fixed"); end
+    @test isempty(sh.orbit.free)
+    @test occursin("nothing is free", G.shell_fit_orbit("neldermead", 50))
+    # Only two methods, and the refusals must name what IS available rather than failing later.
+    # These are refusals, so none of them starts a job — which is itself the assertion after.
+    G.shell_set_orbit_state("a", "free")
+    @test occursin("takes :neldermead or :nautilus", G.shell_fit_orbit("gradient", 50))
+    @test occursin("takes :neldermead or :nautilus", G.shell_fit_orbit("bobyqa", 50))
+    # `:ultranest` is not merely unavailable here — the GUI is Python-free by construction, so
+    # it is not in the list at all, and the message must say the same thing as for a typo.
+    @test occursin("takes :neldermead or :nautilus", G.shell_fit_orbit("ultranest", 50))
+    @test G.shell_job_running() == "0"               # a refusal costs nothing
+    if G.nautilus_available()
+        @test G.shell_fit_orbit("nautilus", 50) == ""
+        drain!()
+    else
+        @test occursin("using Nautilus", G.shell_fit_orbit("nautilus", 50))
+    end
+    # THE REAL RUN. A relative astrometric orbit on one night of λ And is not a measurement —
+    # the point is that the job completes, reports, and leaves a fit behind.
+    G.shell_set_orbit_param("a", "3.0"); G.shell_set_orbit_param("P", "10.0")
+    @test G.shell_fit_orbit("neldermead", 60) == ""
+    drain!()
+    @test G.shell_job_running() == "0"
+    @test occursin("fit_orbit", G.shell_console())
+    # A SECOND fit must be accepted, not refused with "a job is already running" — which is what
+    # happens if anything above left a job undrained, and is how this testset first failed.
+    @test G.shell_fit_orbit("neldermead", 30) == ""
+    drain!()
+end
+
 end
