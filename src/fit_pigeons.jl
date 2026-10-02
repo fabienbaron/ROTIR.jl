@@ -243,7 +243,7 @@ function _fit_pigeons(data_epochs, tessels, tepochs, base_params;
     (variational || n_chains_variational > 0) && variational_first_round >= n_rounds &&
         @warn "_fit_pigeons: variational_first_round = $(variational_first_round) is not less " *
               "than n_rounds = $(n_rounds), so the variational reference will never be tuned " *
-              "and the run is equivalent to a fixed reference.
+              "and the run is equivalent to a fixed reference."
     kw = (target = ℓ, n_chains = n_chains, n_rounds = n_rounds, multithreaded = multithreaded,
           explorer = expl, record = [Pigeons.traces, Pigeons.round_trip],
           show_report = verb, vkw...)

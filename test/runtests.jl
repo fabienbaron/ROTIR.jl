@@ -15,6 +15,7 @@ get!(ENV, "MPLBACKEND", "Agg")
 using Test
 
 const TESTDIR = @__DIR__
+const PKGDIR  = dirname(TESTDIR)
 const PKGROOT = dirname(TESTDIR)
 
 """
@@ -161,6 +162,37 @@ end
     # the closed forms in the paper, the equatorial symmetry a finite-difference check cannot
     # see, and both laws through `build_parametric_logπ`.
     include(joinpath(TESTDIR, "test_gravity_darkening.jl"))
+
+    # EVERY SOURCE FILE PARSES, including the weak-dependency extensions.
+    #
+    # This exists because a syntactically invalid `src/fit_pigeons.jl` was committed and the
+    # suite passed 2892/2892 over it. `ROTIRPigeonsExt` loads only when all five of its trigger
+    # packages are present (Pigeons, Distributions, LogDensityProblems, ADTypes, Zygote), and
+    # the test environment has none of them — so nothing ever read the file. It surfaced days
+    # later as a precompile failure while building the application bundle, where those packages
+    # DO exist, and was first misread as a stale precompile cache.
+    #
+    # `Meta.parseall` needs no dependency and costs milliseconds, so it covers every file that
+    # ships regardless of which extensions this environment can load. It catches syntax only —
+    # an unterminated string, an unbalanced block — which is precisely the class that otherwise
+    # hides behind a weakdep.
+    @testset "every shipped source file parses" begin
+        roots = [joinpath(PKGDIR, "src"), joinpath(PKGDIR, "ext")]
+        files = String[]
+        for r in roots, (dir, _, fs) in walkdir(r), f in fs
+            endswith(f, ".jl") && push!(files, joinpath(dir, f))
+        end
+        @test length(files) > 40          # the walk found the tree, not an empty directory
+        for f in files
+            ok = try
+                Meta.parseall(read(f, String); filename = f); true
+            catch err
+                @error "source file does not parse" file = relpath(f, PKGDIR) err
+                false
+            end
+            @test ok
+        end
+    end
 
     if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
         @testset "spot placement (figures)" begin
