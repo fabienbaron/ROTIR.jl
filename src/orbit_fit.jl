@@ -540,6 +540,7 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
                    ties = Dict{Symbol,String}(),
                    method::Symbol = :neldermead, model::Symbol = :analytic,
                    weights = OI_DEFAULT_WEIGHTS, maxeval::Int = 20_000,
+                   threaded::Bool = false,
                    min_num_live_points::Int = 400, use_stepsampler::Bool = true,
                    verbose::Bool = true)
     model === :analytic || model === :tessellated ||
@@ -586,8 +587,11 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
         (_, pbest, _) = NLopt.optimize(opt, θ0[idx])
         best = pbest; extra = NamedTuple()
     elseif method in (:ultranest, :nautilus)
+        # `threaded = false`: the sampler parallelises its likelihood calls and the χ² threads
+        # internally (`Threads.@threads :static`, src/type3_nufft.jl), which Julia forbids
+        # nesting. See the same note on `fit_sphere_ld` / `fit_ellipsoid_ld`.
         r = _fit_nested(method, chi2_of, string.(spec.names[idx]), spec.lo[idx], spec.hi[idx];
-                        min_num_live_points = min_num_live_points,
+                        min_num_live_points = min_num_live_points, threaded = threaded,
                         use_stepsampler = use_stepsampler, verb = verbose)
         best  = r.median
         extra = (posterior = r.samples, logz = r.logz, logzerr = r.logzerr,

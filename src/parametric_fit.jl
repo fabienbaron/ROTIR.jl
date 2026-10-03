@@ -115,12 +115,21 @@ available.
 
 Both backends return the same fields (`median`, `q16`, `q84`, `logz`, `logzerr`, `samples`),
 which is what lets every caller treat them interchangeably. UltraNest-only keywords
-(`use_stepsampler`, `min_num_live_points`) and Nautilus-only ones (`n_live`, `n_eff`) are
-filtered here rather than at each call site, so a caller can pass whatever it has.
+(`use_stepsampler`, `min_num_live_points`) and Nautilus-only ones (`n_live`, `n_eff`,
+`threaded`) are filtered here rather than at each call site, so a caller can pass whatever it
+has.
+
+`threaded` IS FORWARDED, and it was not: the keyword existed on `_fit_nautilus` and this
+function dropped it on the floor along with the rest of `kwargs`, so a caller that asked for a
+serial likelihood got a threaded one and no warning. That is not a preference — a `chi2_of`
+that is not re-entrant (ROTIR's own default `:t3` forward kernel is not; see
+`POLYFT_BACKEND`) THROWS on every concurrent evaluation, and a caller whose objective swallows
+exceptions then gets a converged-looking run built entirely out of sentinel values.
 """
 function _fit_nested(method::Symbol, chi2_of, names, lo, hi; verb::Bool = false,
                      min_num_live_points::Int = 400, use_stepsampler::Bool = false,
-                     n_live::Int = 1000, n_eff::Real = 10_000, kwargs...)
+                     n_live::Int = 1000, n_eff::Real = 10_000, threaded::Bool = true,
+                     kwargs...)
     if method === :ultranest
         ultranest_available() || error(
             "method = :ultranest needs PythonCall loaded: add `using PythonCall` to this " *
@@ -135,7 +144,7 @@ function _fit_nested(method::Symbol, chi2_of, names, lo, hi; verb::Bool = false,
             "method = :nautilus needs Nautilus.jl loaded: add `using Nautilus` to this " *
             "session. It is a weak dependency, so ROTIR does not pull it in on its own.")
         return _fit_nautilus(chi2_of, names, lo, hi; verb = verb, n_live = n_live,
-                             n_eff = n_eff)
+                             n_eff = n_eff, threaded = threaded)
     end
     error("unknown nested sampler :$method (expected :ultranest or :nautilus)")
 end
@@ -251,6 +260,16 @@ function fit_sphere_ld(data, tessels;
                        algorithm::Symbol = :LN_NELDERMEAD,
                        maxeval::Int = 2000, xtol_rel::Real = 1e-6, ftol_rel::Real = 1e-8,
                        min_num_live_points::Int = 400, use_stepsampler::Bool = false,
+                       # FALSE by default, unlike `_fit_nested`'s own `true`. Nautilus
+                       # parallelises its likelihood calls, and ROTIR's χ² threads internally
+                       # (`Threads.@threads :static` in src/type3_nufft.jl), which Julia
+                       # forbids nesting: `fit_sphere_ld(…, method = :nautilus)` died with
+                       # "`@threads :static` cannot be used concurrently or nested" on any
+                       # session with more than one thread. The inner threading is the one
+                       # worth keeping — it parallelises every likelihood call, not just the
+                       # sampler's outer loop. Pass `threaded = true` only with a kernel that
+                       # does not thread.
+                       threaded::Bool = false,
                        verbose::Bool = false)
     data isa AbstractVector || (data = [data])
     # Starting radius from the shortest baseline if not supplied: V² ≈ 0.6 at B_min for a disc
@@ -277,7 +296,7 @@ function fit_sphere_ld(data, tessels;
     if method in (:ultranest, :nautilus)
         nm = fit_ld2 ? ["radius", "ld1", "ld2"] : ["radius", "ld1"]
         un = _fit_nested(method, θ -> f(θ), nm, lb, ub;
-                         min_num_live_points = min_num_live_points,
+                         min_num_live_points = min_num_live_points, threaded = threaded,
                          use_stepsampler = use_stepsampler, verb = verbose)
         m  = un.median
         l2 = fit_ld2 ? m[3] : ld2_0
@@ -348,6 +367,14 @@ function fit_ellipsoid_ld(data, tessels;
                           algorithm::Symbol = :LN_NELDERMEAD,
                           maxeval::Int = 4000, xtol_rel::Real = 1e-6, ftol_rel::Real = 1e-8,
                           min_num_live_points::Int = 400, use_stepsampler::Bool = true,
+                          # FALSE by default, unlike `_fit_nested`'s own `true`. The nested
+                          # sampler parallelises its likelihood calls while ROTIR's χ² threads
+                          # internally (`Threads.@threads :static`, src/type3_nufft.jl), and
+                          # Julia forbids nesting those: the run dies with "`@threads :static`
+                          # cannot be used concurrently or nested" on any session with more
+                          # than one thread. Keep the INNER threading — it parallelises every
+                          # likelihood call, not just the sampler's outer loop.
+                          threaded::Bool = false,
                           verbose::Bool = false)
     data isa AbstractVector || (data = [data])
     # Seed from the SPHERE fit by default. Starting cold, Nelder-Mead walks into the pole-on
@@ -390,7 +417,7 @@ function fit_ellipsoid_ld(data, tessels;
         # has no equivalent knob — its neural bounds are what it uses instead — so the keyword
         # is simply not passed on to it.
         un = _fit_nested(method, θ -> obj(θ), ["req","flattening","inc","PA","ld1"], lo5, hi5;
-                         min_num_live_points = min_num_live_points,
+                         min_num_live_points = min_num_live_points, threaded = threaded,
                          use_stepsampler = use_stepsampler, verb = verbose)
         m = un.median
         return (req = m[1], flattening = m[2], inclination = m[3], position_angle = m[4],

@@ -2950,7 +2950,7 @@ const FIT_METHODS = [
     ("bobyqa",     "BOBYQA",     "BOBYQA (NLopt, local, quadratic model)"),
     ("hmc",        "NUTS",       "NUTS (Hamiltonian, uses the analytic gradient)"),
     ("nautilus",   "Nautilus",   "Nautilus (importance nested sampling, with evidence)"),
-    ("pigeons",    "Pigeons",    "Pigeons (parallel tempering — for a multimodal posterior)"),
+    ("pigeons",    "Pigeons",    "Pigeons (parallel tempering, variational — multimodal)"),
 ]
 
 """
@@ -2999,7 +2999,9 @@ const FIT_BUDGETS = Dict{String,NamedTuple}(
                      tip = "effective posterior sample size; the live population follows it"),
     # 2^rounds scans, so this is a small number and every increment doubles the run.
     "pigeons"    => (label = "rounds", default = 8, lo = 6, hi = 12, step = 1,
-                     tip = "2^rounds scans — each extra round DOUBLES the run"),
+                     tip = "2^rounds scans — each extra round DOUBLES the run. The " *
+                           "variational reference starts tuning at round 2, so more rounds " *
+                           "also buy a better-fitted reference, not just more scans."),
 )
 
 "The budget spec for one method, falling back to the NLopt one for anything unlisted."
@@ -3826,6 +3828,53 @@ function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, 
 end
 
 """
+    PIGEONS_GUI_OPTS
+
+Tempering options shared by all three Pigeons runners, in ONE place.
+
+# A VARIATIONAL REFERENCE, and why it is not optional here
+
+Pigeons anneals FROM a reference TO the posterior. The default fixed reference is a wide
+normal on the unconstrained coordinates, and for a ROTIR posterior that reference holds
+essentially no mass where the target lives — the box spans radius 0.05–20 mas while the
+posterior is ~6e-4 mas wide. The whole communication barrier then sits in the first
+infinitesimal step away from the reference, and no number of chains bridges it: extra rungs
+resolve a narrow singularity instead of crossing it.
+
+MEASURED on α Cen A (sphere, radius + ld1, V² + T3amp, 2^8 scans):
+
+    configuration                Λ        round trips    local barrier at β≈0
+    fixed reference, 10 chains   5.482          2              50 918
+    fixed reference, 30 chains   6.082          3             236 792
+    variational,     10 chains   0.659         62                1.26
+    stabilized,      10+10       5.162         70                  —
+
+The variational reference collapses the reference-end barrier by a factor of 40 000 and turns
+2 round trips into 62 for 1.75x the wall time — 10 s per round trip against 176 s. All four
+agree on the posterior, so the fixed reference was not WRONG, only unable to demonstrate that
+it had explored anything.
+
+# Why STABILIZED rather than plain variational
+
+`n_chains_variational > 0` keeps a fixed AND a variational reference on separate legs
+(Surjanovic et al. 2022). It costs ~1.7x plain variational and got the most round trips here.
+It is the default because the GUI offers Pigeons specifically FOR a multimodal posterior, and
+Pigeons' own documentation warns that fitting a single Gaussian reference "can cause
+catastrophic forgetting of modes" — the exact failure this method exists to avoid. A sampler
+that reports beautiful round trips while having collapsed onto one tooth is worse than one
+that reports zero.
+
+# first_tuning_round
+
+`GaussianReference` does nothing until that round, and its default is 6. With the budget's
+minimum of 6 rounds the default would tune only in the last round and return a result
+BIT-IDENTICAL to a fixed reference — a silent no-op, not an error. 2 leaves every round after
+the cheap ones to adapt in.
+"""
+const PIGEONS_GUI_OPTS = (n_chains = 8, n_chains_variational = 8,
+                          variational_first_round = 2, explorer = :slice)
+
+"""
     _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
 
 Tempering on a SPHERE's θ, `[radius, ld…]`.
@@ -3854,7 +3903,7 @@ function _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec,
     tess = tessellation_healpix(nexp; T = prec)
     nr = clamp(Int(maxeval), 6, 12)
     r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
-                           model = :sphere, n_rounds = nr, n_chains = 8, explorer = :slice,
+                           model = :sphere, n_rounds = nr, PIGEONS_GUI_OPTS...,
                            multithreaded = Threads.nthreads() > 1, verb = true)
     return _pigeons_result(r, names, θnames, nr)
 end
@@ -3891,7 +3940,7 @@ function _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, pr
                            model = :ellipsoid, tpole_free = tpf,
                            intensity_model = sh.intensity_model[],
                            band = sh.band[] > 0 ? sh.band[] : nothing,
-                           n_rounds = nr, n_chains = 8, explorer = :slice,
+                           n_rounds = nr, PIGEONS_GUI_OPTS...,
                            multithreaded = Threads.nthreads() > 1, verb = true)
     return _pigeons_result(r, names, θnames, nr)
 end
@@ -3907,6 +3956,15 @@ Sampler columns come back in sorted-index order, not the order the panel listed 
 function _pigeons_result(r, names, θnames, nr::Int)
     Printf.@printf("Pigeons: log(Z) = %.4f, %d round trips over 2^%d scans\n",
                    r.logz, r.round_trips, nr)
+    # ROUND TRIPS ARE THE DIAGNOSTIC, so say what a low count means rather than leaving a
+    # number on the console. A ladder nothing traverses has not visited the other modes, and
+    # the posterior is then the single-basin answer a cheaper sampler would have given — which
+    # is exactly the result that was once taken at face value on β Cas. With the variational
+    # reference this should be tens; a handful means the reference is still a poor fit to the
+    # target, and more ROUNDS (not chains) is the lever.
+    r.round_trips < 5 && println("  ⚠ only $(r.round_trips) round trip(s): the temperature " *
+                                 "ladder was barely traversed, so treat this posterior as " *
+                                 "ONE basin, not the whole story. Raise `rounds`.")
     order = sortperm([findfirst(==(String(n)), θnames) for n in names])
     best = zeros(length(names)); errs = Dict{Symbol,Float64}()
     for (slot, k) in enumerate(order)
@@ -3955,9 +4013,8 @@ function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, m
     # one run is longer than a working session.
     nr = clamp(Int(maxeval), 6, 12)
     r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
-                           tpole_free = true, n_rounds = nr, n_chains = 8,
-                           explorer = :slice, multithreaded = Threads.nthreads() > 1,
-                           verb = true)
+                           tpole_free = true, n_rounds = nr, PIGEONS_GUI_OPTS...,
+                           multithreaded = Threads.nthreads() > 1, verb = true)
     # The rapid rotator's panel names are not its θ names — `PARAMETRIC_THETA` maps between
     # them — so this one reorders on the mapped name rather than the panel's.
     Printf.@printf("Pigeons: log(Z) = %.4f, %d round trips over 2^%d scans\n",
@@ -4080,7 +4137,22 @@ function _run_fit(meth::Symbol, obj, θ0, lb, ub, names, maxeval)
         # into a box labelled "evaluations" got a forty-minute run and no way to shorten it.
         # `n_eff` is the effective sample size, which is what the cost actually scales with;
         # `n_live` follows it, floored so the sampler still has a population to work with.
+        # SERIAL, and this is a correctness requirement rather than a cost choice.
+        # `_fit_nautilus` defaults to `threaded = true` and evaluates the likelihood from
+        # several tasks at once. `obj` above is `parametric_chi2`, which runs the process
+        # default forward kernel `:t3` — and that kernel is NOT re-entrant: `type3_plan_for`
+        # hands every call the same cached `Type3Plan`, whose scratch grids `type3_quads!`
+        # zeroes and then writes, and the loops over them are `Threads.@threads :static`,
+        # which Julia forbids nested or concurrent. So every concurrent evaluation threw,
+        # `obj`'s own `catch` turned each one into the 1e30 sentinel, and the run came back
+        # with `log(Z) = -5e29`, `N_eff = 1` and the FLAT PRIOR as its posterior — after
+        # exhausting its budget, because `f_live` never moves when no live point has a finite
+        # likelihood. A silently wrong fit, reported in the panel as a successful one.
+        #
+        # Serial `:t3` is also the faster of the two repairs: 0.20 ms per evaluation at
+        # HEALPix 3 against `:turbo`'s 6.9 ms, which 16 threads only bring to ~0.43 ms.
         un = _fit_nested(meth, obj, String.(names), lb, ub; verb = true,
+                         threaded = false,
                          n_eff = clamp(maxeval, 200, 50_000),
                          n_live = clamp(maxeval ÷ 4, 100, 2000),
                          min_num_live_points = clamp(maxeval ÷ 4, 100, 2000))

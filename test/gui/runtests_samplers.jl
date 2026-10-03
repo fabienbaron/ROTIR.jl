@@ -25,7 +25,7 @@
 # `bin/Project.toml` already has AdvancedHMC, Nautilus, Pigeons and Zygote, so nothing new is
 # needed to run it.
 
-using Test
+using Test, Printf
 using ROTIR
 using GLMakie, QMLMakie, QML
 using Makie
@@ -58,18 +58,43 @@ function fresh_shell()
     return sh
 end
 
-"Run a job callback to completion, the way the QML poll timer does."
-function drain!(; limit = 3000)
+# Run a job callback to completion, the way the QML poll timer does.
+#
+# `start_job!` redirects BOTH `Base.stdout` AND file descriptor 1 into the job's capture file
+# for as long as the job is live, and `Test` prints its failure detail to stdout — so an
+# assertion that fails BESIDE a running fit lands in a temp file nobody reads. Every testset
+# below therefore asserts only after this has returned, which is where `job_finish!` has put
+# stdout back. The one thing this cannot do is restore it when the job never ends, so a
+# timeout says so on STDERR, which was never redirected.
+function drain!(; limit = 1800)
     for _ in 1:limit
         G.shell_job_running() == "1" || break
         sleep(0.2); G.shell_job_poll()
     end
     G.shell_job_poll()
+    G.shell_job_running() == "0" ||
+        println(stderr, "drain!: the job is STILL running after $(limit * 0.2) s — stdout is " *
+                        "still redirected into the job file and test output is being lost")
     return nothing
 end
 
 rows(s) = isempty(s) ? String[] : split(s, '\n')
 cols(r) = split(r, '\t')
+
+# WHAT THE RUN ACTUALLY MEASURED, on STDERR because that is the one stream `start_job!` does
+# not redirect. These are smoke-test budgets and none of the numbers is a result, but a passing
+# sampler test that prints nothing leaves no way to see that a run has degraded while still
+# satisfying its assertions — a Pigeons ladder dropping from 60 round trips to 6, say, passes
+# `>= 5` and is worth noticing.
+function report!(f)
+    println(stderr, Printf.@sprintf("  [%-10s] %-8s = %.6g ± %.3g   χ²ᵣ = %.4f   %s%s",
+                                    f.method, f.names[1], f.best[1], f.err[1],
+                                    f.chi2 / f.ndata,
+                                    isfinite(f.logz) ?
+                                        Printf.@sprintf("log(Z) = %.3f   ", f.logz) : "",
+                                    f.diagnostics))
+    return f
+end
 
 "The smallest model a sampler can be pointed at: a sphere with one free radius."
 function one_free_sphere!()
@@ -86,7 +111,11 @@ end
 @testset "ROTIR GUI samplers" begin
 
 @testset "loading the samplers is what makes them available" begin
-    fresh_shell()          # `shell_fit` goes through `_sh()`, which asserts a shell exists
+    # A FULL model, not a bare shell. `shell_fit` goes through `_sh()`, which asserts a shell
+    # exists — and then checks the dataset, the model and the free set BEFORE it ever looks at
+    # the method name, so a bare `fresh_shell()` answers "no dataset" to every question below
+    # including the :ultranest one.
+    one_free_sphere!()
     # The inverse of runtests.jl's opening assertion, and the reason this file exists. If any of
     # these is false the rest of the file is testing refusals, which is what it is here to stop.
     @test hmc_available()
@@ -117,10 +146,11 @@ end
 
 @testset "NUTS through the GUI leaves a posterior behind" begin
     sh = one_free_sphere!()
-    @test G.shell_fit("hmc", 20) == ""
+    msg = G.shell_fit("hmc", 20)
     drain!()
+    @test msg == ""
     @test G.shell_job_running() == "0"
-    f = G.current_fit(sh.session)
+    f = report!(G.current_fit(sh.session))
     @test f !== nothing
     @test f.method === :hmc
     @test f.names == [:radius]
@@ -147,9 +177,10 @@ end
 
 @testset "Nautilus reports an evidence, which is why it is offered" begin
     sh = one_free_sphere!()
-    @test G.shell_fit("nautilus", 300) == ""
+    msg = G.shell_fit("nautilus", 300)
     drain!()
-    f = G.current_fit(sh.session)
+    @test msg == ""
+    f = report!(G.current_fit(sh.session))
     @test f !== nothing && f.method === :nautilus
     @test size(f.samples, 1) > 0
     @test G.shell_fit_has_posterior() == "1"
@@ -158,6 +189,18 @@ end
     # with different numbers of parameters. A NaN here means the field is plumbed but unfilled.
     @test isfinite(f.logz)
     @test isfinite(f.logzerr) && f.logzerr >= 0
+    # AND ON THE SCALE OF THE LIKELIHOOD, which `isfinite` does not check — and the difference
+    # is not pedantic, it is the bug this testset found. `shell_fit`'s objective returns 1e30
+    # for a point it cannot evaluate, `_fit_nautilus` turns that into `logL = -5e29`, and a run
+    # in which EVERY evaluation failed therefore finished with a perfectly finite
+    # `log(Z) = -5e29`, `N_eff = 1` and the flat prior for a posterior. `isfinite` passed on it.
+    # `log(Z)` is `-χ²/2` minus the prior volume it spent, so it is within an order of
+    # magnitude of `-χ²` or the run is made of sentinels.
+    @test -10 * f.chi2 < f.logz < 0
+    # The box reparameterisation held, and the median lies inside its own interval.
+    @test all(0.8 .<= f.samples[:, 1] .<= 2.0)
+    @test f.q16[1] <= f.best[1] <= f.q84[1]
+    @test isfinite(f.err[1]) && f.err[1] >= 0
     # Columns 6 and 7 of the fits table are log Z and its error, and they print "—" when the
     # field is not finite — so a dash here is the visible symptom of an unfilled evidence.
     nrow = cols(rows(G.shell_fits())[end])
@@ -167,9 +210,12 @@ end
 @testset "Pigeons runs, and its round trips are reported" begin
     sh = one_free_sphere!()
     # `rounds`, not draws: Pigeons' budget is 2^n scans, so a small number is still a real run.
-    @test G.shell_fit("pigeons", 3) == ""
+    # SIX, which is the floor `_run_sphere_pigeons_fit` clamps to — asking for 3 would run 6
+    # anyway, and a test that asks for a budget it does not get is testing the clamp.
+    msg = G.shell_fit("pigeons", 6)
     drain!()
-    f = G.current_fit(sh.session)
+    @test msg == ""
+    f = report!(G.current_fit(sh.session))
     @test f !== nothing && f.method === :pigeons
     @test size(f.samples, 1) > 0
     @test G.shell_fit_has_posterior() == "1"
@@ -185,6 +231,18 @@ end
     @test occursin("pigeons", lowercase(G.shell_console()))
     # The table surfaces it too — the diagnostics are its last column.
     @test occursin("round trips", cols(rows(G.shell_fits())[end])[end])
+    # THE COUNT ITSELF, and it must be healthy rather than merely present. `PIGEONS_GUI_OPTS`
+    # runs a STABILIZED VARIATIONAL ladder, and that is what makes this assertable: measured on
+    # α Cen A at 2^8 scans, a fixed reference managed 2 round trips and the variational and
+    # stabilized references 62 and 70. An assertion that tolerated zero would pass on the
+    # severed ladder this configuration exists to avoid, so it does not. No exact number — the
+    # count is stochastic and the budget here is the smallest the runner will accept.
+    rt = match(r"(\d+) round trips", f.diagnostics)
+    @test rt !== nothing
+    @test parse(Int, rt.captures[1]) >= 5
+    # Tempering is the other source of an evidence, and the panel prints it beside Nautilus's.
+    @test isfinite(f.logz) && -10 * f.chi2 < f.logz < 0
+    @test isfinite(f.err[1]) && f.err[1] >= 0
 end
 
 @testset "a sampler and an optimiser can be compared, which is the point of keeping both" begin
@@ -194,6 +252,7 @@ end
     sh = one_free_sphere!()
     for (meth, budget) in (("neldermead", 150), ("gradient", 30), ("hmc", 15), ("nautilus", 200))
         G.shell_fit(meth, budget); drain!()
+        report!(G.current_fit(sh.session))
     end
     @test length(sh.session.fits) == 4
     @test [f.method for f in sh.session.fits] == [:neldermead, :gradient, :hmc, :nautilus]
@@ -213,6 +272,23 @@ end
     # to disagree about, so a wide spread here means an engine is wired to a different model.
     best = [f.best[1] for f in sh.session.fits]
     @test maximum(best) - minimum(best) < 0.3
+    # AND IN χ², which is the check with teeth, for the three engines whose budget is enough to
+    # converge. `radius` moves χ² by four orders of magnitude across this box (18 631 at the
+    # optimum against 1.8e6 at the starting value 0.18 mas away), so two engines can agree to
+    # 0.05 mas and still disagree by a large factor in the criterion — and an engine that
+    # returns the PRIOR MEDIAN instead of a fit sits comfortably inside the bound above while
+    # being no fit at all. MEASURED: with the GUI evaluating Nautilus's likelihood concurrently
+    # against the non-re-entrant `:t3` kernel, every evaluation returned the 1e30 sentinel and
+    # the reported median was 1.402 — 0.025 mas from the truth, which the bound above accepts,
+    # and a factor of 3.7 in χ², which this one does not.
+    #
+    # NUTS IS DELIBERATELY NOT IN THIS SET. Its budget here is 15 draws (clamped to the
+    # runner's floor of 50) with a step size of 7e-5 against a posterior 1.2e-4 wide, started
+    # 0.18 mas away: it has not reached the mode and is not meant to have. That is the honest
+    # smoke test for a sampler at this budget, and asserting otherwise would be asserting that
+    # 50 draws converge.
+    conv = [bykind[k].chi2 for k in (:neldermead, :gradient, :nautilus)]
+    @test maximum(conv) < 2 * minimum(conv)
     # And the library lists all four with their method names, which is what the panel shows.
     tbl = G.shell_fits()
     for s in ("Nelder", "VMLMB", "NUTS", "Nautilus")

@@ -163,6 +163,12 @@ end
     # see, and both laws through `build_parametric_logπ`.
     include(joinpath(TESTDIR, "test_gravity_darkening.jl"))
 
+    # NESTED SAMPLERS must run on a multithreaded session: all three public fitters dropped
+    # the `threaded` keyword on the way to `_fit_nested`, so `method = :nautilus` died with
+    # "`@threads :static` cannot be used concurrently or nested" on any machine with more than
+    # one thread. Nothing else in this suite runs a nested sampler.
+    include(joinpath(TESTDIR, "test_nested_threading.jl"))
+
     # EVERY SOURCE FILE PARSES, including the weak-dependency extensions.
     #
     # This exists because a syntactically invalid `src/fit_pigeons.jl` was committed and the
