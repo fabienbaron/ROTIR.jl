@@ -15,7 +15,8 @@ using Test, ROTIR, LinearAlgebra, Random
 # `:nufft` is compared against here, and it lives behind ROTIRFINUFFTExt.
 using FINUFFT
 using ROTIR: POLYFT_BACKEND, compute_polyflux_and_cvis!, compute_adjoint_cvis!,
-             precompute_k2_inv_im, TYPE3_PLANS, t3_extent_bin
+             precompute_k2_inv_im, TYPE3_PLANS, t3_extent_bin,
+             t3_checkout!, t3_checkin!, T3Scratch, T3_POOL_MAX
 
 @testset "the type-3 NUFFT" begin
     D = joinpath(pkgdir(ROTIR), "demos", "data")
@@ -108,6 +109,88 @@ using ROTIR: POLYFT_BACKEND, compute_polyflux_and_cvis!, compute_adjoint_cvis!,
         out = Vector{ComplexF64}(undef, J)
         type3_points!(out, p, xs, ys, cs)
         @test maximum(abs, out .- direct) / maximum(abs, direct) < 1e-9
+    end
+
+    @testset "re-entrancy: concurrent transforms on one cached plan" begin
+        # THE BUG THIS PINS. The mutable scratch used to live in the `Type3Plan`, which
+        # `type3_plan_for` hands out from a PROCESS-WIDE cache — so two concurrent transforms
+        # on the same geometry received the same object and wrote each other's grids.
+        # `type3_quads!` opens by zeroing them, and the window is structural: the zeroing and
+        # `_t3_finish!`'s reduction run serially, outside any threaded region, so Julia's own
+        # `:static` precondition did not catch it. Measured before the fix: two tasks, 2000
+        # calls each, gave about one call per trial back FINITE AND WRONG, worst relative error
+        # 4.34 — which an objective with `catch -> 1e30` accepts rather than rejects.
+        #
+        # The assertion is BIT-IDENTITY against the serial answer, not a tolerance. A pooled
+        # scratch set is private for the duration of a call, so the arithmetic is the same
+        # arithmetic in the same order; anything else means two callers met.
+        #
+        # EVERY BUFFER IS NAMED ONCE IN THIS TESTSET, and that is not style. A helper that says
+        # `o = Vector{...}` while an `o` exists in the enclosing scope ASSIGNS THE ENCLOSING
+        # ONE — Julia closures capture by reference — so all eight tasks shared one output
+        # array and returned whatever the last writer left. That reproduced as 7-of-8 "wrong",
+        # deterministically, with every wrong answer bit-exact for ANOTHER task's input: a
+        # perfect imitation of the corruption this testset exists to detect, in a kernel that
+        # was in fact clean.
+        pw, pn, xw, kx, ky, _ = bits(3, Float64)
+        ngauss, nsub = quadrature_for_type3(pw, pn, kx, ky)
+        enodes, eweights = t3_gauss_rule(ngauss, nsub, Float64)
+        p = type3_plan_for(pw, pn, kx, ky)
+        xws = [xw .* (1 + 0.01k) for k in 1:8]
+        fwd(x) = let buf = Vector{ComplexF64}(undef, length(kx))
+            type3_quads!(buf, p, pw, pn, x, enodes, eweights)
+        end
+        serial = map(fwd, xws)
+        @test length(unique(serial)) == 8      # the eight inputs really do differ in the output
+        bad = 0
+        for _ in 1:20
+            got = fetch.(map(k -> Threads.@spawn(fwd(xws[k])), eachindex(xws)))
+            for k in eachindex(xws)
+                all(got[k][i] === serial[k][i] for i in eachindex(serial[k])) || (bad += 1)
+            end
+        end
+        @test bad == 0
+        # The adjoint shares the pool and the same grids, so it gets the same treatment.
+        adjv = ComplexF64.(range(-1, 1, length = length(kx)),
+                           range(0.7, -0.4, length = length(kx)))
+        adjoint1() = let buf = Vector{Float64}(undef, length(xw))
+            type3_quads_adj!(buf, p, pw, pn, adjv, enodes, eweights)
+        end
+        gserial = adjoint1()
+        badg = 0
+        for _ in 1:20
+            got = fetch.(map(_ -> Threads.@spawn(adjoint1()), 1:8))
+            for gg in got
+                all(gg[i] === gserial[i] for i in eachindex(gserial)) || (badg += 1)
+            end
+        end
+        @test badg == 0
+        # AND THE POOL ITSELF: every set borrowed above came back, and the cap holds.
+        @test length(p.pool) <= T3_POOL_MAX
+        @test !isempty(p.pool)
+        # A throw inside the transform must not strand a set outside the pool, or a fit whose
+        # objective throws occasionally would reallocate on every subsequent call.
+        n0 = length(p.pool)
+        for _ in 1:3
+            try
+                # one too few quadrature weights: the kernel indexes `eweights` by `eachindex`
+                type3_quads!(Vector{ComplexF64}(undef, length(kx)), p, pw, pn, xw,
+                             enodes, eweights[1:end-1])
+            catch
+            end
+        end
+        @test length(p.pool) == n0
+        # The scratch is also usable directly, which is what the hot paths do: borrow once and
+        # keep the set across the forward AND the adjoint of one evaluation.
+        held = t3_checkout!(p)
+        @test held isa T3Scratch{Float64}
+        direct = Vector{ComplexF64}(undef, length(kx))
+        type3_quads!(direct, p, held, pw, pn, xws[1], enodes, eweights)
+        @test all(direct[i] === serial[1][i] for i in eachindex(direct))
+        gdirect = Vector{Float64}(undef, length(xw))
+        type3_quads_adj!(gdirect, p, held, pw, pn, adjv, enodes, eweights)
+        @test all(gdirect[i] === gserial[i] for i in eachindex(gserial))
+        t3_checkin!(p, held)
     end
 
     @testset "the plan is cached, and re-made when the star outgrows it" begin

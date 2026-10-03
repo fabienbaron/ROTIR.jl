@@ -88,6 +88,36 @@ evaluation are both in `Float64` whatever `T` is (see the `psicoef` field).
 """
 t3_psi_degree(::Type{T}) where {T} = 24
 
+"""
+    T3Scratch{T}
+
+The MUTABLE half of a type-3 plan: everything a transform writes.
+
+# Why this is not in `Type3Plan`
+
+It used to be, and that made the kernel non-re-entrant. `type3_plan_for` returns a GLOBALLY
+CACHED plan, so two concurrent transforms on the same data received the same object and wrote
+each other's grids — `type3_quads!` opens by zeroing them. Measured before the split: two tasks,
+2000 calls each, gave ~1 call per contention episode back **finite and wrong** by 130–440 %,
+which an objective with `catch -> 1e30` accepts rather than rejects.
+
+`grids` is `nchunks` long and the transform loops run `for tid in 1:nchunks`, NOT
+`1:Threads.nthreads()`. The two were the same number before only because the grids were
+allocated per thread; decoupling them is what lets `_t3_finish!`'s reduction match the spread
+regardless of how many threads happen to be available, and it makes `nchunks` a tunable rather
+than a fact about the machine.
+"""
+struct T3Scratch{T}
+    grids::Vector{Matrix{T}}
+    scratch::Matrix{Complex{T}}
+    centred::Matrix{Complex{T}}
+    realbuf::Matrix{T}
+end
+
+T3Scratch(::Type{T}, nf::Int, nchunks::Int) where {T} =
+    T3Scratch{T}([zeros(T, nf, nf) for _ in 1:nchunks], zeros(Complex{T}, nf, nf),
+                 zeros(Complex{T}, nf, nf), zeros(T, nf, nf))
+
 struct Type3Plan{T,FP,W}
     nf::Int                    # fine grid points per dimension
     w::Int                     # kernel width in grid cells
@@ -115,10 +145,46 @@ struct Type3Plan{T,FP,W}
     # twice the memory to add zeros. MEASURED at HEALPix 3: 0.842 -> 0.775 ms, and 4.64 ->
     # 4.34 at HEALPix 6 — worth having and smaller than it looks, because the spread is
     # latency-bound on the scattered accumulate rather than bandwidth-bound.
-    grids::Vector{Array{T,2}}
-    scratch::Array{Complex{T},2}
-    centred::Array{Complex{T},2}
-    realbuf::Array{T,2}
+    # THE MUTABLE HALF LIVES IN A POOL, not in the plan — see `T3Scratch`. The pool hangs off
+    # the plan so it dies with it when `type3_plan_for`'s cache hits its 32-entry cap; a
+    # free-standing pool keyed on the plan would leak there.
+    nchunks::Int
+    pool::Vector{T3Scratch{T}}
+    poollock::ReentrantLock
+end
+
+"""
+The largest number of scratch sets any one plan keeps. See [`t3_checkout!`](@ref).
+"""
+const T3_POOL_MAX = 32
+
+"""
+    t3_checkout!(p) -> T3Scratch   /   t3_checkin!(p, s)
+
+Borrow and return the mutable half of a transform. The pool grows to the number of
+SIMULTANEOUS callers, not the number of calls — 8 sets for 8 concurrent tasks in testing, and
+one for any serial fit however long it runs.
+
+A set is small: `nchunks` real `nf x nf` grids plus three more `nf x nf` buffers, which at the
+`nf = 24` a lam And mesh plans is **0.09 MiB**. `T3_POOL_MAX` caps it anyway, because
+`TYPE3_PLANS` holds up to 32 plans and `nf` grows with the uv extent; past the cap a returned
+set is simply dropped for the GC, which costs a reallocation on the next checkout and nothing
+else. Correctness does not depend on the cap, only steady-state memory does.
+
+Measured: 374 ns for the pair, uncontended, against a 206 us call (0.18 %), and no measurable
+contention with 16 tasks on one pool (89 ns/pair aggregate).
+"""
+function t3_checkout!(p::Type3Plan{T}) where {T}
+    lock(p.poollock) do
+        isempty(p.pool) ? T3Scratch(T, p.nf, p.nchunks) : pop!(p.pool)
+    end
+end
+
+function t3_checkin!(p::Type3Plan, s::T3Scratch)
+    lock(p.poollock) do
+        length(p.pool) < T3_POOL_MAX && push!(p.pool, s)
+    end
+    return nothing
 end
 
 """
@@ -270,7 +336,9 @@ function _plan_type3(::Type{T}, A::T, kx::Vector{T}, ky::Vector{T}, w::Int, σ::
         end
     end
 
-    grids = [zeros(T, nf, nf) for _ in 1:Threads.nthreads()]
+    # `nchunks` is fixed at plan time and is what the transform loops iterate over. Taking it
+    # from `nthreads()` keeps the previous work division exactly; it is no longer forced to.
+    nchunks = max(Threads.nthreads(), 1)
     scratch = zeros(Complex{T}, nf, nf)
     # `ESTIMATE`, NOT `MEASURE`, and this is measured too. `MEASURE` benchmarks candidate
     # algorithms at plan time: 66 ms at nf = 22, 92 at 72, 134 at 120 — paid once per distinct
@@ -280,9 +348,17 @@ function _plan_type3(::Type{T}, A::T, kx::Vector{T}, ky::Vector{T}, w::Int, σ::
     # `ESTIMATE` one at those three sizes, because at this scale FFTW's codelets are already
     # optimal and there is nothing to search. The FFT is 1.3 % of the transform anyway.
     fp = plan_fft!(scratch; flags = FFTW.ESTIMATE)
+    # THE CACHED FFT PLAN IS REUSED ACROSS POOL ENTRIES, which is only sound because
+    # `plan_fft!` records the buffer's ALIGNMENT CLASS. Measured class 0 for 400/400 freshly
+    # allocated nf x nf ComplexF64 arrays, so every pooled scratch qualifies; the alternative,
+    # `FFTW.UNALIGNED`, costs ~6 us per transform. This asserts the property rather than
+    # trusting it, because the failure would be silent corruption rather than an error.
+    FFTW.alignment_of(zeros(Complex{T}, nf, nf)) == FFTW.alignment_of(scratch) ||
+        error("type-3 plan: a fresh scratch buffer has a different FFTW alignment class than " *
+              "the one the cached plan was built for; the plan cannot be shared across pool " *
+              "entries. Build the plan with FFTW.UNALIGNED, or give each scratch its own.")
     return Type3Plan{T,typeof(fp),w}(nf, w, β, P, dk, psicoef, one(T)/rmax, tbase, twx, twy, phihat,
-                              kcoef, deg, fp, grids, scratch, zeros(Complex{T}, nf, nf),
-                              zeros(T, nf, nf))
+                              kcoef, deg, fp, nchunks, T3Scratch{T}[], ReentrantLock())
 end
 
 @inline function _t3_psihat_inv(p::Type3Plan{T,FP,W}, r::T) where {T,FP,W}
@@ -401,13 +477,18 @@ end
 end
 
 "Generic type 3 on an explicit point set — the reference the fused version is checked against."
-function type3_points!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W},
+function type3_points!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W}, sc::T3Scratch{T},
              xs::Vector{T}, ys::Vector{T}, cs::Vector{T}) where {T,FP,W}
-    nf = p.nf; w = p.w; β = p.β; dx = p.P/nf
-    for G in p.grids; fill!(G, zero(T)); end
+    nf = p.nf; w = p.w; β = p.β; dx = p.P/nf; nchunks = p.nchunks
+    for G in sc.grids; fill!(G, zero(T)); end
     N = length(xs)
-    Threads.@threads :static for tid in 1:Threads.nthreads()
-        G = p.grids[tid]
+    # `:dynamic`, and `nchunks` rather than `nthreads()`. The `:static` was never load-bearing:
+    # `tid` is the LOOP INDEX, not a thread id (no `threadid()` appears in this file), so each
+    # iteration owns `grids[tid]` and its quad block whichever thread runs it. `:static` bought
+    # only first-touch locality, which measures as nothing here, while costing re-entrancy —
+    # Julia forbids `:static` concurrently or nested, process-wide, even across unrelated plans.
+    Threads.@threads for tid in 1:nchunks
+        G = sc.grids[tid]
         # `t3!` is the GENERIC point-set reference — validated against a direct sum, not a hot
         # path — so it keeps the plain `es` evaluation and heap stencil buffers. The quad
         # routines below use polynomial stencils in tuples instead.
@@ -429,7 +510,7 @@ function type3_points!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W},
             end
         end
     end
-    return _t3_finish!(out, p, dx)
+    return _t3_finish!(out, p, sc, dx)
 end
 
 @inline _t3_oob(i::Int, nf::Int) = (i < 0) | (i >= nf)
@@ -448,22 +529,27 @@ are generated together — and each thread owns a private `nf x nf` grid. That i
 because the grid is tiny: at nf = 64 it is 64 KB a thread, so sixteen of them fit in L2. It is
 also what lets the whole of FINUFFT's `setpts` be skipped.
 """
-function type3_quads!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W},
+function type3_quads!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W}, sc::T3Scratch{T},
                    pw::AbstractMatrix{T}, pn::AbstractMatrix{T}, xw::AbstractVector{T},
                    enodes::Vector{T}, eweights::Vector{T}) where {T,FP,W}
-    nf = p.nf; w = p.w; β = p.β; dx = p.P/nf
-    for G in p.grids; fill!(G, zero(T)); end
+    nf = p.nf; w = p.w; β = p.β; dx = p.P/nf; nchunks = p.nchunks
+    for G in sc.grids; fill!(G, zero(T)); end
     npix = size(pw, 1); nw = length(enodes)
     quarter = T(0.25)
-    Threads.@threads :static for tid in 1:Threads.nthreads()
-        G = p.grids[tid]
+    # `:dynamic`, and `nchunks` rather than `nthreads()`. The `:static` was never load-bearing:
+    # `tid` is the LOOP INDEX, not a thread id (no `threadid()` appears in this file), so each
+    # iteration owns `grids[tid]` and its quad block whichever thread runs it. `:static` bought
+    # only first-touch locality, which measures as nothing here, while costing re-entrancy —
+    # Julia forbids `:static` concurrently or nested, process-wide, even across unrelated plans.
+    Threads.@threads for tid in 1:nchunks
+        G = sc.grids[tid]
         kc = p.kcoef; deg = p.deg; halfw = T(w-1)/2
         vW = Val(W); vD = Val(W+3)
         # CONTIGUOUS BLOCKS per thread, not `tid:Threads.nthreads():npix`. A strided slice makes every
         # thread walk the whole of `pw`/`pn` at stride nthreads, so all of them touch every
         # cache line of the geometry. Worth 16.8 % at HEALPix 3, where each thread gets only a
         # few dozen quads, and nothing measurable above — free either way.
-        chunk = cld(npix, Threads.nthreads()); lo = (tid-1)*chunk + 1; hi = min(tid*chunk, npix)
+        chunk = cld(npix, nchunks); lo = (tid-1)*chunk + 1; hi = min(tid*chunk, npix)
         # TYPED AND HOISTED. `nf/2` and `w/2` are Int/Int, i.e. Float64, and adding one to a
         # Float32 grid coordinate promotes the whole rest of the line — the same trap that had
         # `2π .* kx` promoting the FINUFFT targets.
@@ -512,25 +598,25 @@ function type3_quads!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W},
             end
         end
     end
-    return _t3_finish!(out, p, dx)
+    return _t3_finish!(out, p, sc, dx)
 end
 
 "The half of the pipeline after the grid is filled: reduce, FFT, deconvolve, gather."
-function _t3_finish!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W}, dx::T) where {T,FP,W}
+function _t3_finish!(out::Vector{Complex{T}}, p::Type3Plan{T,FP,W}, sc::T3Scratch{T}, dx::T) where {T,FP,W}
     nf = p.nf; w = p.w
-    S = p.scratch
-    R = p.grids[1]
-    for t in 2:Threads.nthreads(); R .+= p.grids[t]; end
+    S = sc.scratch
+    R = sc.grids[1]
+    for t in 2:p.nchunks; R .+= sc.grids[t]; end
     @inbounds for i in eachindex(R); S[i] = Complex{T}(R[i], zero(T)); end
     p.fft! * S
-    C = p.centred
+    C = sc.centred
     @inbounds for ly in 0:nf-1, lx in 0:nf-1
         sgn = T(ifelse(iseven(lx + ly), 1, -1))
         C[mod(lx + nf÷2, nf) + 1, mod(ly + nf÷2, nf) + 1] =
             S[lx+1, ly+1] * sgn * dx * dx / (p.phihat[lx+1] * p.phihat[ly+1])
     end
     dk = p.dk
-    @inbounds Threads.@threads :static for j in eachindex(out)
+    @inbounds Threads.@threads for j in eachindex(out)
         acc = zero(Complex{T})
         i0 = p.tbase[1, j]; j0 = p.tbase[2, j]
         for qy in 1:w
@@ -572,12 +658,12 @@ end
 # The expensive end is now a GATHER over the quadrature nodes rather than a scattered
 # accumulate, so it needs no private grids and no reduction: every quad reads the same grid
 # and writes only its own entry.
-function type3_quads_adj!(grad::Vector{T}, p::Type3Plan{T,FP,W},
+function type3_quads_adj!(grad::Vector{T}, p::Type3Plan{T,FP,W}, sc::T3Scratch{T},
                        pw::AbstractMatrix{T}, pn::AbstractMatrix{T},
                        adj::Vector{Complex{T}},
                        enodes::Vector{T}, eweights::Vector{T}) where {T,FP,W}
-    nf = p.nf; w = p.w; dx = p.P/nf; dk = p.dk
-    C = p.centred; fill!(C, zero(Complex{T}))
+    nf = p.nf; w = p.w; dx = p.P/nf; dk = p.dk; nchunks = p.nchunks
+    C = sc.centred; fill!(C, zero(Complex{T}))
     # (1) transpose of the target gather: spread `adj` onto the centred k-grid.
     @inbounds for j in eachindex(adj)
         i0 = p.tbase[1, j]; j0 = p.tbase[2, j]
@@ -594,7 +680,7 @@ function type3_quads_adj!(grad::Vector{T}, p::Type3Plan{T,FP,W},
         end
     end
     # (2) un-centre, deconvolve, undo the centred-grid phase, then the SAME forward FFT.
-    S = p.scratch
+    S = sc.scratch
     @inbounds for ly in 0:nf-1, lx in 0:nf-1
         sgn = T(ifelse(iseven(lx + ly), 1, -1))
         S[lx+1, ly+1] = C[mod(lx + nf÷2, nf) + 1, mod(ly + nf÷2, nf) + 1] *
@@ -605,18 +691,18 @@ function type3_quads_adj!(grad::Vector{T}, p::Type3Plan{T,FP,W},
     # ONLY THE REAL PART IS EVER USED: every step after this gather multiplies by real kernel
     # weights, a real Jacobian and real quadrature weights, so Re(Σ z·a) = Σ Re(z)·a. Taking it
     # here halves the traffic AND gives `@turbo` a real array it can vectorise.
-    Sr = p.realbuf
+    Sr = sc.realbuf
     @inbounds for idx in eachindex(Sr); Sr[idx] = real(S[idx]); end
     npix = size(pw, 1); nw = length(enodes); quarter = T(0.25)
     fill!(grad, zero(T))
-    Threads.@threads :static for tid in 1:Threads.nthreads()
+    Threads.@threads for tid in 1:nchunks
         kc = p.kcoef; deg = p.deg; halfw = T(w-1)/2
         vW = Val(W); vD = Val(W+3)
         # CONTIGUOUS BLOCKS per thread, not `tid:Threads.nthreads():npix`. A strided slice makes every
         # thread walk the whole of `pw`/`pn` at stride nthreads, so all of them touch every
         # cache line of the geometry. Worth 16.8 % at HEALPix 3, where each thread gets only a
         # few dozen quads, and nothing measurable above — free either way.
-        chunk = cld(npix, Threads.nthreads()); lo = (tid-1)*chunk + 1; hi = min(tid*chunk, npix)
+        chunk = cld(npix, nchunks); lo = (tid-1)*chunk + 1; hi = min(tid*chunk, npix)
         # TYPED AND HOISTED. `nf/2` and `w/2` are Int/Int, i.e. Float64, and adding one to a
         # Float32 grid coordinate promotes the whole rest of the line — the same trap that had
         # `2π .* kx` promoting the FINUFFT targets.
@@ -664,6 +750,48 @@ function type3_quads_adj!(grad::Vector{T}, p::Type3Plan{T,FP,W},
         end
     end
     return grad
+end
+
+# ---------------------------------------------------------------------------------------------
+# PUBLIC SIGNATURES, UNCHANGED. The scratch-taking methods above are the ones the hot paths
+# call (they borrow once and keep the set for a whole forward+adjoint pair); these borrow for
+# the duration of one call so that `type3_quads!(out, p, pw, pn, xw, en, ew)` keeps working for
+# every existing caller and stays re-entrant while doing it.
+# FIXED ARITY, not `args...`, and deliberately so: the scratch-taking method differs from these
+# only in arity, so an argument that fails to match it raises a MethodError instead of landing
+# back here. A varargs wrapper recurses into itself on any element-type mismatch, and what
+# that looks like is a stack overflow and then a segfault, with no hint of which argument was
+# wrong.
+function type3_points!(out::Vector{Complex{T}}, p::Type3Plan{T}, xs::Vector{T},
+                       ys::Vector{T}, cs::Vector{T}) where {T}
+    sc = t3_checkout!(p)
+    try
+        return type3_points!(out, p, sc, xs, ys, cs)
+    finally
+        t3_checkin!(p, sc)
+    end
+end
+
+function type3_quads!(out::Vector{Complex{T}}, p::Type3Plan{T}, pw::AbstractMatrix{T},
+                      pn::AbstractMatrix{T}, xw::AbstractVector{T},
+                      enodes::Vector{T}, eweights::Vector{T}) where {T}
+    sc = t3_checkout!(p)
+    try
+        return type3_quads!(out, p, sc, pw, pn, xw, enodes, eweights)
+    finally
+        t3_checkin!(p, sc)
+    end
+end
+
+function type3_quads_adj!(grad::Vector{T}, p::Type3Plan{T}, pw::AbstractMatrix{T},
+                          pn::AbstractMatrix{T}, adj::Vector{Complex{T}},
+                          enodes::Vector{T}, eweights::Vector{T}) where {T}
+    sc = t3_checkout!(p)
+    try
+        return type3_quads_adj!(grad, p, sc, pw, pn, adj, enodes, eweights)
+    finally
+        t3_checkin!(p, sc)
+    end
 end
 
 # ── the ROTIR-facing layer ───────────────────────────────────────────────────────────────
@@ -826,8 +954,16 @@ function type3_cvis(proj_west::AbstractMatrix, proj_north::AbstractMatrix,
     T = _t3_plan_type(p)
     en, ew = t3_gauss_rule(ng, ns, T)
     out = Vector{Complex{T}}(undef, length(kx))
-    return type3_quads!(out, p, _t3_as(T, proj_west), _t3_as(T, proj_north),
-                        _t3_as(T, xw), en, ew)
+    # BORROWED FOR THE DURATION OF THE CALL. `try`/`finally` matters: an exception from the
+    # transform must not strand a scratch set outside the pool, or a long-running fit that
+    # throws occasionally would allocate a fresh 853 KiB set on every subsequent call.
+    sc = t3_checkout!(p)
+    try
+        return type3_quads!(out, p, sc, _t3_as(T, proj_west), _t3_as(T, proj_north),
+                            _t3_as(T, xw), en, ew)
+    finally
+        t3_checkin!(p, sc)
+    end
 end
 
 """
@@ -849,8 +985,13 @@ function type3_cvis_adj!(grad_xw::AbstractVector, proj_west::AbstractMatrix,
     T = _t3_plan_type(p)
     en, ew = t3_gauss_rule(ng, ns, T)
     g = grad_xw isa Vector{T} ? grad_xw : Vector{T}(undef, length(grad_xw))
-    type3_quads_adj!(g, p, _t3_as(T, proj_west), _t3_as(T, proj_north),
-                     _t3_as(Complex{T}, adj), en, ew)
+    sc = t3_checkout!(p)
+    try
+        type3_quads_adj!(g, p, sc, _t3_as(T, proj_west), _t3_as(T, proj_north),
+                         _t3_as(Complex{T}, adj), en, ew)
+    finally
+        t3_checkin!(p, sc)
+    end
     g === grad_xw || copyto!(grad_xw, g)
     return grad_xw
 end

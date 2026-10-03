@@ -27,7 +27,8 @@
 # you compare sphere vs ellipsoid honestly, which Δχ² cannot do when χ²/n ≫ 1.
 #
 # Against: no gradients are used, cost grows steeply with dimension, and PythonCall is not
-# thread-safe. Safe to call from a multithreaded session (see the note in the body).
+# thread-safe — which is why `threaded` reaches `_fit_nautilus` only, never UltraNest. Safe to
+# call from a multithreaded session either way.
 """
     parametric_posterior_spec(data_epochs, tessels, tepochs, base_params; kwargs...)
         -> (logπ, lower, upper, free_idx, layout)
@@ -122,9 +123,11 @@ has.
 `threaded` IS FORWARDED, and it was not: the keyword existed on `_fit_nautilus` and this
 function dropped it on the floor along with the rest of `kwargs`, so a caller that asked for a
 serial likelihood got a threaded one and no warning. That is not a preference — a `chi2_of`
-that is not re-entrant (ROTIR's own default `:t3` forward kernel is not; see
-`POLYFT_BACKEND`) THROWS on every concurrent evaluation, and a caller whose objective swallows
-exceptions then gets a converged-looking run built entirely out of sentinel values.
+that is not re-entrant THROWS on every concurrent evaluation, and a caller whose objective
+swallows exceptions then gets a converged-looking run built entirely out of sentinel values.
+ROTIR's own kernels are all re-entrant now (`:t3`'s mutable scratch comes from
+[`t3_checkout!`](@ref), not from the shared plan), so the default is `true`; an objective
+supplied by a caller is the case `threaded = false` exists for.
 """
 function _fit_nested(method::Symbol, chi2_of, names, lo, hi; verb::Bool = false,
                      min_num_live_points::Int = 400, use_stepsampler::Bool = false,
@@ -260,16 +263,22 @@ function fit_sphere_ld(data, tessels;
                        algorithm::Symbol = :LN_NELDERMEAD,
                        maxeval::Int = 2000, xtol_rel::Real = 1e-6, ftol_rel::Real = 1e-8,
                        min_num_live_points::Int = 400, use_stepsampler::Bool = false,
-                       # FALSE by default, unlike `_fit_nested`'s own `true`. Nautilus
-                       # parallelises its likelihood calls, and ROTIR's χ² threads internally
-                       # (`Threads.@threads :static` in src/type3_nufft.jl), which Julia
-                       # forbids nesting: `fit_sphere_ld(…, method = :nautilus)` died with
-                       # "`@threads :static` cannot be used concurrently or nested" on any
-                       # session with more than one thread. The inner threading is the one
-                       # worth keeping — it parallelises every likelihood call, not just the
-                       # sampler's outer loop. Pass `threaded = true` only with a kernel that
-                       # does not thread.
-                       threaded::Bool = false,
+                       # TRUE, and it was `false` for one release while the default `:t3`
+                       # kernel was not re-entrant. Nautilus parallelises its likelihood calls
+                       # and ROTIR's χ² threads internally, so this NESTS threading inside
+                       # threading — which is fine now that `:t3`'s mutable scratch comes from
+                       # a pool (`t3_checkout!`) rather than from the globally cached plan,
+                       # and the schedules are `:dynamic`. Nesting is also worth having: 8
+                       # concurrent transforms run 1.96x faster than the same 8 in a loop, on
+                       # top of the 4.8-7.2x (HEALPix 3-5, 16 threads) that the inner
+                       # threading already gives.
+                       #
+                       # Pass `threaded = false` for an objective of your own that is not
+                       # re-entrant. The failure it protects against is NOT a crash: a
+                       # `chi2_of` that throws under concurrency and swallows it returns the
+                       # 1e30 sentinel, and the sampler reports the FLAT PRIOR as a converged
+                       # posterior.
+                       threaded::Bool = true,
                        verbose::Bool = false)
     data isa AbstractVector || (data = [data])
     # Starting radius from the shortest baseline if not supplied: V² ≈ 0.6 at B_min for a disc
@@ -367,14 +376,11 @@ function fit_ellipsoid_ld(data, tessels;
                           algorithm::Symbol = :LN_NELDERMEAD,
                           maxeval::Int = 4000, xtol_rel::Real = 1e-6, ftol_rel::Real = 1e-8,
                           min_num_live_points::Int = 400, use_stepsampler::Bool = true,
-                          # FALSE by default, unlike `_fit_nested`'s own `true`. The nested
-                          # sampler parallelises its likelihood calls while ROTIR's χ² threads
-                          # internally (`Threads.@threads :static`, src/type3_nufft.jl), and
-                          # Julia forbids nesting those: the run dies with "`@threads :static`
-                          # cannot be used concurrently or nested" on any session with more
-                          # than one thread. Keep the INNER threading — it parallelises every
-                          # likelihood call, not just the sampler's outer loop.
-                          threaded::Bool = false,
+                          # TRUE — see the note on `fit_sphere_ld`. Nested threading is
+                          # safe since `:t3`'s scratch moved into a pool; before that it was
+                          # `false` because the sampler's concurrent likelihood calls shared
+                          # one plan's grids.
+                          threaded::Bool = true,
                           verbose::Bool = false)
     data isa AbstractVector || (data = [data])
     # Seed from the SPHERE fit by default. Starting cold, Nelder-Mead walks into the pole-on

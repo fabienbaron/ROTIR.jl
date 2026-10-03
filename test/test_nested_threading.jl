@@ -5,8 +5,8 @@
 # `min_num_live_points` (and two of them `use_stepsampler`) down to `_fit_nested` while
 # SILENTLY DROPPING `threaded`, so every one inherited that function's `threaded = true`.
 # Nautilus then parallelises its likelihood calls with `Threads.@threads` while ROTIR's χ²
-# threads internally with `Threads.@threads :static` (src/type3_nufft.jl, reached by the
-# default `:t3` kernel), and Julia refuses:
+# threads internally (src/type3_nufft.jl, reached by the default `:t3` kernel), and at the time
+# those inner loops were `Threads.@threads :static`, which Julia refuses to nest:
 #
 #     nested task error: `@threads :static` cannot be used concurrently or nested
 #
@@ -17,9 +17,31 @@
 # Nothing caught it: `test_orbit_fit.jl` exercises `:neldermead` only, and no other test runs a
 # nested sampler. The static check below is the cheap guard that would have; the functional
 # ones are the proof.
+#
+# WHAT CHANGED SINCE. `:t3`'s mutable scratch moved out of the globally cached plan into a
+# pool (`t3_checkout!`) and its schedules became `:dynamic`, so nesting is allowed and
+# `threaded` defaults to `true` again. These runs therefore now exercise the nested case for
+# real, and the χ² assertion below is what distinguishes "ran concurrently and worked" from
+# "every concurrent evaluation returned the 1e30 sentinel and the sampler reported the flat
+# prior" — which is what the bug actually looked like, and which `isfinite` accepts.
 
 using Test
 using ROTIR
+# NAUTILUS IS LOADED HERE, not assumed. It is a weak dependency, so `nautilus_available()` is
+# false until something in the session does this — and nothing did, so the live runs below were
+# silently skipped on every `Pkg.test()` while this file reported a pass. It is in the `test`
+# target of Project.toml, so the load cannot fail there; the `try` is for a bare session.
+try
+    @eval using Nautilus
+catch err
+    @info "Nautilus could not be loaded; the live nested-sampler runs will be skipped" err
+end
+
+# `runtests.jl` defines PKGDIR; this file is also runnable on its own, which is how the live
+# runs below get exercised when the suite is too slow to iterate on.
+if !@isdefined(PKGDIR)
+    const PKGDIR = pkgdir(ROTIR)
+end
 
 @testset "nested samplers under threads" begin
 
@@ -77,6 +99,14 @@ else
         @test isfinite(r.ld1)
         @test isfinite(r.logz)
         @test size(r.samples, 1) > 0        # it really sampled, rather than returning a point
+        # THE ASSERTION WITH TEETH. A run whose every likelihood call hit the sentinel comes
+        # back at the PRIOR MEDIAN, which sits inside the bounds and is finite — so the three
+        # tests above pass on a fit that is no fit. χ² does not: the box centre is 0.15 mas
+        # from the optimum and λ/B says that is most of a fringe.
+        χ²(rad, ld) = parametric_chi2(default_star_params(0; radius = rad, ldtype = 3,
+                                                          ld1 = ld, tpole = 5000.0),
+                                      tess, [d], [0.0]; weights = (1.0, 1.0, 0.0))
+        @test χ²(r.radius, r.ld1) < 0.5 * χ²(0.75, 1.0)
     end
 
     @testset "fit_ellipsoid_ld with :nautilus" begin

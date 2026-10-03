@@ -4137,22 +4137,19 @@ function _run_fit(meth::Symbol, obj, θ0, lb, ub, names, maxeval)
         # into a box labelled "evaluations" got a forty-minute run and no way to shorten it.
         # `n_eff` is the effective sample size, which is what the cost actually scales with;
         # `n_live` follows it, floored so the sampler still has a population to work with.
-        # SERIAL, and this is a correctness requirement rather than a cost choice.
-        # `_fit_nautilus` defaults to `threaded = true` and evaluates the likelihood from
-        # several tasks at once. `obj` above is `parametric_chi2`, which runs the process
-        # default forward kernel `:t3` — and that kernel is NOT re-entrant: `type3_plan_for`
-        # hands every call the same cached `Type3Plan`, whose scratch grids `type3_quads!`
-        # zeroes and then writes, and the loops over them are `Threads.@threads :static`,
-        # which Julia forbids nested or concurrent. So every concurrent evaluation threw,
-        # `obj`'s own `catch` turned each one into the 1e30 sentinel, and the run came back
-        # with `log(Z) = -5e29`, `N_eff = 1` and the FLAT PRIOR as its posterior — after
-        # exhausting its budget, because `f_live` never moves when no live point has a finite
-        # likelihood. A silently wrong fit, reported in the panel as a successful one.
-        #
-        # Serial `:t3` is also the faster of the two repairs: 0.20 ms per evaluation at
-        # HEALPix 3 against `:turbo`'s 6.9 ms, which 16 threads only bring to ~0.43 ms.
+        # THREADED, which it could not be until `:t3` became re-entrant. `_fit_nautilus`
+        # evaluates the likelihood from several tasks at once; `obj` above is
+        # `parametric_chi2`, which runs the process default forward kernel `:t3`. That kernel
+        # used to keep its mutable scratch in the globally cached `Type3Plan`, so every
+        # concurrent evaluation wrote another's grids: the calls threw, `obj`'s own `catch`
+        # turned each one into the 1e30 sentinel, and the run came back with `log(Z) = -5e29`,
+        # `N_eff = 1` and the FLAT PRIOR as its posterior — after exhausting its budget,
+        # because `f_live` never moves when no live point has a finite likelihood. A silently
+        # wrong fit, reported in the panel as a successful one. The scratch now comes from
+        # `t3_checkout!`, verified bit-identical to the old kernel and clean over 2960
+        # concurrent calls that previously corrupted about 1 in 2000.
         un = _fit_nested(meth, obj, String.(names), lb, ub; verb = true,
-                         threaded = false,
+                         threaded = true,
                          n_eff = clamp(maxeval, 200, 50_000),
                          n_live = clamp(maxeval ÷ 4, 100, 2000),
                          min_num_live_points = clamp(maxeval ÷ 4, 100, 2000))

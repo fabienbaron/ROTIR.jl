@@ -540,7 +540,7 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
                    ties = Dict{Symbol,String}(),
                    method::Symbol = :neldermead, model::Symbol = :analytic,
                    weights = OI_DEFAULT_WEIGHTS, maxeval::Int = 20_000,
-                   threaded::Bool = false,
+                   threaded::Bool = true,
                    min_num_live_points::Int = 400, use_stepsampler::Bool = true,
                    verbose::Bool = true)
     model === :analytic || model === :tessellated ||
@@ -587,9 +587,11 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
         (_, pbest, _) = NLopt.optimize(opt, θ0[idx])
         best = pbest; extra = NamedTuple()
     elseif method in (:ultranest, :nautilus)
-        # `threaded = false`: the sampler parallelises its likelihood calls and the χ² threads
-        # internally (`Threads.@threads :static`, src/type3_nufft.jl), which Julia forbids
-        # nesting. See the same note on `fit_sphere_ld` / `fit_ellipsoid_ld`.
+        # `threaded` nests the sampler's concurrency inside the χ²'s own threading, which is
+        # safe since `:t3`'s scratch moved into a pool (see the note on `fit_sphere_ld`). This
+        # objective mostly does not reach `:t3` at all — `model = :analytic` goes through
+        # OITOOLS' `dict_to_model`/`model_to_vis` — so that path was checked separately:
+        # 800 concurrent `component_vis` calls, all bit-identical to the serial answer.
         r = _fit_nested(method, chi2_of, string.(spec.names[idx]), spec.lo[idx], spec.hi[idx];
                         min_num_live_points = min_num_live_points, threaded = threaded,
                         use_stepsampler = use_stepsampler, verb = verbose)

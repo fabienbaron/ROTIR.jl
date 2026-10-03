@@ -13,8 +13,12 @@ worse than a crash, and a crash is worse than an ugly message.
 No action needed on these; listed so the items below are not re-derived.
 
 - `_fit_nested` silently dropped `threaded`; `fit_sphere_ld`, `fit_ellipsoid_ld` and
-  `fit_orbit` each dropped it on the way in. All now accept and forward it, default `false`.
-- The GUI's `_run_fit` nested-sampler branch passes `threaded = false`.
+  `fit_orbit` each dropped it on the way in. All now accept and forward it, and since the
+  `:t3` pool landed the default is `true` again on all four.
+- **`:t3` IS NOW RE-ENTRANT** — the mutable scratch moved out of the globally cached
+  `Type3Plan` into a per-plan pool (`t3_checkout!`/`t3_checkin!` in a `try`/`finally`), and the
+  four `Threads.@threads :static` schedules became `:dynamic` over `p.nchunks` chunks. This
+  closed P1 items 1, 2 and 5, P2 item 9 and P3 entirely; see the design record below.
 - `src/fit_pigeons.jl` had an unterminated string — the file did not parse, so
   `ROTIRPigeonsExt` never loaded. Fixed and committed.
 - `component_vis` ported to OITOOLS 0.15's model API (the standalone `visibility_*` functions
@@ -35,62 +39,90 @@ nested-threading **11/11**.
 
 ## P1 — silent wrongness
 
-A user gets a number that is wrong and looks fine. Fix these first; they turn every other
-item on this list from "silently wrong" into "loudly wrong".
+A user gets a number that is wrong and looks fine. The big one here is **done**; what is left
+is item 4, which is what would make the *next* one of these audible instead of silent.
 
-### 1. `:t3` re-entrancy guard
+### 1-2. `:t3` re-entrancy — **DONE 2026-10-03**, and not with a guard
 
-**The bug.** `src/type3_nufft.jl` is the process-wide default forward kernel and is not
-re-entrant on two independent counts:
+The scratch pool superseded the proposed throw-on-concurrent-entry guard: a guard would have
+made the failure audible, the pool makes it not happen. Kept here because the measurement is
+the reason the design changed.
 
-- `type3_plan_for` (~`:784`) returns a **globally cached** `Type3Plan`; `TYPE3_PLANS_LOCK`
-  guards construction, not use. Concurrent calls on the same data share one plan object.
-- `Type3Plan` (`:91`) carries mutable scratch — `grids`, `scratch`, `centred`, `realbuf` —
-  and `type3_quads!` (~`:455`) opens by zeroing it.
+**What the bug was.** `type3_plan_for` returns a **process-wide cached** `Type3Plan`
+(`TYPE3_PLANS_LOCK` guarded construction, not use), and the plan carried `grids`, `scratch`,
+`centred` and `realbuf`, which `type3_quads!` opens by zeroing. Two tasks on one plan, 2000
+calls each, three trials: 2000 throws, 1999 correct, and **1 silently wrong** each time, worst
+relative error 1.30–4.34. The window was structural — the zeroing and `_t3_finish!`'s
+reduction/FFT run serially, outside any threaded region, so Julia's own `:static` precondition
+passed and the second entrant walked onto the first's scratch. A finite, wrong visibility,
+which an objective with `catch → return 1e30` *accepts*.
 
-(Note: the `@threads :static` schedule at `:409`, `:458`, `:533`, `:612` is *not* load-bearing —
-see P3. It is a separate, global constraint, not the reason the scratch is unsafe.)
+**What shipped.** `T3Scratch{T}` holding the four mutable buffers; `Type3Plan` keeps only
+read-only plan data plus `nchunks`, `pool` and `poollock`. `type3_cvis`/`type3_cvis_adj!`
+borrow one set for the whole call in a `try`/`finally`; the three exported entry points
+(`type3_quads!`, `type3_quads_adj!`, `type3_points!`) keep their old signatures as fixed-arity
+wrappers that borrow for the duration. `T3_POOL_MAX = 32` bounds steady-state memory (a set is
+0.09 MiB at the `nf = 24` a lam And mesh plans).
 
-**Measured, and worse than a throw.** Two tasks on one plan, 2000 calls each, three trials:
-2000 throws, 1999 correct, and **1 silently wrong** each time, worst relative error 1.30–4.34.
-The window is structural: `type3_quads!` zeroes serially and `_t3_finish!` reduces/FFTs
-serially before its `:static` gather, and in those stretches no threaded region is open, so
-Julia's own precondition passes and the second entrant walks onto the first's scratch. A
-finite, wrong visibility — which an objective with `catch → return 1e30` *accepts*.
+**Verified.** Bit-identical to the pre-pool kernel — byte-for-byte, not to a tolerance — on
+forward, adjoint and the point-set route at HEALPix 3 and 5, by running the same script against
+both files. Clean over 2000 concurrent `fused_cvis` calls and 960 concurrent gradients where
+the old code corrupted about 1 in 2000. Pinned by a new testset in `test/test_type3_nufft.jl`
+("re-entrancy: concurrent transforms on one cached plan"), which asserts bit-identity against
+the serial answer, that the pool does not leak a set when the transform throws, and the cap.
 
-**Fix.** `jl_in_threaded_region` check + atomic CAS, on `type3_quads!`, `type3_quads_adj!`
-and `type3_points!` — the three functions that touch the scratch. **Process-wide, not
-per-plan**: Julia's check is global, and `type3_plan_for` caps the cache with a wholesale
-`empty!` at 32 entries, so two tasks can legitimately hold different plan objects for the same
-key and a per-plan flag waves both through (demonstrated).
+Two beliefs stated earlier in this file's history were wrong and shaped the design, so:
 
-**Cost.** 4.3 ns per call against a 0.37 ms cheapest real call — below the noise floor of any
-A/B on this kernel (the identical no-op control scattered ±4.5 %).
+- **`:static` was not required for `grids[tid]`.** There is no `Threads.threadid()` anywhere in
+  the file. `tid` is the loop index, and both the grid and the `lo`/`hi` quad block are keyed on
+  it, so each iteration owns its grid whichever OS thread runs it.
+- **The `:static` throw was not about shared scratch.** `jl_in_threaded_region` is a *global*
+  counter, so two concurrent transforms on **different** plans, sharing nothing, also threw.
+  The scheduler change was needed independently of the scratch fix, and they had to land
+  together: shared scratch with `:dynamic` gave **0/8 correct, worst relative error 1.03e+28**.
 
-Do **not** make it serialise by default: that converts a caller-side design error into an
-unexplained wall-clock cliff. Offer serialisation as an opt-in; throw by default.
+**Cost.** Checkout/checkin is 374 ns against a 206 µs call (0.18 %), with no measurable
+contention (16 tasks on one pool, 89 ns/pair aggregate). End to end through `fused_cvis` the
+single-call cost is **unchanged within noise** at 16 threads (0.108/0.248/0.806 ms at HEALPix
+3/4/5 against 0.105/0.232/0.799 before) — the earlier prototype's 5–17 % single-caller *win*
+was measured at the plan level and does not survive end to end, so the pool should be taken as
+free, not as faster. What it buys is concurrency: 8 simultaneous transforms complete **1.96×**
+faster than the same 8 in a loop, on top of the ~4.8× the inner threading already gives.
 
-### 2. Make the guard a typed exception
+**Rejected alternatives, with the measurement:**
 
-`T3NotReentrant <: Exception`, not a bare `ErrorException`. Three places swallow exceptions
-today and would swallow the guard too:
+- **Fresh scratch per call** — correct and trivial, but **+24 to +28 %** at HEALPix 2–4 (+5–7 %
+  at 5–6): the scratch is mesh-independent, so a flat cost hurts most where `:t3` is cheapest.
+  Sustained 27.6 µs per set, 84 % of it GC.
+- **Lock the plan** — bit-identical, ~3 lines, and it does silence the `:static` error, but
+  throughput *degrades*: 3834 → 3819 → 3405 → **3084** calls/s for 1, 2, 4, 8 callers. The right
+  emergency patch, the wrong destination.
+- **Task-local storage** — 358 ns lookup (no win) and the lifetime is wrong both ways:
+  `@spawn`-per-call samplers get a fresh task every time, degenerating to per-call allocation;
+  long-lived workers accumulate one set per plan touched with nothing to free them.
+- **Per-thread scratch keyed beyond `threadid`** — that *is* the pool with a fixed backing
+  store, and `threadid()` is unsound under task migration on Julia ≥ 1.7 anyway.
 
-- OITOOLS `bootstrap_driver` → `run_chunk` — comments the row to NaN
-- `src/gui/shell.jl:3576-3580` — `catch → return 1e30`
-- `model_state` — `catch err → console!("χ² failed: …")`
+**Incidental, worth keeping:** `:dynamic` is free-to-faster, never slower (−11.7 %, −16.5 %,
+−7.3 %, −6.6 %, +2.7 % at HEALPix 2–6) because `:static` pins iteration *i* to thread *i*, so
+one contended thread stalls the whole barrier — exactly what a multi-chain sampler creates. And
+**no `FFTW.UNALIGNED` is needed**: `plan_fft!` records the buffer's alignment class, which
+looked like a blocker for per-call buffers, but 400/400 fresh 72×72 `ComplexF64` arrays measured
+class 0, so the cached plan applies to any per-call `Array`. There is an `FFTW.alignment_of`
+assertion at scratch construction to keep that honest; `UNALIGNED` would cost +6 µs per
+transform.
 
-Without the type, item 3 stays silent even with the guard in place.
+### 3. `bootstrap_parametric` at its default `parallel = :outer` — **mostly closed**
 
-### 3. `bootstrap_parametric` at its default `parallel = :outer`
+The failure mode was: OITOOLS runs replicates under `Threads.@spawn`, `run_chunk` swallows the
+throw, every replicate NaNs out, and you get `"fewer than 2 usable replicates"` or a σ computed
+from whichever handful happened not to collide. With `:t3` re-entrant, a `:t3`-route `fitfun` no
+longer throws there.
 
-With any `:t3`-route `fitfun`, OITOOLS runs replicates under `Threads.@spawn` and `run_chunk`
-swallows the throw. Result: every replicate NaNs out, and you get either
-`"fewer than 2 usable replicates"` or a σ computed from whichever handful happened not to
-collide. **This is the default setting and the failure is quiet.**
-
-`parallel = :inner` is serial and safe. The convenience overload
-`bootstrap_parametric(DATA, TESSELS, TEPOCHS, BASE; …)` is also safe — its `fitfun` is
-`fit_parametric`, which routes through `interferometric_chi2`, a different kernel.
+What remains is the swallowing itself, which is upstream and applies to **any** `fitfun` that is
+not re-entrant — including one a user writes. Worth a line in `bootstrap_parametric`'s docstring
+saying `parallel = :outer` requires a re-entrant `fitfun` and will quietly drop replicates
+otherwise. Not worth code.
 
 ### 4. `shell_fit`'s bare `catch → return 1e30`
 
@@ -102,32 +134,23 @@ A derivative-free objective genuinely needs to survive geometry failures, so thi
 call, not a mechanical fix. Minimum viable: refuse a run in which *every* evaluation failed.
 Better: console-log the first exception, then continue.
 
-### 5. `type3_quads_adj!`
+### 5. `type3_quads_adj!` — **DONE**, same change
 
-Same `:static` pattern over the same shared scratch (~`:612`). Never tested. Covered by item 1
-if the guard is placed there, which it should be.
+It shared `centred`/`scratch`/`realbuf` and had the same loop; it takes the scratch from the
+same pool, is bit-identical, and the new testset covers it (20 rounds × 8 concurrent callers,
+all bit-identical to serial). It has no production caller yet — `compute_adjoint_cvis!` has no
+`:t3` branch on purpose, see `src/fused_polyft.jl:348` — but it is exported and precompiled.
 
 ---
 
 ## P2 — loud failure, or claims in our own source that are wrong
 
-### 6. The timing comment at `src/gui/shell.jl:4152-4153` is wrong
+### 6. The timing comment at `src/gui/shell.jl` — **DONE**
 
-It reads *"Serial `:t3` is also the faster of the two repairs: 0.20 ms per evaluation at
-HEALPix 3"*. **0.20 ms is the 16-thread figure; serial is 0.94 ms.** Measured speedup from
-`:t3`'s internal threading, serial ÷ threaded at equal thread count:
-
-| nside | tessels | 4 thr | 8 thr | 16 thr |
-|---|---|---|---|---|
-| 2 | 192 | 2.80× | 3.78× | 3.88× |
-| 3 | 768 | 3.14× | 5.02× | 5.07× |
-| 5 | 12 288 | 3.85× | 6.86× | 7.50× |
-| 6 | 49 152 | 3.67× | 6.57× | 8.54× |
-
-It earns its keep at every mesh size tested. The `threaded = false` fix is still correct — it
-serialises the *sampler's outer loop* while the kernel keeps its inner threading, which is
-exactly the right split — but the stated justification must go. It has already propagated once:
-a later investigation cited this comment as evidence.
+It claimed serial `:t3` was 0.20 ms per evaluation at HEALPix 3; that was the 16-thread figure
+and the serial one is 0.94 ms, so the comment argued for serialising on a number that only held
+if it did not serialise. The whole block is rewritten: the branch now passes `threaded = true`
+and the comment records what the bug was and how the pool closed it.
 
 ### 7. `kernel = nothing` should be spelled `:scalar`
 
@@ -147,130 +170,58 @@ HEALPix 3–4 — would make the console line false *and* the fit non-re-entrant
 fallback `:scalar` makes it true by construction. An assertion in `_fit_kernel` is the
 alternative.
 
-### 8. The GUI thread is not quiesced during a fit
+### 8. The GUI thread is not quiesced during a fit — **downgraded to cosmetic**
 
 `start_job!` refuses a second job, so job-vs-job is impossible. But only **6** file-IO buttons
 carry `enabled: !win.jobRunning` in `src/gui/qml/Main.qml`; the parameter fields, epoch stepper,
 tab bar and kernel combo stay live. `shell_set_param` clears `sh.chi2key[]`, and the next
 refresh runs `epoch_chi2` → `model_state` → `observables` → `fused_cvis` → `:t3` **on the GUI
-thread** while the worker is also on `:t3` (for `:neldermead`/`:bobyqa`/`:nautilus` and any
-binary fit). The worker's `catch → 1e30` then silently takes a sentinel at that trial point.
+thread** while the worker is also on `:t3`.
 
-Fix: extend `enabled: !win.jobRunning` to the parameter form and epoch stepper, or early-bail
-in `model_state` when `sh.job !== nothing`. Source-verified; not reproduced in a live GUI.
+That used to hand the worker a 1e30 sentinel at that trial point. With the pool the two simply
+both run, correctly. What is left is that a user can edit the parameters underneath a running
+fit and be confused by the result, which is a UI question, not a correctness one. Extending
+`enabled: !win.jobRunning` to the parameter form and epoch stepper is still the fix.
 
-### 9. `spheroid_chi2_allepochs_f` threads over epochs into `:t3`
+### 9. `spheroid_chi2_allepochs_f` threads over epochs into `:t3` — **DONE** by the pool
 
 `src/oichi2_spheroid.jl:409` — `Threads.@threads for i=1:nepochs` → `spheroid_chi2_f` →
 `observables`, which takes the matrix-free `:t3` branch whenever `setup_oi!` has not been run.
-Exported. Latent only because both in-repo callers happen to run `setup_oi!` first, which the
-function cannot know. Fix: route the epoch loop serially when `isempty(stars[i].polyft)` — the
-dense route keeps its threading and loses nothing.
+Exported, and latent only because both in-repo callers happen to run `setup_oi!` first, which
+the function cannot know. Concurrent `:t3` from an epoch loop is now correct, so nothing is
+needed. Same for item 12 below (`binary_cvis`'s matrix-free branch).
 
 ---
 
-## P3 — real re-entrancy
+## P3 — re-entrancy: **CLOSED**
 
-**This is measured, prototyped, bit-identical and FASTER than what ships. It is not a
-trade-off.** Two beliefs stated earlier in this file's history were wrong and are corrected
-here, because both shaped the design:
+Everything that was in this section shipped on 2026-10-03. The design record, the rejected
+alternatives and the numbers are in P1 item 1-2 above, which is now the single place `:t3`
+re-entrancy is documented. One consequence worth stating on its own:
 
-- **`:static` is NOT required for `grids[tid]`.** There is no `Threads.threadid()` anywhere in
-  `src/type3_nufft.jl` (verified: `grep threadid` returns nothing). In
-  `for tid in 1:Threads.nthreads()`, `tid` is the **loop index**, and both `p.grids[tid]` and the
-  `lo`/`hi` quad block are keyed on it, so each iteration owns its grid whichever OS thread runs
-  it. `:dynamic` is bit-identical. `:static` buys only first-touch locality, which measures as
-  nothing (nf = 72 at every HEALPix level 2–6; grids are 41 KiB and live in L2).
-- **The `:static` throw is not about shared scratch.** `jl_in_threaded_region` is a *global*
-  counter, so two concurrent `:t3` transforms on **different plans**, sharing nothing, also
-  throw. The scheduler change is therefore needed independently of the scratch fix.
+### 10. The three `threaded = false` defaults are back to `true`
 
-What does hold is the warning that they must land together: shared scratch with `:dynamic`,
-8 concurrent callers → **0/8 correct, worst relative error 1.03e+28**.
+`src/parametric_fit.jl` (`fit_sphere_ld`, `fit_ellipsoid_ld`), `src/orbit_fit.jl` (`fit_orbit`)
+and the GUI's `_run_fit` nested-sampler branch each carried `threaded = false` solely because of
+this bug. All four now default to `true`, and the stale `@threads :static` rationale in their
+comments is replaced by what actually holds. `grep ':static' src ext` returns nothing.
 
-### 10. Scratch pool on the plan + `:dynamic` — the recommended fix
-
-Keep `tbase`/`twx`/`twy`/`phihat`/`kcoef`/`psicoef`/`fft!` shared read-only in the cached plan;
-move `grids`/`scratch`/`centred`/`realbuf` into a pool field, checked out per call in a
-`try`/`finally`. Four `:static` → `:dynamic`. No public signature changes.
-
-Per-call cost, single caller, min of 11 interleaved rounds:
-
-| nside | npix | shipped `:static` | pooled `:dynamic` |
-|---|---|---|---|
-| 2 | 108 | 0.158 ms | **0.137 (−13.1 %)** |
-| 3 | 422 | 0.247 | **0.206 (−16.6 %)** |
-| 4 | 1676 | 0.437 | **0.395 (−9.6 %)** |
-| 5 | 6714 | 0.843 | **0.798 (−5.3 %)** |
-| 6 | 26822 | 2.587 | **2.621 (+1.3 %)** |
-
-Checkout/checkin is 374 ns on a 206 µs call (0.18 %) with no measurable contention — 16 tasks on
-one pool run at 89 ns/pair. The pool grows to the number of *simultaneous* callers (5 sets for 8
-tasks), 853 KiB each, mesh-independent. It lives on the plan so it dies with it when
-`TYPE3_PLANS` hits its 32-entry cap; a free-standing pool keyed on the plan would leak there.
-
-Concurrency restored **with scaling**, nside 3: 3547 → 6393 → 7888 → **9982** calls/s for 1, 2,
-4, 8 callers (2.8×), and **10 819** with `nchunks = 4` instead of 16 — a knob the design opens
-up, since with private scratch the chunk count need no longer equal `nthreads()`.
-
-Bit-identical to the shipped kernel — not 1e-12, byte-for-byte — across fresh/pooled/held/locked
-scratch × `:static`/`:dynamic`/`:spawn`/serial, at nside 3 and 5, forward **and adjoint**.
-
-### 11. The adjoint takes the same change
-
-`type3_quads_adj!` shares `centred`/`scratch`/`realbuf` and has the same loop. Prototyped:
-bit-identical, 8/8 concurrent callers correct, and **10.7 % faster** at nside 4 (0.645 → 0.576
-ms). The shipped adjoint throws under 8 callers.
-
-### 12. Rejected alternatives, with the reason
-
-- **Fresh scratch per call** — simplest, correct, but **+24 to +28 %** at HEALPix 2–4 (+5–7 % at
-  5–6). The scratch is 853 KiB and mesh-independent, so the cost is flat while the kernel is not,
-  hurting most where `:t3` is cheapest. Sustained cost is 27.6 µs per set, 84 % of it GC. Fallback
-  only if the pool is judged too much machinery.
-- **Lock the plan** — bit-identical, ~3 lines, and it legitimately silences the `:static` error.
-  But throughput *degrades*: 3834 → 3819 → 3405 → **3084** calls/s for 1, 2, 4, 8 callers, i.e.
-  8 concurrent chains run 20 % slower in aggregate than one. Right emergency patch, wrong
-  destination.
-- **Task-local storage** — lookup is 358 ns (no win over the pool) and the lifetime is wrong both
-  ways: `@spawn`-per-call samplers get a fresh task each time, degenerating to per-call
-  allocation; long-lived workers accumulate 853 KiB per plan touched with nothing to free them.
-- **Per-thread scratch keyed beyond `threadid`** — that *is* the pool with a fixed backing store,
-  and `threadid()` is unsound under task migration on Julia ≥ 1.7 anyway.
-
-### 13. Incidental, worth keeping
-
-- **`:dynamic` is free-to-faster, never slower**: −11.7 %, −16.5 %, −7.3 %, −6.6 %, +2.7 % at
-  nside 2–6. `:static` pins iteration *i* to thread *i*, so one contended thread stalls the whole
-  barrier — exactly the condition a multi-chain sampler creates.
-- **No `FFTW.UNALIGNED` needed.** `plan_fft!` records the buffer's alignment class, which looked
-  like a blocker for per-call buffers; measured class 0 for **400/400** fresh 72×72 `ComplexF64`
-  arrays, so the cached plan applies to any per-call Array. Add a one-line `FFTW.alignment_of`
-  assertion at scratch construction. `UNALIGNED` would cost +6 µs per transform.
-
-### 14. What this unblocks
-
-The three shipped `threaded = false` defaults exist solely because of this bug —
-`src/parametric_fit.jl:273` and `:377`, `src/gui/shell.jl:4154`. The pool is what lets them go
-back to `true`, worth **2.8–3.1× at 8 chains**, against the 0.80× the lock would give.
-
-### 12. `binary_cvis`'s matrix-free branch
+### 11. `binary_cvis`'s matrix-free branch
 
 `src/oichi2_binary.jl:168-170`, public, on the `:t3` route with the same `isempty(polyft)`
-auto-switch. No threaded caller in-repo today. Covered by the guard; listed so it is not
-forgotten if someone parallelises over epochs.
+auto-switch. No threaded caller in-repo, and now safe if one appears.
 
 ---
 
 ## P4 — hygiene
 
-### 13. CI has no test workflow
+### 12. CI has no test workflow
 
 `.github/workflows/` contains only `docs.yml`. **`test/runtests.jl` has never run on push or
 PR** — 2892 assertions that execute only locally. The main suite needs no display and would run
 on `ubuntu-latest` as-is. This is the single biggest CI gap.
 
-### 14. Documenter's `checkdocs = :none` hides a backlog
+### 13. Documenter's `checkdocs = :none` hides a backlog
 
 Undocumented or unreachable exports surface only when something `@ref`s them, at which point
 the build fails hard — this broke the docs build three times in one session. Known:
@@ -279,7 +230,7 @@ the build fails hard — this broke the docs build three times in one session. K
 `provider_intensity` is exported with no docstring at all, and it is the single call the whole
 provider interface exists to offer. Consider `checkdocs = :exports`, expecting a backlog.
 
-### 15. The parse-scan test is syntax-only
+### 14. The parse-scan test is syntax-only
 
 `test/runtests.jl`'s "every shipped source file parses" uses `Meta.parseall`, which validates
 syntax but does **not** lower. It would have caught the `fit_pigeons.jl` unterminated string
@@ -287,14 +238,14 @@ that motivated it, but it misses `const` on a local, undefined variables and bad
 it did in fact miss exactly that in `test_nested_threading.jl`. Say so in its docstring so it is
 not read as a general validity check.
 
-### 16. Uncommitted work and the AppImage
+### 15. Uncommitted work and the AppImage
 
 The AppImage is built (562 600 440 B) and smoke-tested but **not deployed**, and corresponds to
 no commit. The deploy target is
 `joy:/nfs/morgan/users/baron/public_html/ROTIR-x86_64.AppImage` — a public URL; upload to a
 `.new` name, verify SHA-256, then move into place.
 
-### 17. ζ And
+### 16. ζ And
 
 The ellipsoid fit railed against `f_bounds`' upper wall at 0.3997 (16–84 interval
 [0.3993, 0.3999]) — and 0.40 is **past the physical maximum**, since a rigidly rotating star at
@@ -310,12 +261,17 @@ posterior widths, because χ²ᵣ = 9.17 says the quoted error bars are wrong.
 
 ---
 
-## If you only do three
+## What is left, in order
 
-**1 + 2 together** (the guard, typed), then **4**. Those close the corruption window and make
-every remaining failure audible, for 4.3 ns.
+**P1 item 4** — `shell_fit`'s bare `catch → return 1e30`. The pool removed the exception this
+was swallowing, but it will swallow the next one just as quietly. Minimum viable: refuse a run
+in which *every* evaluation failed; better, console-log the first exception and continue.
 
-Then **P3 item 10** — and note it is not a trade-off to weigh: the pooled `:dynamic` kernel is
-bit-identical, 5–17 % *faster* single-threaded at HEALPix 2–5, and 2.8–3.1× faster at 8
-concurrent callers. It supersedes the guard rather than competing with it, and it is what lets
-the three `threaded = false` defaults go back to `true`.
+**P2 item 7** — spell the Pigeons fallback kernel `:scalar` rather than `nothing`, so the
+console line stays true if someone adds a threading kernel to that tuple.
+
+**P4 item 12** — CI runs the docs build and nothing else. The suite is the thing most likely to
+catch a regression and it does not run on a push.
+
+Then the science: **item 16**, ζ And's joint model + imaging fit, which is what the ellipsoid
+railing at the physical flattening limit is asking for.

@@ -49,10 +49,12 @@
         # internally — and the generic point-set route, which is a separate specialisation.
         p64 = plan_type3(1.0, Float64.(kx), Float64.(ky))
         out64 = Vector{ComplexF64}(undef, length(kx))
-        type3_quads!(out64, p64, Float64.(pw), Float64.(pn), Float64.(xw), en, ew)
+        sc64 = ROTIR.t3_checkout!(p64)
+        type3_quads!(out64, p64, sc64, Float64.(pw), Float64.(pn), Float64.(xw), en, ew)
         g64 = Vector{Float64}(undef, length(xw))
-        type3_quads_adj!(g64, p64, Float64.(pw), Float64.(pn), ComplexF64.(adj), en, ew)
-        type3_points!(out64, p64, [0.3, -0.4], [0.2, 0.5], [1.0, 0.7])
+        type3_quads_adj!(g64, p64, sc64, Float64.(pw), Float64.(pn), ComplexF64.(adj), en, ew)
+        type3_points!(out64, p64, sc64, [0.3, -0.4], [0.2, 0.5], [1.0, 0.7])
+        ROTIR.t3_checkin!(p64, sc64)
 
         # And the exact kernel the other backends use, so a cross-check is not a cold start.
         nuv = length(kx)
