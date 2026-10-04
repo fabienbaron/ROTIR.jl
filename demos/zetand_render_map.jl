@@ -40,7 +40,7 @@ function main()
                    title = "ROTIR plot_mollweide, map extracted from the figure",
                    labels = false, lon_color = "black", lat_color = "black",
                    grid_style = ":", grid_alpha = 0.9,
-                   lon_spacing = 30, lat_spacing = 30,
+                   lon_spacing = 30, lat_spacing = 30, axis_lines = true,
                    colorbar_ticks = 2, colorbar_label = "")
     out = joinpath(zet, "zetAnd2019A_map_rotir.png")
     PythonPlot.savefig(out, dpi = 150, bbox_inches = "tight")
@@ -56,7 +56,7 @@ function main()
                    title = "ROTIR model frame (equator-flipped), what the chi2 uses",
                    labels = false, lon_color = "black", lat_color = "black",
                    grid_style = ":", grid_alpha = 0.9,
-                   lon_spacing = 30, lat_spacing = 30,
+                   lon_spacing = 30, lat_spacing = 30, axis_lines = true,
                    colorbar_ticks = 2, colorbar_label = "")
     out = joinpath(zet, "zetAnd2019A_map_rotir_modelframe.png")
     PythonPlot.savefig(out, dpi = 150, bbox_inches = "tight")

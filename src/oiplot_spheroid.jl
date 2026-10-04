@@ -873,6 +873,8 @@ and get in the way of the second.
 | `colorbar_label` | `"Temperature (K)"` | its label — pass `""` for none |
 | `colorbar_ticks` | `7` | how many ticks on it |
 | `title` | `figtitle` | the title; `""` for none |
+| `axis_lines` | `false` | draw the equator and central meridian SOLID over the dotted graticule |
+| `axis_color`, `axis_style`, `axis_width` | `"black"`, `"-"`, `1.0` | how those two are drawn |
 
 `lat_spacing` MUST DIVIDE 90. matplotlib's `GeoAxes.set_latitude_grid(d)` places parallels at
 `arange(-90+d, 90, d)` and labels them with `ThetaFormatter(d)`, which rounds to multiples of
@@ -890,7 +892,9 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
                                       lon_spacing::Real=20, lat_spacing::Real=15,
                                       grid_style="-", grid_alpha::Real=0.6,
                                       colorbar::Bool=true, colorbar_label="Temperature (K)",
-                                      colorbar_ticks::Int=7)
+                                      colorbar_ticks::Int=7,
+                                      axis_lines::Bool=false, axis_color="black",
+                                      axis_style="-", axis_width::Real=1.0)
   set_oiplot_defaults()
   mod(90, lat_spacing) == 0 || error(
       "mollplot_temperature_healpix: `lat_spacing` must divide 90 (got $lat_spacing). " *
@@ -953,6 +957,14 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
   grid(graticule)
   if incl != 90.0
     ax.axhline(-incl * pi/180, c="black", ls="-.")
+  end
+  # THE EQUATOR AND THE CENTRAL MERIDIAN, solid over a dotted graticule. They are graticule
+  # lines already, so this is purely how they LOOK — but it is how healpy's `mollview` draws
+  # them, and matching it lets a ROTIR figure sit beside one from the literature without the
+  # eye catching on the difference.
+  if axis_lines
+    ax.axhline(0.0, c=axis_color, ls=axis_style, lw=axis_width)
+    ax.axvline(0.0, c=axis_color, ls=axis_style, lw=axis_width)
   end
   if colorbar
     ticks = collect(range(vmin, stop=vmax, length=max(2, colorbar_ticks)));
