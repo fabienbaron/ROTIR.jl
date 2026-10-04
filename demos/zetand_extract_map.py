@@ -112,13 +112,53 @@ def main():
     ok  = np.abs(lon) <= 180
     P   = im[inside][ok]
 
+    # A PIXEL BELONGS TO THE FACET THAT CONTAINS IT, not to the nearest facet CENTRE. Those are
+    # different partitions: nearest-centre is a spherical Voronoi diagram, and HEALPix facets are
+    # not the Voronoi cells of their centres. They agree at the centres — every one of the 768
+    # maps back to its own index under `ang2pix_nest` — and disagree along the boundaries, worst
+    # where the facets are most distorted. Measured against the figure, nearest-centre cost
+    # rms 0.0136 and correlation 0.957 for |lon| > 150 deg against 0.0083 and 0.977 elsewhere.
+    #
+    # Containment is exact in 3-D and needs no HEALPix code: for a facet with corners v1..v4 in
+    # order, p is inside when it lies on the same side of all four great-circle edges. The seam
+    # needs no special case because nothing here is expressed in longitude.
     lonlat = np.loadtxt(lonlat_file)
     cl, sl = np.cos(np.radians(lonlat[:, 0])), np.sin(np.radians(lonlat[:, 0]))
     cb, sb = np.cos(np.radians(lonlat[:, 1])), np.sin(np.radians(lonlat[:, 1]))
-    tree = cKDTree(np.column_stack([cb*cl, cb*sl, sb]))
+    centres = np.column_stack([cb*cl, cb*sl, sb])
+    F = np.loadtxt(os.path.join(HERE, "zetAnd", "facets_3.txt"))
+    corners = np.zeros((len(lonlat), 4, 3))
+    for row in F:
+        i, k = int(row[0]) - 1, int(row[1])
+        if k <= 4:
+            clo_, slo_ = np.cos(np.radians(row[2])), np.sin(np.radians(row[2]))
+            cla_, sla_ = np.cos(np.radians(row[3])), np.sin(np.radians(row[3]))
+            corners[i, k-1] = (cla_*clo_, cla_*slo_, sla_)
     clo, slo = np.cos(np.radians(lon[ok])), np.sin(np.radians(lon[ok]))
     cla, sla = np.cos(np.radians(lat[ok])), np.sin(np.radians(lat[ok]))
-    _, owner = tree.query(np.column_stack([cla*clo, cla*slo, sla]))
+    Q = np.column_stack([cla*clo, cla*slo, sla])
+    tree = cKDTree(centres)
+    _, cand = tree.query(Q, k=9)                 # the containing facet is always among these
+    owner = cand[:, 0].copy()
+    found = np.zeros(len(Q), dtype=bool)
+    for c in range(cand.shape[1]):
+        todo = ~found
+        if not todo.any():
+            break
+        f = cand[todo, c]
+        V = corners[f]                           # (n, 4, 3)
+        ok_in = np.ones(todo.sum(), dtype=bool)
+        for e in range(4):
+            n_ = np.cross(V[:, e], V[:, (e+1) % 4])
+            side = (n_ * Q[todo]).sum(1)
+            # orientation is taken from the facet's own centre, so winding does not matter
+            ref = (n_ * centres[f]).sum(1)
+            ok_in &= (side*np.sign(ref) >= -1e-12)
+        idx = np.where(todo)[0][ok_in]
+        owner[idx] = f[ok_in]
+        found[idx] = True
+    print(f"pixels inside a facet: {found.sum()}/{len(Q)}; "
+          f"{(~found).sum()} fell back to nearest centre")
 
     d = ((P[:, None, :] - bar[None, :, :])**2).sum(2)
     j = d.argmin(1)
