@@ -296,11 +296,32 @@ end
 #   x̄w  via compute_adjoint_cvis!  + flux-normalization correction
 #   p̄roj via compute_adjoint_vertices! + shoelace flux correction
 """
-    interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data) -> chi2
+    interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data,
+                         weights = (1,1,1), V0 = 1) -> chi2
 
 Single-epoch interferometric χ² (V² + T3amp + T3phi) from LD/visibility-weighted
 per-tessel values `xw` and projected vertices. Real-valued Zygote primitive.
 `kx, ky, k2_inv_im` are the pre-scaled UV frequencies (see `precompute_k2_inv_im`).
+
+# `V0`, the visibility calibration scale
+
+A multiplicative factor on the COMPLEX visibility, so `V²` scales by `V0²`, `T3amp` by `V0³`
+and **`T3φ` not at all** — a real positive scale cannot rotate a phase. That is the only
+choice self-consistent across the three observables; scaling `V²` alone would contradict
+`T3amp`.
+
+It is not a property of the star. ROTIR's model visibility is exactly 1 at zero baseline by
+construction (`compute_polyflux_and_cvis!` divides by `dot(polyflux, xw)`), so `V0` exists to
+absorb what scales the MEASURED visibilities uniformly: calibrator-diameter error, coherence
+loss, incoherent over-resolved flux. Roettenbacher et al. fit one for ζ And and report
+1.02 ± 0.02; freeing one here returns 1.020–1.022 on the same data.
+
+The default is `1`, which is the behaviour every existing caller had, and it is differentiable:
+`∂χ²/∂V0 = Σₖ Re(adj_cvis[k] · Fₖ/flux)`, one extra reduction over the uv points.
+
+**It is only identifiable where the data constrain the visibility SHAPE independently** — short
+of the first null it trades against the angular diameter. Check `corr(V0, rpole)` before
+trusting a fitted value.
 """
 # WEIGHTS, as `(V², T3amp, T3φ)`. A zero SKIPS the term outright rather than multiplying it by
 # zero, in the primal and in the pullback alike — disabling an observable should cost nothing,
@@ -328,14 +349,18 @@ interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data) =
 function interferometric_chi2(xw::AbstractVector{T}, proj_west::AbstractMatrix{T},
                               proj_north::AbstractMatrix{T}, kx::Vector{T}, ky::Vector{T},
                               k2_inv_im::Vector{Complex{T}}, data,
-                              weights::Tuple{<:Real,<:Real,<:Real}) where {T}
+                              weights::Tuple{<:Real,<:Real,<:Real},
+                              V0::Real = one(T)) where {T}
     nuv = length(kx); npix = length(xw)
     F  = Vector{Complex{T}}(undef, nuv)
     pf = zeros(T, npix)   # zeros: compute_polyflux_and_cvis! skips xw==0 pixels, leaving
                           # them here at 0 (correct: their flux contribution pf·xw is 0)
     compute_polyflux_and_cvis!(F, pf, kx, ky, k2_inv_im, proj_west, proj_north, xw)
     flux = dot(pf, xw)
-    cvis = F ./ flux
+    # NARROWED to the mesh's type, not promoted to V0's. A Float64 scale on a Float32 model
+    # would widen `cvis` and everything after it; the rrule differentiates V0 separately, so
+    # nothing is lost by converting here.
+    cvis = F .* (T(V0) / flux)
     v2   = abs2.(cvis[data.indx_v2])
     t3   = cvis[data.indx_t3_1] .* cvis[data.indx_t3_2] .* cvis[data.indx_t3_3]
     t3a  = abs.(t3)
@@ -353,15 +378,17 @@ function ChainRulesCore.rrule(::typeof(interferometric_chi2),
                               xw::AbstractVector{T}, proj_west::AbstractMatrix{T},
                               proj_north::AbstractMatrix{T}, kx::Vector{T}, ky::Vector{T},
                               k2_inv_im::Vector{Complex{T}}, data,
-                              weights::Tuple{<:Real,<:Real,<:Real} = (1, 1, 1)) where {T}
+                              weights::Tuple{<:Real,<:Real,<:Real},
+                              V0::Real) where {T}
     nuv = length(kx); npix = length(xw)
     w1, w2, w3 = T(weights[1]), T(weights[2]), T(weights[3])
+    v0 = T(V0)
     F  = Vector{Complex{T}}(undef, nuv)
     pf = zeros(T, npix)   # zeros: compute_polyflux_and_cvis! skips xw==0 pixels, leaving
                           # them here at 0 (correct: their flux contribution pf·xw is 0)
     compute_polyflux_and_cvis!(F, pf, kx, ky, k2_inv_im, proj_west, proj_north, xw)
     flux = dot(pf, xw)
-    cvis = F ./ flux
+    cvis = F .* (v0 / flux)
     v2model = abs2.(cvis[data.indx_v2])
     t3model = cvis[data.indx_t3_1] .* cvis[data.indx_t3_2] .* cvis[data.indx_t3_3]
     t3amod  = abs.(t3model)
@@ -400,7 +427,24 @@ function ChainRulesCore.rrule(::typeof(interferometric_chi2),
             adj_cvis[k2] -= T(360/π)*im*factor*c1*c3
             adj_cvis[k3] -= T(360/π)*im*factor*c1*c2
         end
-        adj_F = adj_cvis ./ flux
+        # ∂χ²/∂V0, BEFORE `adj_cvis` is folded into `adj_F`. With `c = V0·F/flux` and
+        # `adj_cvis = ∂χ²/∂Re(c) − i·∂χ²/∂Im(c)` (OITOOLS' convention, transpose not adjoint),
+        #
+        #     ∂χ²/∂V0 = Σₖ [∂χ²/∂Re(cₖ)·Re(Fₖ/flux) + ∂χ²/∂Im(cₖ)·Im(Fₖ/flux)]
+        #             = Σₖ Re(adj_cvis[k] · Fₖ/flux)
+        #
+        # Written against F/flux rather than cvis/V0 so a V0 of 0 is not a division by zero.
+        # One pass over the uv points; nothing else in the pullback changes shape.
+        gV0 = zero(T)
+        @inbounds for k in 1:nuv
+            gV0 += real(adj_cvis[k] * F[k])
+        end
+        gV0 /= flux
+
+        # The chain through the scale: ∂c/∂F = V0/flux, where it used to be 1/flux. The
+        # `flux_adj` line below needs no change — `dot(xw, grad_xw)` then equals
+        # Σₖ Re(adj_cvis[k]·cₖ), which is what ∂χ²/∂flux wants with the scale included.
+        adj_F = adj_cvis .* (v0 / flux)
 
         grad_xw = Vector{T}(undef, npix)
         compute_adjoint_cvis!(grad_xw, adj_F, kx, ky, k2_inv_im, proj_west, proj_north, pf)
@@ -421,9 +465,23 @@ function ChainRulesCore.rrule(::typeof(interferometric_chi2),
         end
 
         return (NoTangent(), c̄ .* grad_xw, c̄ .* gpw, c̄ .* gpn,
-                NoTangent(), NoTangent(), NoTangent(), NoTangent(), NoTangent())
+                NoTangent(), NoTangent(), NoTangent(), NoTangent(), NoTangent(), c̄ * gV0)
     end
     return chi2, chi2_pullback
+end
+
+# The 8-argument call — no `V0` — still has to hand back exactly 9 tangents, one per argument.
+# Julia builds both methods from the default above, but a single pullback body cannot return
+# two different arities, so the shorter form delegates and drops the V0 tangent. Without this
+# every existing caller of the weights-only form gets a tuple-length error from Zygote.
+function ChainRulesCore.rrule(f::typeof(interferometric_chi2),
+                              xw::AbstractVector{T}, proj_west::AbstractMatrix{T},
+                              proj_north::AbstractMatrix{T}, kx::Vector{T}, ky::Vector{T},
+                              k2_inv_im::Vector{Complex{T}}, data,
+                              weights::Tuple{<:Real,<:Real,<:Real}) where {T}
+    chi2, pb = ChainRulesCore.rrule(f, xw, proj_west, proj_north, kx, ky, k2_inv_im,
+                                    data, weights, one(T))
+    return chi2, c̄ -> Base.front(pb(c̄))
 end
 
 # ===========================================================================

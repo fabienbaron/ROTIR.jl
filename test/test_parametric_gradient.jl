@@ -249,5 +249,89 @@ let L = parametric_layout(; tpole_free = true)
           0.0 : 1.0)
 end
 
+# ─── (P6) the V0 visibility calibration scale ────────────────────────────────
+# `interferometric_chi2` gained a multiplicative scale on the COMPLEX visibility. Three things
+# have to hold, and the middle one is the sharp test: a real positive scale cannot rotate a
+# phase, so a T3phi-only likelihood must be EXACTLY flat in V0 — not small, zero. A non-zero
+# value there means V0 has been wired into the phase path by mistake.
+println("\n[P6] V0 visibility calibration scale")
+let
+    pw, pn, nz = project_geometry(rpole, fev, inc, PA, tessels, 0.0, base)
+    xw = ROTIR.ld_weight(nz, 3, ld1, ld2, 0.0, 0.0) .* ROTIR.visibility_weight(nz, 50.0) .*
+         vonzeipel_map_and_derivs(rpole, fev, β, tpole, sinθ, cosθ)[1]
+    d  = data[1]
+    kx = Float64.(d.uv[1, :]) * (-π / (180 * 3600000))
+    ky = Float64.(d.uv[2, :]) * ( π / (180 * 3600000))
+    k2 = precompute_k2_inv_im(kx, ky)
+    f(V0, w) = interferometric_chi2(xw, pw, pn, kx, ky, k2, d, w, V0)
+
+    # the 8-argument form must still mean V0 = 1, or every existing caller changed meaning
+    check("8-arg call equals V0 = 1",
+          abs(interferometric_chi2(xw, pw, pn, kx, ky, k2, d, (1.0, 1.0, 1.0)) -
+              f(1.0, (1.0, 1.0, 1.0))) / max(abs(f(1.0, (1.0, 1.0, 1.0))), eps()))
+
+    # V^2 scales by V0^2 and T3amp by V0^3, which is what makes a scale on the COMPLEX
+    # visibility the only self-consistent choice. Checked through the chi2 of a zero-data
+    # block would be circular, so check the observables directly.
+    let V0 = 1.37
+        star = create_star(tessels, base, 0.0)
+        cv  = ROTIR.fused_cvis(vonzeipel_map_and_derivs(rpole, fev, β, tpole, sinθ, cosθ)[1],
+                               star, d)
+        a2, aa, ap = ROTIR.cvis_to_obs(cv, d)
+        b2, ba, bp = ROTIR.cvis_to_obs(V0 .* cv, d)
+        check("V0 scales V^2 by V0^2",   relerr(b2, (V0^2) .* a2))
+        check("V0 scales T3amp by V0^3", relerr(ba, (V0^3) .* aa))
+        check("V0 leaves T3phi alone",   relerr(bp, ap))
+    end
+
+    # the gradient, against finite differences, on each observable separately
+    for (nm, w) in (("V2 only", (1.0, 0.0, 0.0)), ("T3amp only", (0.0, 1.0, 0.0)),
+                    ("all three", (1.0, 1.0, 1.0)))
+        g_fd = FDM(V0 -> f(V0, w), 1.0)
+        ok = try
+            @eval using Zygote
+            g_ad = Zygote.gradient(V0 -> f(V0, w), 1.0)[1]
+            check("d(chi2)/dV0, $nm", abs(g_ad - g_fd) / max(abs(g_fd), 1.0); tol = 1e-5)
+            true
+        catch e
+            @warn "V0 gradient check skipped" exception = (e, catch_backtrace()); false
+        end
+        ok || break
+    end
+
+    # THE NULL-SPACE GATE. Closure phase is invariant under a real positive scale:
+    # angle(V0^3 * z) = angle(z) for V0 > 0, so a T3phi-only chi2 is CONSTANT in V0 and both
+    # derivatives are zero. Measured against the V2-only derivative rather than absolutely —
+    # the same form the tpole gate above uses — because the residual is floating-point noise
+    # on a sum of large terms, not a small number in its own right.
+    g_amp   = FDM(V0 -> f(V0, (1.0, 0.0, 0.0)), 1.0)
+    g_phase = FDM(V0 -> f(V0, (0.0, 0.0, 1.0)), 1.0)
+    check("T3phi-only d(chi2)/dV0 is 0 (null-space)", abs(g_phase) / (abs(g_amp) + eps()))
+    try
+        @eval using Zygote
+        ga = Zygote.gradient(V0 -> f(V0, (0.0, 0.0, 1.0)), 1.0)[1]
+        gb = Zygote.gradient(V0 -> f(V0, (1.0, 0.0, 0.0)), 1.0)[1]
+        check("T3phi-only AD d(chi2)/dV0 is 0",
+              abs(ga === nothing ? 0.0 : ga) / (abs(gb === nothing ? 1.0 : gb) + eps()))
+    catch
+        @warn "V0 null-space AD check skipped"
+    end
+
+    # and a round trip: scale the model by a known V0, and the chi2 against THAT is minimised
+    # there. Coarse by design — this is identifiability, not precision.
+    let V0true = 1.08
+        grid = 0.90:0.01:1.25
+        star = create_star(tessels, base, 0.0)
+        xmap = vonzeipel_map_and_derivs(rpole, fev, β, tpole, sinθ, cosθ)[1]
+        cv   = ROTIR.fused_cvis(xmap, star, d)
+        v2s, t3as, _ = ROTIR.cvis_to_obs(V0true .* cv, d)
+        synth = deepcopy(d); synth.v2 .= v2s; synth.t3amp .= t3as
+        chi(V0) = interferometric_chi2(xw, pw, pn, kx, ky, k2, synth, (1.0, 1.0, 0.0), V0)
+        best = grid[argmin([chi(v) for v in grid])]
+        # one grid step of tolerance: this asserts identifiability, not precision
+        check("a known V0 is recovered from synthetic data", abs(best - V0true); tol = 0.011)
+    end
+end
+
 # Printed LAST so it counts the [P5] section appended above; runtests.jl asserts nfail[].
 @printf("\n=== %d passed, %d failed ===\n", npass[], nfail[])

@@ -48,9 +48,11 @@ jobs:
           # `auto` so the nested-threading testsets have more than one thread to use. With a
           # single thread they pass trivially and assert nothing about concurrency.
           JULIA_NUM_THREADS: auto
-          # `test_plotting.jl` and `test_spot_euclidean.jl` use PythonPlot. Matplotlib picks an
-          # interactive backend when it thinks it can, and a headless runner is exactly where
-          # that fails late and confusingly. Agg writes files and needs no display.
+          # Belt and braces: `test/runtests.jl:13` already does `get!(ENV, "MPLBACKEND", "Agg")`
+          # for the same reason (`test_plotting.jl` and `test_spot_euclidean.jl` use
+          # PythonPlot, and matplotlib picks an interactive backend when it thinks it can).
+          # Setting it here too means a runner that invokes a single test file directly, or a
+          # future entry point that does not go through runtests.jl, is covered as well.
           MPLBACKEND: Agg
 
 # WHY THIS RUNS `Pkg.test()` AND NOT `julia test/runtests.jl`
