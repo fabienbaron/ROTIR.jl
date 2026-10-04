@@ -3,7 +3,8 @@
 #
 #     julia --project=. demos/zetand_published_map.jl
 #
-# `zetand_extract_map.py` inverts the figure's colormap and resamples onto HEALPix nside_exp 3.
+# `zetand_extract_map.py` inverts the figure's own colourbar (a `gist_heat` ramp) and resamples
+# onto HEALPix nside_exp 3.
 # That extraction is checkable against the image itself (colour distances, the plot ellipse, the
 # histogram) but those checks cannot tell whether the result is the star. This one can: a map
 # that is really ζ And's surface must FIT ζ AND'S VISIBILITIES, and a mis-parity of it must not.

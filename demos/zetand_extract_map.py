@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Read the ζ And surface map off the figure in `demos/zetAnd/zetAnd2019A.pdf`.
 
-The PDF holds a single 836x514 raster: a Mollweide projection in matplotlib's `afmhot`
-colormap with a colourbar labelled 0.8025 to 0.9977. Nothing vector, so the values have to come
-back out through the colours.
+The PDF holds a single 836x514 raster: a Mollweide projection with a colourbar labelled 0.8025
+to 0.9977. Nothing vector, so the values have to come back out through the colours. The ramp is
+`gist_heat` — matplotlib's version of IDL's Red Temperature, which is what the `MIRCX_IDL`
+pipeline in the data filenames suggests — matching to 0.0125 rms against 0.233 for `afmhot`.
+NONE OF THE CODE BELOW DEPENDS ON THAT: the lookup is built from the figure's own colourbar, so
+identifying the map by name is a documentation convenience, not an assumption.
 
     python3 demos/zetand_extract_map.py            # writes demos/zetAnd/zetAnd2019A_map.txt
 
@@ -98,11 +101,11 @@ def main():
         d = ((patch[:, None, :] - bar[None, :, :])**2).sum(2)
         j = d.argmin(1)
         good = np.sqrt(d[np.arange(len(patch)), j]) < 25
-        # THE COLOUR FILTER DOES NOT CATCH THE GRATICULE. `afmhot` starts at pure black, so a
+        # THE COLOUR FILTER DOES NOT CATCH THE GRATICULE. The ramp starts at pure black, so a
         # black gridline pixel sits exactly ON the ramp and inverts to the colourbar floor.
         # Measured: 2.1 % of accepted pixels per tessel are grey on average and 57 % for the
         # worst, which is a tessel lying along the solid equator — its median came out at the
-        # floor, 0.8025, where purging gives 0.887. Grey is the signature, because afmhot is
+        # floor, 0.8025, where purging gives 0.887. Grey is the signature, because the ramp is
         # grey only at its two endpoints.
         grey = (patch.max(1) - patch.min(1) < 12) & (patch.sum(1) < 690)
         keep = good & ~grey
