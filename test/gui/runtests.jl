@@ -1512,10 +1512,22 @@ end
     # build machine, and the link aborts (app/Project.toml records the LLVM error) — so every
     # gradient fit and every sampler run there would otherwise retry the load and print the
     # same sentence again. The flag makes it once per session, and `_fit_kernel` then answers
-    # `nothing` so a fit does not even ask.
+    # without asking again.
+    #
+    # `:scalar`, NOT `nothing`. This asserted `nothing` until 2026-10-04, and `nothing` means
+    # "no scope at all", under which the worker runs whatever `POLYFT_BACKEND` happens to be —
+    # normally `:t3`. The console meanwhile tells the user the fit runs the reference kernel.
+    # There was no live discrepancy, because the three `KERNEL_TURBO_METHODS` evaluate
+    # `interferometric_chi2` / `shape_chi2_fg!` and neither has a `:t3` branch, but that is a
+    # property of a tuple someone may edit rather than of `_fit_kernel`. Answering `:scalar`
+    # makes the message true by construction.
     try
         G.TURBO_LOAD_FAILED[] = true
-        @test all(G._fit_kernel(sh, m) === nothing for m in (:gradient, :hmc, :pigeons))
+        @test all(G._fit_kernel(sh, m) === :scalar for m in (:gradient, :hmc, :pigeons))
+        # A method that is NOT a turbo method still gets `nothing`, i.e. the process default:
+        # `parametric_chi2` does have a `:t3` branch and forcing the reference on it would be
+        # a large and silent slowdown.
+        @test G._fit_kernel(sh, :neldermead) === nothing
         # `_ensure_turbo!` itself cannot be exercised here — by this point LoopVectorization IS
         # loaded, and its first line answers `""` for that, correctly. The flag is what a
         # bundle reaches, and `_fit_kernel` is where it has to be honoured.
@@ -2519,6 +2531,43 @@ end
     # happens if anything above left a job undrained, and is how this testset first failed.
     @test G.shell_fit_orbit("neldermead", 30) == ""
     drain!()
+end
+
+@testset "a fit objective that always fails is refused, not reported as a result" begin
+    # The failure this guards against was measured: before `:t3` was re-entrant, 40 000 of
+    # 40 000 likelihood calls threw, the objective's bare `catch` turned each into the 1e30
+    # sentinel, and the panel reported `log(Z) = -5e29`, `N_eff = 1` and the flat prior as the
+    # posterior. Nothing in the result said so.
+    h = G.FitHealth()
+    @test G._fit_health_report!(h, :neldermead) == ""      # nothing ran: nothing to say
+
+    # some refused, some fine — a note on the status line, and NO throw
+    for _ in 1:3; G._eval!(h); end
+    @test G._refused!(h) == 1e30
+    note = G._fit_health_report!(h, :neldermead)
+    @test occursin("1 of 3", note)
+
+    # every evaluation refused — this must THROW, because the "best" parameters would be the
+    # starting point and the evidence a finite number with no meaning behind it
+    h2 = G.FitHealth()
+    for _ in 1:4; G._eval!(h2); G._refused!(h2); end
+    @test_throws ErrorException G._fit_health_report!(h2, :nautilus)
+
+    # the first exception is kept and named, so the message says WHY rather than just that
+    h3 = G.FitHealth()
+    G._eval!(h3); G._refused!(h3, ErrorException("scratch collision"))
+    msg = try
+        G._fit_health_report!(h3, :bobyqa); ""
+    catch e
+        sprint(showerror, e)
+    end
+    @test occursin("scratch collision", msg)
+    @test occursin("every one of the 1", msg)
+
+    # a `stop[]` return is deliberately NOT counted, so pressing Stop cannot masquerade as
+    # "every evaluation failed" — that is why the objectives return 1e30 directly there.
+    h4 = G.FitHealth()
+    @test G._fit_health_report!(h4, :neldermead) == ""
 end
 
 end

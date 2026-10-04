@@ -2844,6 +2844,14 @@ const KERNEL_TURBO_METHODS = (:gradient, :hmc, :pigeons)
 Which forward kernel this engine should run under, or `nothing` to leave the process default
 alone. See [`KERNEL_TURBO_METHODS`](@ref).
 
+`:scalar` — the reference — is returned rather than `nothing` wherever the console tells the
+user the fit runs the reference kernel, so that the claim is true BY CONSTRUCTION. `nothing`
+means "no scope at all", under which the worker runs whatever `POLYFT_BACKEND` happens to be,
+normally `:t3`. There is no live discrepancy today, because the three
+[`KERNEL_TURBO_METHODS`](@ref) evaluate `interferometric_chi2` / `shape_chi2_fg!`, neither of
+which has a `:t3` branch — but that is a property of a tuple someone may edit, not of this
+function, and adding `:neldermead` to it would silently make the message false.
+
 A FORCED selection wins. Someone who picked `:scalar` from the panel is cross-checking a
 result that looked wrong, and silently running something else under their fit is exactly the
 thing that would make that check worthless.
@@ -2852,10 +2860,10 @@ function _fit_kernel(sh::ShellState, meth::Symbol)
     sh.kernel_auto[] || return nothing
     meth in KERNEL_TURBO_METHODS || return nothing
     # AND NOT IF IT IS KNOWN NOT TO WORK HERE — a bundle, where LoopVectorization is absent by
-    # necessity (see `TURBO_LOAD_FAILED`). Answering `nothing` rather than letting the load
-    # fail again keeps the console clean: the fit runs the reference kernel, which is what it
-    # would have done anyway.
-    TURBO_LOAD_FAILED[] && return nothing
+    # necessity (see `TURBO_LOAD_FAILED`). Answering without letting the load fail again keeps
+    # the console clean. `:scalar`, not `nothing`: the fit then genuinely runs the reference
+    # kernel rather than the process default, which is what every comment here claims.
+    TURBO_LOAD_FAILED[] && return :scalar
     return :turbo
 end
 
@@ -3301,6 +3309,95 @@ function _fit_put!(m, (comp, n), v)
 end
 
 """
+    FitHealth
+
+Evaluation counters for a GUI fit objective, so a run in which *every* evaluation failed is
+refused rather than reported as a successful fit.
+
+This exists because of a measured failure, not a hypothetical one. Before `:t3` became
+re-entrant, 40 000 of 40 000 likelihood calls threw; each objective's bare `catch` turned them
+into the 1e30 sentinel; and the panel reported `log(Z) = -5e29` (finite), `N_eff = 1` and the
+FLAT PRIOR as the posterior, after exhausting its budget because `f_live` never moves when no
+live point has a finite likelihood. Nothing in the result said anything had gone wrong. The
+cause is fixed, but the swallowing is not, and it will hide the next one just as well.
+
+Written from several threads — `_fit_nested` evaluates the likelihood concurrently — so the
+counters are atomics and the first exception is taken under a lock.
+
+**No I/O happens here.** The objective runs on worker tasks; the report is made once,
+afterwards, by [`_fit_health_report!`](@ref).
+
+A `stop[]` return is deliberately NOT counted. Pressing Stop makes the objective return the
+sentinel for the rest of the run, and counting those would turn "the user stopped it" into
+"every evaluation failed".
+"""
+mutable struct FitHealth
+    nevals    ::Threads.Atomic{Int}
+    nsentinel ::Threads.Atomic{Int}
+    nthrown   ::Threads.Atomic{Int}
+    first_err ::Any
+    lk        ::ReentrantLock
+end
+FitHealth() = FitHealth(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+                        Threads.Atomic{Int}(0), nothing, ReentrantLock())
+
+@inline _eval!(h::FitHealth) = (Threads.atomic_add!(h.nevals, 1); nothing)
+
+"A refused trial point: counted, and 1e30 returned so the search keeps going."
+@inline function _refused!(h::FitHealth)
+    Threads.atomic_add!(h.nsentinel, 1)
+    return 1e30
+end
+
+"A trial point whose evaluation THREW. The first exception is kept for the report."
+function _refused!(h::FitHealth, err)
+    Threads.atomic_add!(h.nsentinel, 1)
+    Threads.atomic_add!(h.nthrown, 1)
+    if h.first_err === nothing
+        lock(h.lk) do
+            h.first_err === nothing && (h.first_err = err)
+        end
+    end
+    return 1e30
+end
+
+"""
+    _fit_health_report!(h, meth) -> String
+
+Report what a fit objective swallowed. Returns a note for the status line, or `""`.
+
+Two behaviours, both of which the previous bare `catch` lacked:
+
+  * if ANY evaluation threw, the first exception is printed. The worker's stdout is captured
+    to the job's file and surfaced by `job_output`, so a `println` here is the channel that
+    reaches the user without touching `sh.console` from a worker thread.
+  * if EVERY evaluation failed, this THROWS. `job_finish!` catches it into `err` and the panel
+    reports a failed job, instead of a fit whose "result" is the starting point and whose
+    evidence is a finite number with no meaning.
+
+A no-op for the gradient, HMC, Pigeons and shape engines, which never call `obj` — `nevals`
+stays 0 and there is nothing to report.
+"""
+function _fit_health_report!(h::FitHealth, meth)
+    n, ns, nt = h.nevals[], h.nsentinel[], h.nthrown[]
+    n == 0 && return ""
+    firstmsg() = h.first_err === nothing ? "" :
+                 sprint(showerror, h.first_err; context = :limit => true)
+    if nt > 0
+        println("fit warning: $nt of $n evaluations of the $meth objective threw; " *
+                "first was: ", firstmsg())
+    end
+    if ns == n
+        error("every one of the $n evaluations of the $meth objective failed, so the " *
+              "reported result would be the starting point and the evidence meaningless" *
+              (nt > 0 ? "; first exception: " * firstmsg() :
+               " — all were refused by `validate_star_params`, so check the parameter bounds"))
+    end
+    ns == 0 && return ""
+    return Printf.@sprintf(" (%d of %d evaluations refused)", ns, n)
+end
+
+"""
     _binary_objective(snap, tess, data, mjd, tepochs) -> (θ -> χ²)
 
 The criterion a binary fit minimises: the χ² of the PAIR, over whatever the parameter vector
@@ -3311,15 +3408,17 @@ makes this feasible at all. `fit_orbit` refuses tessellated components partly be
 "orders of magnitude slower per likelihood", and that was true while every evaluation built an
 `nuv × npix` matrix per component through `setup_oi!`. It is 13 ms now.
 """
-function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop)
+function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop, health)
     return function (θ)
-        stop[] && return 1e30
+        stop[] && return 1e30          # NOT counted: see `FitHealth`
+        _eval!(health)
         for (k, nm) in enumerate(names); _fit_put!(snap, nm, θ[k]); end
         # A shared orbital element is written into the OWNER only; the companion's copy is
         # derived and has to follow before its shape is built (see `_sync_shared_orbit!`).
         _sync_shared_orbit!(snap)
         p1 = star_params(snap); p2 = star_params(snap.companion)
-        (isempty(validate_star_params(p1)) && isempty(validate_star_params(p2))) || return 1e30
+        (isempty(validate_star_params(p1)) && isempty(validate_star_params(p2))) ||
+            return _refused!(health)
         try
             c = snap.companion
             offs = if c.place === :offset
@@ -3337,9 +3436,9 @@ function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop)
                 ph = binary_phase_shift(data[i].uv, offs[i][1], offs[i][2])
                 tot += binary_chi2_f(x1, s1[i], x2, s2[i], data[i], ph)
             end
-            return isfinite(tot) ? tot : 1e30
-        catch
-            return 1e30
+            return isfinite(tot) ? tot : _refused!(health)
+        catch err
+            return _refused!(health, err)
         end
     end
 end
@@ -3552,7 +3651,9 @@ function shell_fit(method, maxeval)
             # Not fatal. The reference kernel computes the same thing, only slower, so a
             # failed load costs time rather than the fit.
             console!(sh, err * " — this fit runs the reference kernel instead")
-            kernel = nothing
+            # `:scalar`, not `nothing`. `nothing` means no scope, under which the worker runs
+            # the process default — normally `:t3` — and the line just printed would be false.
+            kernel = :scalar
         end
     end
     # EVERY PATH RUNS AT `prec` NOW. Each runner builds its mesh at the precision the box
@@ -3565,19 +3666,21 @@ function shell_fit(method, maxeval)
                  "HEALPix level $(nexp) ($(12 * (2^nexp)^2) tessels, $(prec))"; kind = :cmd)
     body = function (stop)
         tess = tessellation_healpix(nexp; T = prec)
+        health = FitHealth()
         obj = isbin ?
-            _binary_objective(snap, bnames, tess, data, mjd, tepochs, orbit_snap, stop) :
+            _binary_objective(snap, bnames, tess, data, mjd, tepochs, orbit_snap, stop, health) :
             function (θ)
-            stop[] && return 1e30
+            stop[] && return 1e30          # NOT counted: see `FitHealth`
+            _eval!(health)
             for (k, n) in enumerate(names); snap.params[n] = θ[k]; end
             p = star_params(snap)
-            isempty(validate_star_params(p)) || return 1e30
+            isempty(validate_star_params(p)) || return _refused!(health)
             c = try
                 parametric_chi2(p, tess, data, tepochs)
-            catch
-                return 1e30
+            catch err
+                return _refused!(health, err)
             end
-            return isfinite(c) ? c : 1e30
+            return isfinite(c) ? c : _refused!(health)
         end
         best, chi2, extra, post, nevals = if meth === :hmc
             _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
@@ -3597,6 +3700,10 @@ function shell_fit(method, maxeval)
         else
             _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
         end
+        # Say what the objective swallowed, and refuse a run in which everything failed.
+        # Placed here rather than inside the objective: this is the worker, whose stdout the
+        # job captures, and `sh.console` must not be written from a worker thread.
+        healthnote = _fit_health_report!(health, meth)
         if isbin
             for (k, nm) in enumerate(bnames); _fit_put!(snap, nm, best[k]); end
         else
@@ -3623,7 +3730,8 @@ function shell_fit(method, maxeval)
                 names = labels, best = best, errs = extra, post = post, nevals = nevals,
                 method = meth, model = snap.name, surface_type = snap.surface_type,
                 chi2 = chi2, ndata = nd,
-                status = Printf.@sprintf("fit done: χ²ᵣ = %.4f over %d points", chi2 / nd, nd))
+                status = Printf.@sprintf("fit done: χ²ᵣ = %.4f over %d points", chi2 / nd, nd) *
+                         healthnote)
     end
     # The scope wraps the WHOLE worker, so every task the engine starts inside it — the
     # `Threads.@threads` loops in the adjoint kernels included — inherits the choice, and the

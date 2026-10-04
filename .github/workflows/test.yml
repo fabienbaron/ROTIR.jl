@@ -1,0 +1,71 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # So the suite can be run against a feature branch before it is opened as a PR, which is
+  # when it is most useful. `push: [main]` alone only ever catches a regression after merge.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }} — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # The suite is ~10 min on 16 threads locally; a 2-core runner is several times that, and
+    # the Python environment CondaPkg resolves on first `using PythonCall` is a cold-cache
+    # cost on top. Generous rather than tight: a timeout kill looks like a test failure.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # Must match `julia = "1.12"` in Project.toml, for the same two reasons docs.yml
+        # gives: `[sources]` needs Pkg >= 1.11 and is SILENTLY ignored below it, and OITOOLS
+        # itself declares `julia = "1.12"`.
+        version: ['1.12']
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      - name: Add the registries OITOOLS resolves from
+        # `[sources]` locates OITOOLS and Nautilus themselves, but their own dependencies come
+        # from EmmtRegistry, which is not a default. Same step docs.yml runs.
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.Registry.add("General")
+            Pkg.Registry.add(RegistrySpec(url="https://github.com/emmt/EmmtRegistry"))'
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
+        env:
+          # `auto` so the nested-threading testsets have more than one thread to use. With a
+          # single thread they pass trivially and assert nothing about concurrency.
+          JULIA_NUM_THREADS: auto
+          # `test_plotting.jl` and `test_spot_euclidean.jl` use PythonPlot. Matplotlib picks an
+          # interactive backend when it thinks it can, and a headless runner is exactly where
+          # that fails late and confusingly. Agg writes files and needs no display.
+          MPLBACKEND: Agg
+
+# WHY THIS RUNS `Pkg.test()` AND NOT `julia test/runtests.jl`
+#
+# `julia-actions/julia-runtest` invokes `Pkg.test()`, which resolves the `[targets] test`
+# environment — FiniteDifferences, Zygote, LoopVectorization, FINUFFT, Nautilus, PythonPlot.
+# Running `test/runtests.jl` directly against `--project=.` leaves those unavailable, and the
+# suite SILENTLY SKIPS the sections that need them rather than failing: the whole AD and
+# gradient-validation body disappears and the run still reports success. The two are not
+# interchangeable and the difference does not announce itself.
+#
+# WHAT IS NOT HERE
+#
+# The GUI suite (`test/gui/runtests.jl`) and the sampler suite beside it. Both need GLMakie,
+# QML and QMLMakie, which are WEAK dependencies — not loadable from the package environment at
+# all — so they run under `--project=bin` and want a GL context. Adding them means a second job
+# with xvfb and a different environment; worth doing, but it is a separate piece of work and
+# bundling it here would have left the main suite unrun for longer.

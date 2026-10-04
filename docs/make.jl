@@ -7,7 +7,18 @@ makedocs(;
     modules=[ROTIR],
     sitename = "ROTIR",
     repo = "https://github.com/fabienbaron/ROTIR.jl/blob/{commit}{path}#{line}",
-    checkdocs = :none,
+    # :exports, but REPORTING rather than blocking. `:none` hid the backlog entirely, which is
+    # why adding an `@ref` to an undocumented export broke the build three times in one session:
+    # the first thing that referenced it was also the first thing that checked it.
+    #
+    # MEASURED 2026-10-04: 394 exported bindings, 65 of them in a `@docs` block. 140 have NO
+    # docstring at all (`provider_intensity`, `readoifits`, `create_star`, `gui`, the whole
+    # `plot2d*`/`plot3d*` family) and 189 have one the manual never includes. A hard
+    # `checkdocs = :exports` therefore fails with ~329 errors today, so `warnonly` keeps the
+    # build green while making the list visible on every run. Remove `:missing_docs` from
+    # `warnonly` once that list is short enough to hold the line.
+    checkdocs = :exports,
+    warnonly = [:missing_docs],
     doctest = false,
     format = Documenter.HTML(;
           prettyurls = CI,

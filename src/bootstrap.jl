@@ -227,6 +227,13 @@ extra scatter between replicates. It does assume the blocks are numerous and exc
   unresampled data)
 - `parallel` — `:outer` (default) runs replicates on all threads; `:inner` runs them one at
   a time and leaves the threads to ROTIR's own kernels
+
+  `:outer` REQUIRES a re-entrant `fitfun`. Replicates run under `Threads.@spawn` and OITOOLS'
+  `run_chunk` swallows whatever they throw, so a `fitfun` that is not safe to call concurrently
+  does not fail loudly — it loses replicates, and you get `"fewer than 2 usable replicates"` or,
+  worse, a σ computed from whichever handful happened not to collide. Every in-tree `fitfun` is
+  re-entrant since the `:t3` scratch pool landed; one you write yourself may not be. Use
+  `:inner` if in doubt.
 - `sigma_clipping`, `chi2r_max`, `seed`, `verb` — passed to OITOOLS' `bootstrap_driver`
 """
 function bootstrap_parametric(fitfun, data_epochs::AbstractVector;
