@@ -26,6 +26,12 @@
 # geometry held completely fixed, 0.150. So (b) is ruled out: the disagreement is not bought by
 # ROTIR's extra shape freedom.
 #
+# It is, however, bought by model INcompleteness more generally, which `zetand_alpha_audit.jl`
+# follows the rest of the way: adopting their geometry, then their map as the surface, then
+# their fitted V0, walks alpha 0.139 -> 0.154 -> 0.17 -> 0.18 -> 0.19, against 0.22-0.26 from a
+# Kurucz ATLAS9 atmosphere for a K giant in H band. Their fixed 0.269 sits where an atmosphere
+# puts it; a free alpha from a surface model this misfit is the number to distrust.
+#
 # And the geometry agrees to a degree worth stating: fitting THEIR family to the data returns
 # rx = 1.3271 and r_minor = 1.2489 mas against the 1.3265 and 1.2490 read off their figure —
 # 0.05 % and 0.01 %. Two independent analyses, one from the data and one from a rasterised PDF

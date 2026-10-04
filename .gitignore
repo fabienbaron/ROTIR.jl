@@ -64,3 +64,8 @@ build/
 /demos/zetAnd/fig10_panels_*.bin
 /demos/zetAnd/fig10_panels_*.npy
 /demos/zetAnd/fig10_model_*.bin
+
+# Third-party Kurucz ATLAS9 intensity packs (67 MB). Not bundled; see
+# demos/spica_kurucz_grid.jl and demos/zetand_alpha_audit.jl for the download.
+/demos/data/*.pck19
+/demos/data/*.pck
