@@ -5,22 +5,29 @@
 #     julia --project=. -t 16 demos/zetand_surfing_conventions.jl
 #
 # Every choice below is either stated in arXiv:2603.18144 or MEASURED from its Figure 10 by
-# `demos/zetand_extract_fig10.py`. Where it was measured, the measurement is given, because
-# these are the assumptions a comparison stands or falls on.
+# `demos/zetand_extract_fig10.py` and, for the geometry and the orientation, by the pair
+# `demos/zetand_fig10_panels.py` + `demos/zetand_fig10_match.jl`. Where it was measured, the
+# measurement is given, because these are the assumptions a comparison stands or falls on.
 #
 # 1. TEMPERATURE -> INTENSITY IS LINEAR, I ∝ T.
 #    Not stated in the paper; measured from Figure 10, which contains both the temperature map
-#    (top) and the H-band intensity images it produces (bottom). De-limb-darkening the intensity
-#    panels gives a deepest contrast of 0.881 (1st percentile; min 0.847 over the eight phases),
-#    while the temperature map's coldest point is 3742 K against a mean of 4372 K, a ratio of
-#    0.856. I ∝ T predicts 0.856. A blackbody at 1.605 um predicts 0.679. The panels say linear.
+#    (top) and the H-band intensity images it produces (bottom). With the projection pinned
+#    (`zetand_fig10_match.jl`), every published pixel can be assigned to the facet it shows and
+#    the panel value regressed on the map, facet by facet across all eight phases:
+#
+#        I = T  (linear)           r = 0.9909   rms = 13.0 K
+#        I = Planck(T, 1.605 um)   r = 0.9152   rms = 39.1 K
+#        I = T^4                   r = 0.7795   rms = 60.7 K
 #
 #    This matters: at 1.605 um and 4372 K, hc/(lambda k T) = 2.05, so H band is NOT the
 #    Rayleigh-Jeans limit for a K giant and dlnI/dlnT = 2.36, not 1. See `zetand_proper.jl`.
 #
 # 2. LIMB DARKENING alpha = 0.269, FIXED, not fitted — "after R. M. Roettenbacher et al. (2016)",
 #    adopted to avoid "confusion between limb darkening and spots on the limb". Figure 10's own
-#    intensity panels give alpha = 0.248 from their centre-to-limb profile, consistent with it.
+#    panels are drawn with alpha = 0.285 best-fitting, and their 0.269 is indistinguishable from
+#    it (r 0.99103 vs 0.99091) while 0.145 is excluded (0.9555). So the figure is internally
+#    consistent with Table 6 — and the data still want ~0.15 in every shape family, including
+#    theirs. See `zetand_fig10_family.jl`: that disagreement is real, not a convention error.
 #
 # 3. NO SPATIAL PRIOR. The imaging is MCMC only: each map is "an average of 50 instances
 #    (24 walkers over 500 iterations)". Positivity, and smoothness that is emergent from
@@ -39,21 +46,36 @@
 # 7. FIGURE, their Table 6, 2026 column: theta_LD = 2.495 +- 0.014 mas, major-to-minor axis
 #    ratio 1.063 +- 0.013, inclination 69.3 +- 6.9 deg, pole PA 124.0 +- 2.9 deg.
 
-# 8. THE FIGURE IS AXISYMMETRIC (OBLATE), on the evidence of the ratio itself. Fitting the
-#    OBLATE family (radius_x = radius_y) to these data with the size free returns a ratio of
-#    1.0625 — their published 1.063 +- 0.013, to three digits. Fitting the TRIAXIAL family
-#    instead gives equatorial/polar 1.0546 and chi2/n 2.064 against the oblate 5.812: a
-#    Dchi2 of 53292 for ONE extra parameter over 14218 data. So the data reject an axisymmetric
-#    figure outright, and they should — an oblate star presents the same outline at every
-#    rotation phase and cannot produce an ellipsoidal light curve, which ζ And has.
+# 8. THE FIGURE IS PROLATE, AND THIS IS MEASURED FROM THE FIGURE, NOT INFERRED.
+#    The silhouettes of Figure 10's eight panels are PHASE-DEPENDENT — semi-major axis 251.8,
+#    245.4, 238.8, 245.2 px at phi = 0.000, 0.125, 0.250, 0.375 with the semi-minor fixed at
+#    236.9. A rotationally oblate spheroid projects to the same ellipse at every phase, so the
+#    figure is not one. Fitting the orthographic shadow of an ellipsoid to all eight second-
+#    moment matrices (`zetand_fig10_panels.py`) reproduces them to 0.1 px out of 240 and gives
 #
-# 9. THE FIGURE DOES NOT TRANSFER DIRECTLY, and this script does not pretend it does.
-#    Their theta_LD = 2.495 +- 0.014 mas is a LIMB-DARKENED EQUIVALENT DISC diameter, divided
-#    by a 1.0054 wavelength correction; ours is 2*cbrt(rx*ry*rz) = 2.5415 mas for the fitted
-#    triaxial figure. The 1.9 % difference is not cosmetic at these baselines — see the table
-#    this script prints. Nor is "major-to-minor axis ratio 1.063" unambiguous: read as an
-#    oblate figure (rx = ry) it is the shape family that CANNOT represent a tidally distorted
-#    star, and it fits far worse than read as prolate.
+#        rx : ry : rz = 1.0629 : 1.0008 : 1,   inclination 69.44 deg
+#
+#    i.e. a tidally elongated prolate spheroid with NO rotational flattening — which is what
+#    SURFING's single "major-to-minor axis ratio" can express, and what the paper's own text
+#    describes when it says the light curve is "dominated by the star's ellipsoidal shape".
+#    zeta And is a synchronised RS CVn binary, so a tidal figure is expected.
+#
+#    An earlier version of this file read their ratio as OBLATE. That was wrong, and the body
+#    of this script still prints both readings so the difference stays visible.
+#
+# 9. THEIR theta_LD IS THE MINOR AXIS, and it transfers exactly.
+#    From Figure 10's own x ticks (7 of them, 0.5 mas apart, 94.917 px) the drawn semi-axes are
+#    2*rx = 2.6529, 2*ry = 2.4979, 2*rz = 2.4959 mas. Their Table 6 theta_LD = 2.495 +- 0.014
+#    is the MINOR axis to 0.04 %, and the major axis is 1.063 times larger. Fitting their own
+#    prolate family to these data returns r_minor = 1.2489 mas against the 1.2479 read off the
+#    figure — 0.08 %. Two independent routes to the same ellipsoid.
+#
+# 10. ORIENTATION AND PHASE, both needed before any overlay.
+#    Figure 10's panels are drawn with East LEFT and North DOWN: the y axis runs -1.5 at the top
+#    to +1.5 at the bottom, so the vertical axis is inverted from the usual convention and a
+#    naive overlay mirrors. Their phase also runs opposite to ROTIR's, and the sub-observer
+#    longitude of the published map is 90 deg - 360 deg * phi. The map itself needs no parity
+#    surgery: it is used exactly as the Mollweide plots it.
 
 using ROTIR, Printf, DelimitedFiles, Statistics
 
