@@ -165,6 +165,15 @@ Pane {
     // night is the action, and a slider makes that a drag to a target you have to aim at —
     // with six epochs, four pixels wide each. The count beside them says where you are, which
     // is the only thing the slider was contributing.
+    //
+    // DELIBERATELY LIVE DURING A FIT, unlike the parameter form in ModelTab. The reason that
+    // form is disabled is that `job_succeeded!` writes the fitted values back into the live
+    // model and would discard an edit made in the meantime; stepping the epoch writes nothing
+    // a fit will overwrite, so there is nothing to lose. It used to be unsafe for a different
+    // reason — `shell_select_epoch` + redraw runs `observables` on the GUI thread, which once
+    // raced the worker inside `:t3`'s shared scratch — and that is fixed at the source by the
+    // plan pool, not by taking the control away. Disabling it would cost the ability to look
+    // at another night during a ten-minute sampler run and buy nothing.
     RowLayout {
         Layout.fillWidth: true
         spacing: dp(4)

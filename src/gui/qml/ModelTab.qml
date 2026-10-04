@@ -398,7 +398,13 @@ Pane {
                                 text: pvalue
                                 font.pointSize: root.fontPt
                                 selectByMouse: true
-                                enabled: pstate !== "tied" && !pinert
+                                // AND NOT WHILE A FIT IS RUNNING. `shell_fit_start` takes a
+                                // COPY of the model (`copy(m.params)`), so an edit here cannot
+                                // corrupt the running fit — but `job_succeeded!` writes the
+                                // result back into the live model when it finishes, silently
+                                // discarding whatever was typed in the meantime. That is the
+                                // confusing part, and it is what this guard is for.
+                                enabled: pstate !== "tied" && !pinert && !root.jobRunning
                                 // Show the START of the value, not the end. A TextField keeps
                                 // its cursor at the end of newly assigned text, so anything
                                 // wider than the box scrolled and displayed only the last
@@ -418,6 +424,7 @@ Pane {
                             ComboBox {
                                 model: pchoices.length > 0 ? pchoices.split("|") : []
                                 font.pointSize: root.fontPt
+                                enabled: !root.jobRunning
                                 currentIndex: {
                                     var opts = pchoices.split("|")
                                     for (var i = 0; i < opts.length; ++i)
@@ -447,8 +454,9 @@ Pane {
                         ComboBox {
                             visible: pkind !== "choice"
                             // A coefficient the law does not read cannot be freed: it would be
-                            // a direction the χ² is flat along. Julia refuses it too.
-                            enabled: !pinert
+                            // a direction the χ² is flat along. Julia refuses it too. And not
+                            // mid-fit: the free set is what the running fit is moving.
+                            enabled: !pinert && !root.jobRunning
                             Layout.preferredWidth: visible ? dp(74) : 0
                             model: ["fixed", "free", "tied"]
                             font.pointSize: root.fontPt - 1
@@ -468,6 +476,7 @@ Pane {
                         TextField {
                             Layout.fillWidth: true
                             visible: pstate === "tied"
+                            enabled: !root.jobRunning
                             text: ptie
                             placeholderText: "expression, e.g. P or 180 - i"
                             font.pointSize: root.fontPt - 1
@@ -480,6 +489,7 @@ Pane {
                         TextField {
                             id: loField
                             visible: pstate === "free"
+                            enabled: !root.jobRunning
                             Layout.preferredWidth: dp(58)
                             text: plo
                             font.pointSize: root.fontPt - 2
@@ -492,6 +502,7 @@ Pane {
                         TextField {
                             id: hiField
                             visible: pstate === "free"
+                            enabled: !root.jobRunning
                             Layout.preferredWidth: dp(58)
                             text: phi
                             font.pointSize: root.fontPt - 2
