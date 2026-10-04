@@ -852,8 +852,50 @@ function plot_mollweide(tmap, star; ntheta = nothing, nphi = nothing, kwargs...)
   return
 end
 
-function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0, colormap="gist_heat", figtitle="Mollweide", mask_unobserved=true, bad_color="lightgray", lon_color="white", lat_color="black")
+"""
+    mollplot_temperature_healpix(tmap; kwargs...)
+
+Mollweide plot of a HEALPix map, through PythonPlot. Called by [`plot_mollweide`](@ref), which
+is the entry point most code should use.
+
+The furniture is all optional, because a figure made to be READ and one made to be COMPARED
+against someone else's want different things — labels and seven colourbar ticks help the first
+and get in the way of the second.
+
+| keyword | default | what it does |
+|---|---|---|
+| `graticule` | `true` | draw meridians and parallels at all |
+| `lon_spacing`, `lat_spacing` | `20`, `15` | graticule spacing in degrees |
+| `labels` | `true` | the degree labels; `false` leaves the lines |
+| `grid_style`, `grid_alpha` | `"-"`, `0.6` | linestyle and alpha of the graticule |
+| `lon_color`, `lat_color` | `"white"`, `"black"` | colour of meridians and parallels, labels included |
+| `colorbar` | `true` | draw the colourbar |
+| `colorbar_label` | `"Temperature (K)"` | its label — pass `""` for none |
+| `colorbar_ticks` | `7` | how many ticks on it |
+| `title` | `figtitle` | the title; `""` for none |
+
+`lat_spacing` MUST DIVIDE 90. matplotlib's `GeoAxes.set_latitude_grid(d)` places parallels at
+`arange(-90+d, 90, d)` and labels them with `ThetaFormatter(d)`, which rounds to multiples of
+`d`: at `d = 20` the ticks land at ±10, ±30, ±50, ±70 — none of them multiples of 20 — and come
+out labelled -80, -40, -20, 0, 0, 20, 40, 80, with a duplicated zero and every label wrong by
+10–20°. Verified with a fiducial map (bands at latitude 0 and +60): the DATA is placed
+correctly, so only the labels were wrong. 15 and 30 are safe, 20 is not, and a value that does
+not divide 90 is refused here rather than mislabelled.
+"""
+function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0,
+                                      colormap="gist_heat", figtitle="Mollweide", title=nothing,
+                                      mask_unobserved=true, bad_color="lightgray",
+                                      lon_color="white", lat_color="black",
+                                      graticule::Bool=true, labels::Bool=true,
+                                      lon_spacing::Real=20, lat_spacing::Real=15,
+                                      grid_style="-", grid_alpha::Real=0.6,
+                                      colorbar::Bool=true, colorbar_label="Temperature (K)",
+                                      colorbar_ticks::Int=7)
   set_oiplot_defaults()
+  mod(90, lat_spacing) == 0 || error(
+      "mollplot_temperature_healpix: `lat_spacing` must divide 90 (got $lat_spacing). " *
+      "matplotlib labels parallels with ThetaFormatter(lat_spacing), which rounds to multiples " *
+      "of it, so a spacing that does not divide 90 puts every latitude label on the wrong line.")
   np = pyimport("numpy")
   xsize = 2000
   ysize = div(xsize,2)
@@ -902,39 +944,40 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
   cmap_obj = matplotlib.colormaps[colormap]   # matplotlib.cm.get_cmap removed in 3.9
   cmap_obj.set_bad(color=bad_color)
   moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=cmap_obj)
-  # graticule
-  ax.set_longitude_grid(20);
-  # LATITUDE GRID: the spacing must DIVIDE 90, or the labels will not match the ticks.
-  #
-  # matplotlib's GeoAxes.set_latitude_grid(d) places parallels at arange(-90+d, 90, d) and then
-  # labels them with ThetaFormatter(d), which rounds to multiples of d.  With d = 20 the ticks land
-  # at +-10, +-30, +-50, +-70 — none of them multiples of 20 — and they came out labelled
-  # -80, -40, -20, 0, 0, 20, 40, 80: a duplicated 0, no +-60, and every label wrong by 10-20 deg.
-  # Verified by a fiducial map (bands at latitude 0 and +60): the DATA is placed correctly, the
-  # equator at the ellipse centre and +60 at 76.5% of the way to the pole against an expected
-  # 78.6%, so only the labels were wrong.  15 and 30 both divide 90 and are safe; 20 is not.
-  ax.set_latitude_grid(15);
+  # graticule — see the docstring for why `lat_spacing` has to divide 90
+  ax.set_longitude_grid(lon_spacing);
+  ax.set_latitude_grid(lat_spacing);
   ax.set_longitude_grid_ends(90);
   spacing = 0.04
   subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing);
-  grid(true)
+  grid(graticule)
   if incl != 90.0
     ax.axhline(-incl * pi/180, c="black", ls="-.")
   end
-  ticks = collect(range(vmin, stop=vmax, length=7));
-  cb = colorbar(moll, orientation="horizontal", shrink=.6, pad=0.05, ticks=ticks)
-  cb.ax.xaxis.labelpad=5
-  cb.ax.xaxis.set_label_text("Temperature (K)")
-  # workaround for issue with viewers, see colorbar docstring
-  cb.solids.set_edgecolor("face")
+  if colorbar
+    ticks = collect(range(vmin, stop=vmax, length=max(2, colorbar_ticks)));
+    cb = PythonPlot.colorbar(moll, orientation="horizontal", shrink=.6, pad=0.05, ticks=ticks)
+    cb.ax.xaxis.labelpad=5
+    # LABELLED, NOT ASSUMED. This said "Temperature (K)" unconditionally, which is wrong for
+    # every map that is not a temperature — a normalised surface brightness came out labelled
+    # in kelvin.
+    cb.ax.xaxis.set_label_text(String(colorbar_label))
+    # workaround for issue with viewers, see colorbar docstring
+    cb.solids.set_edgecolor("face")
+  end
   # `lon_color`/`lat_color` colour BOTH the tick labels and the corresponding graticule
   # lines: meridians are the x-axis grid, parallels the y-axis grid. Setting only
   # tick_params (as this did) left the graticule at matplotlib's default grey, so the
   # keywords appeared to do nothing to the grid they are named after.
   ax.tick_params(axis="x", labelsize=12, colors=lon_color)
   ax.tick_params(axis="y", labelsize=12, colors=lat_color)
-  ax.xaxis.grid(true, color=lon_color, alpha=0.6)
-  ax.yaxis.grid(true, color=lat_color, alpha=0.6)
+  ax.xaxis.grid(graticule, color=lon_color, alpha=grid_alpha, linestyle=grid_style)
+  ax.yaxis.grid(graticule, color=lat_color, alpha=grid_alpha, linestyle=grid_style)
+  if !labels
+    ax.set_xticklabels(PythonPlot.pylist([]))
+    ax.set_yticklabels(PythonPlot.pylist([]))
+  end
+  title !== nothing && ax.set_title(String(title))
   return
 end
 

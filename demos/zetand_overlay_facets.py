@@ -106,8 +106,19 @@ def main():
     H, pad = 620, 24
     oi = o.resize((int(o.width*H/o.height), H), Image.LANCZOS)
     ui = u.resize((int(u.width*H/u.height), H), Image.LANCZOS)
-    cmp_ = Image.new("RGB", (oi.width + ui.width + 3*pad, H + 2*pad), "white")
-    cmp_.paste(oi, (pad, pad)); cmp_.paste(ui, (2*pad + oi.width, pad))
+    band = 34
+    cmp_ = Image.new("RGB", (oi.width + ui.width + 3*pad, H + 2*pad + band), "white")
+    cmp_.paste(oi, (pad, pad + band)); cmp_.paste(ui, (2*pad + oi.width, pad + band))
+    dr = ImageDraw.Draw(cmp_)
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 22)
+    except Exception:
+        font = None
+    dr.text((pad + oi.width//2 - 160, 6), "Roettenbacher et al., from the PDF",
+            fill=(0, 0, 0), font=font)
+    dr.text((2*pad + oi.width + ui.width//2 - 190, 6),
+            "ROTIR plot_mollweide, map extracted from it", fill=(0, 0, 0), font=font)
     out = os.path.join(ZET, "zetAnd2019A_map_compare.png")
     cmp_.save(out); print("wrote", out)
 

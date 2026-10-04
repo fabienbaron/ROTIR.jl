@@ -31,17 +31,17 @@ function main()
     @printf("%d tessels, %.4f .. %.4f\n", length(m), minimum(m), maximum(m))
     star = create_star(tessellation_healpix(3),
                        default_star_params(0; radius = 1.0, ldtype = 0), 0.0)
+    # MATCHED TO THE ORIGINAL through `plot_mollweide`'s own options rather than by poking at
+    # the axes afterwards: no degree labels, a dotted black graticule at her spacing, and a
+    # colourbar carrying only its two end values. `title` is a real axes title — `figtitle`
+    # names the FIGURE WINDOW and never appears in a saved file, which is why our panel used to
+    # come out untitled beside hers.
     plot_mollweide(m, star; vmin = 0.8025, vmax = 0.9977, colormap = "gist_heat",
-                   figtitle = "zet And 2019A — extracted")
-    # STRIP THE DEGREE LABELS. `mollplot_temperature_healpix` writes longitude labels ACROSS the
-    # map at the equator and latitude labels around it; the original figure has neither, so they
-    # make a side-by-side harder to read — and they defeat an automatic fit of the plot ellipse,
-    # which is how the comparison in this directory is measured. The graticule itself is kept,
-    # since the original has one too.
-    fig = PythonPlot.gcf()
-    ax = fig.axes[0]
-    ax.set_xticklabels(PythonPlot.pylist([]))
-    ax.set_yticklabels(PythonPlot.pylist([]))
+                   title = "ROTIR plot_mollweide, map extracted from the figure",
+                   labels = false, lon_color = "black", lat_color = "black",
+                   grid_style = ":", grid_alpha = 0.9,
+                   lon_spacing = 30, lat_spacing = 30,
+                   colorbar_ticks = 2, colorbar_label = "")
     out = joinpath(zet, "zetAnd2019A_map_rotir.png")
     PythonPlot.savefig(out, dpi = 150, bbox_inches = "tight")
     println("wrote ", out)
