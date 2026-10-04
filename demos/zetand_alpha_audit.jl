@@ -4,7 +4,18 @@
 #     julia --project=. -t 16 demos/zetand_alpha_audit.jl [path/to/ip00k2.pck19]
 #
 # They FIX the power-law exponent at alpha = 0.269, "after R. M. Roettenbacher et al. (2016)",
-# to avoid "confusion between limb darkening and spots on the limb". A free ROTIR fit to the same
+# to avoid "confusion between limb darkening and spots on the limb". That 2016 paper
+# (arXiv:1709.10107, in `demos/zetAnd/`) gives the provenance in one line: "Limb darkening was
+# held fixed with power-law exponent mu = 0.269, **appropriate for zeta And based upon spectral
+# type**." So it comes from a spectral-type table, not from an atmosphere evaluated at this
+# star's own (Teff, logg) — which is what the ladder below compares it against.
+#
+# AND THE GRAVITY IS THEIRS, not assumed here. Their Table 1 gives a polar radius of
+# 15.0 ± 0.8 R_sun and a primary mass of 2.6 ± 0.4 M_sun, i.e. logg = 2.50 — the node this
+# file reads the Kurucz grid at. (Their "Distance, d (pc) 17.98 ± 0.83" is the Hipparcos
+# PARALLAX in mas mislabelled as a distance: 17.98 pc with theta_LD = 2.502 mas would give
+# 4.8 R_sun, not the 15.0 printed two rows above it.) Teff is 4600 ± 100 K from the same
+# table, where the grid gives alpha = 0.23. A free ROTIR fit to the same
 # interferometry lands near 0.14. `zetand_fig10_family.jl` rules out the obvious explanation —
 # it is not bought by ROTIR's three free semi-axes against SURFING's one axis ratio, since the
 # data want ~0.15 inside their shape family too.

@@ -60,10 +60,21 @@
 #    describes when it says the light curve is "dominated by the star's ellipsoidal shape".
 #    zeta And is a synchronised RS CVn binary, so a tidal figure is expected.
 #
+#    CONFIRMED BY THE SOURCE, after this was first inferred from the figure. Roettenbacher et
+#    al. 2016 (arXiv:1709.10107, the Nature paper this work's alpha and geometry come from, and
+#    which `demos/zetAnd/` now carries) says it outright on its page 3: "The 2011 and 2013
+#    datasets were separately imaged onto a **prolate ellipsoid**". Its Table 1 then labels the
+#    parameter "Oblateness (major to polar axis) = 1.060 ± 0.011", which is where the confusion
+#    comes from — the word is "oblateness" and the quantity is a prolate figure's major-to-POLAR
+#    ratio. Measured off the 2026 figure: rx/rz = 1.0629.
+#
 #    An earlier version of this file read their ratio as OBLATE. That was wrong, and the body
 #    of this script still prints both readings so the difference stays visible.
 #
-# 9. THEIR theta_LD IS THE MINOR AXIS, and it transfers exactly.
+# 9. THEIR theta_LD IS THE MINOR (POLAR) AXIS, and it transfers exactly. The 2016 paper names
+#    it in its own Table 1: "Angular **polar** diameter, theta_LD (mas) = 2.502 ± 0.008". The
+#    2026 paper relabels the same quantity "Limb-darkened disk diameter", which is what made it
+#    look like an equivalent-disc diameter.
 #    From Figure 10's own x ticks (7 of them, 0.5 mas apart, 94.917 px) the drawn semi-axes are
 #    2*rx = 2.6529, 2*ry = 2.4979, 2*rz = 2.4959 mas. Their Table 6 theta_LD = 2.495 +- 0.014
 #    is the MINOR axis to 0.04 %, and the major axis is 1.063 times larger. Fitting their own

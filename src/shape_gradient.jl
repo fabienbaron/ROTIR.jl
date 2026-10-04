@@ -353,9 +353,18 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
                          data_epochs, tessels::tessellation{T},
                          star_params_base, tepochs;
                          κ=T(50), verbose::Bool=false,
-                         parametric_map::Bool=false) where T
+                         parametric_map::Bool=false,
+                         fit_v0::Bool=false) where T
 
-    nparams = length(θ)
+    # V0, THE VISIBILITY CALIBRATION SCALE, lives in the LAST slot of θ when `fit_v0` — after
+    # every shape parameter, so each surface type's existing layout is untouched and the
+    # destructuring below keeps its indices. It is not a `star_params` field and never becomes
+    # one: it describes the DATA, not the star. See `interferometric_chi2` for the same scale
+    # on the parametric path, and why a factor on the complex visibility is the only choice
+    # consistent across V², T3amp and T3φ.
+    nparams = fit_v0 ? length(θ) - 1 : length(θ)
+    nparams >= 1 || error("shape_chi2_fg!: fit_v0 needs θ to carry the shape parameters too")
+    V0 = fit_v0 ? θ[end] : one(T)
     npix = tessels.npix
     nepochs = length(data_epochs)
     stype = star_params_base.surface_type
@@ -441,7 +450,7 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         compute_polyflux_and_cvis!(F, polyflux_local, kx, ky, k2_inv_im, pjx, pjy, xw)
 
         flux = dot(polyflux_local, xw)
-        cvis_model = F / flux
+        cvis_model = F * (V0 / flux)
 
         # Observables + chi2
         v2_model = abs2.(cvis_model[data.indx_v2])
@@ -480,8 +489,21 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
             adj_cvis[k3] -= T(360/π) * im * factor * c1 * c2
         end
 
-        # Scale adjoint for flux normalization: adj_F = adj_cvis / flux
-        adj_F = adj_cvis / flux
+        # ∂χ²/∂V0, taken BEFORE `adj_cvis` is folded into `adj_F`. With c = V0·F/flux and
+        # adj_cvis = ∂χ²/∂Re(c) − i·∂χ²/∂Im(c),  ∂χ²/∂V0 = Σₖ Re(adj_cvis[k]·Fₖ/flux).
+        # Against F/flux rather than cvis/V0, so V0 = 0 is not a division by zero.
+        if fit_v0
+            g = zero(T)
+            @inbounds for k in 1:nuv
+                g += real(adj_cvis[k] * F[k])
+            end
+            grad_θ[end] += g / flux
+        end
+
+        # Scale adjoint for flux normalization, now carrying V0: ∂c/∂F = V0/flux.
+        # `flux_adj` below needs no change — dot(xw, grad_xw) then equals Σₖ Re(adj_cvis[k]·cₖ),
+        # which is what ∂χ²/∂flux wants with the scale included.
+        adj_F = adj_cvis * (V0 / flux)
 
         # Adjoint pass for xmap gradient (uses compute_adjoint_cvis!)
         grad_xw = Vector{T}(undef, nvis)
@@ -575,12 +597,13 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
                                regularizer::String="sobel",
                                θ_lower::Union{Vector{T},Nothing}=nothing,
                                θ_upper::Union{Vector{T},Nothing}=nothing,
+                               fit_v0::Bool=false,
                                κ=T(50), verbose::Bool=true) where T
 
     xmap = copy(xmap_start)
     θ = copy(θ_start)
     npix = length(xmap)
-    nparams = length(θ)
+    nparams = fit_v0 ? length(θ) - 1 : length(θ)
     stype = star_params_base.surface_type
     # REFUSED, not approximated. The `else` branch below is the SPHERE layout
     # (radius, inclination, position_angle), and it used to catch every surface type that was
@@ -603,13 +626,49 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
     nexpected = stype == 1 ? 5 : stype == 2 ? 4 : 3
     nparams == nexpected ||
         throw(DimensionMismatch("joint_reconstruct_oi: surface_type $(stype) takes " *
-                                "$(nexpected) shape parameters, got $(nparams)"))
+                                "$(nexpected) shape parameters" *
+                                (fit_v0 ? " plus V0 in the last slot, got $(length(θ))" :
+                                          ", got $(nparams)")))
 
+    nθ = length(θ)
     if θ_lower === nothing
-        θ_lower = fill(T(-Inf), nparams)
+        θ_lower = fill(T(-Inf), nθ)
+        fit_v0 && (θ_lower[end] = T(0.8))
     end
     if θ_upper === nothing
-        θ_upper = fill(T(Inf), nparams)
+        θ_upper = fill(T(Inf), nθ)
+        fit_v0 && (θ_upper[end] = T(1.2))
+    end
+    length(θ_lower) == nθ && length(θ_upper) == nθ ||
+        throw(DimensionMismatch("joint_reconstruct_oi: bounds must be $(nθ) long" *
+                                (fit_v0 ? " (shape parameters plus V0)" : "")))
+
+    # THE TWO STEPS MUST MINIMISE THE SAME χ², and V0 reaches them differently.
+    #
+    # The θ step carries it in the MODEL: `shape_chi2_fg!` forms `cvis = F·V0/flux` and
+    # differentiates it. The map step goes through `image_reconstruct_oi`, whose hand-written
+    # adjoint has no V0 — so instead the DATA are rescaled, which is EXACTLY equivalent and
+    # needs no third adjoint:
+    #
+    #     ((V0²·|V|² − v2) / σ_v2)²  ≡  ((|V|² − v2/V0²) / (σ_v2/V0²))²
+    #
+    # and likewise T3amp against V0³. T3φ is left alone, because a real positive scale cannot
+    # rotate a phase. The identity is exact, not an approximation, so the alternation is not
+    # descending two different criteria — which is the failure mode worth spelling out, since
+    # it would converge quietly and report a χ² belonging to neither step.
+    #
+    # The caller's `data` is never touched: when `fit_v0` the map step gets a rescaled copy,
+    # refreshed from the pristine arrays each outer iteration. Without `fit_v0` nothing is
+    # copied and the path is byte-identical to before.
+    data_map = fit_v0 ? deepcopy(data) : data
+    function _rescale_for_map!(V0)
+        for i in eachindex(data)
+            data_map[i].v2       .= data[i].v2       ./ V0^2
+            data_map[i].v2_err   .= data[i].v2_err   ./ V0^2
+            data_map[i].t3amp    .= data[i].t3amp    ./ V0^3
+            data_map[i].t3amp_err .= data[i].t3amp_err ./ V0^3
+        end
+        return nothing
     end
 
     for outer in 1:nouter
@@ -632,7 +691,8 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
         n = npix2n(npix)
         tessels = tessellation_healpix(n, T=T)
         stars = create_star_multiepochs(tessels, star_params, tepochs)
-        setup_oi!(data, stars)
+        fit_v0 && _rescale_for_map!(θ[end])
+        setup_oi!(data_map, stars)
 
         # Step 2: Optimize xmap with fixed geometry.
         #
@@ -652,14 +712,15 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
         regularizers = regularizer in ("sobel", "sobel2") ?
             [[regularizer, reg_weight, sobel_gradient_healpix(n), 1:npix]] :
             [[regularizer, reg_weight, tv_neighbors_healpix(n), 1:npix]]
-        xmap = image_reconstruct_oi(xmap, data, stars, maxiter=maxiter_xmap,
+        xmap = image_reconstruct_oi(xmap, data_map, stars, maxiter=maxiter_xmap,
                                      regularizers=regularizers, verbose=verbose)
 
         # Step 3: Optimize θ with fixed xmap
         crit_θ = (θ_vec, g_vec) -> begin
             g_xmap_dummy = zeros(T, npix)
             chi2 = shape_chi2_fg!(g_vec, g_xmap_dummy, xmap, θ_vec, data, tessels,
-                                   star_params_base, tepochs, κ=κ, verbose=false)
+                                   star_params_base, tepochs, κ=κ, verbose=false,
+                                   fit_v0=fit_v0)
             return chi2
         end
         θ = OptimPackNextGen.vmlmb(crit_θ, θ, verb=verbose, lower=θ_lower, upper=θ_upper,

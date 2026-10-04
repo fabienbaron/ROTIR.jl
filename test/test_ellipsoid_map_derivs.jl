@@ -118,4 +118,57 @@ using Test, ROTIR, FiniteDifferences, LinearAlgebra
         # The orientation components are unaffected — the map never depended on them.
         @test all(abs.((gfix[4:5] .- gfd[4:5]) ./ gfd[4:5]) .< 1e-7)
     end
+    @testset "the V0 visibility calibration in the joint path" begin
+        # V0 lives in the LAST slot of θ, after every shape parameter, so each surface type's
+        # existing layout is untouched. Three things have to hold, and the third is what the
+        # alternating loop in `joint_reconstruct_oi` rests on.
+        DATA = joinpath(pkgdir(ROTIR), "demos", "data")
+        fs = sort([joinpath(DATA, f) for f in readdir(DATA) if occursin("lam_And", f)])
+        data = [readoifits(f)[1, 1] for f in fs[1:2]]
+        tepochs = [0.0, 1.0]
+        npix = tess.npix
+        θs = [1.30, 1.05, 0.92, 63.0, 27.0]
+        xm = fill(6000.0, npix) .+ 200 .* sin.(range(0, 7π, length = npix))
+
+        chi2_of(θ) = (g = zeros(length(θ)); gx = zeros(npix);
+                      shape_chi2_fg!(g, gx, copy(xm), collect(Float64, θ), data, tess, base,
+                                     tepochs; fit_v0 = length(θ) == 6))
+
+        # 1. the V0 derivative against finite differences
+        g6 = zeros(6); gx6 = zeros(npix)
+        shape_chi2_fg!(g6, gx6, copy(xm), vcat(θs, 1.03), data, tess, base, tepochs;
+                       fit_v0 = true)
+        gfd = central_fdm(5, 1)(v -> chi2_of(vcat(θs, v)), 1.03)
+        @test abs(g6[6] - gfd) / max(abs(gfd), 1) < 1e-7
+
+        # 2. at V0 = 1 the shape gradient is BIT-IDENTICAL to the path without it, so turning
+        #    the option on cannot quietly change an existing fit
+        g5 = zeros(5); shape_chi2_fg!(g5, zeros(npix), copy(xm), θs, data, tess, base, tepochs)
+        g1 = zeros(6); shape_chi2_fg!(g1, zeros(npix), copy(xm), vcat(θs, 1.0), data, tess,
+                                      base, tepochs; fit_v0 = true)
+        @test g1[1:5] == g5
+
+        # 3. THE IDENTITY `joint_reconstruct_oi` RESTS ON. Its θ step carries V0 in the model;
+        #    its map step cannot, because `image_reconstruct_oi` has no V0 — so the data are
+        #    rescaled instead. The two must be the same χ², or the alternation descends two
+        #    different criteria and converges quietly on neither.
+        for V0 in (0.94, 1.07)
+            cmodel = chi2_of(vcat(θs, V0))
+            ds = deepcopy(data)
+            for i in eachindex(data)
+                ds[i].v2        .= data[i].v2        ./ V0^2
+                ds[i].v2_err    .= data[i].v2_err    ./ V0^2
+                ds[i].t3amp     .= data[i].t3amp     ./ V0^3
+                ds[i].t3amp_err .= data[i].t3amp_err ./ V0^3
+            end
+            gd = zeros(5)
+            cdata = shape_chi2_fg!(gd, zeros(npix), copy(xm), θs, ds, tess, base, tepochs)
+            @test abs(cmodel - cdata) / max(abs(cmodel), 1) < 1e-8
+        end
+
+        # 4. and the bookkeeping refuses a θ that is the wrong length
+        @test_throws DimensionMismatch joint_reconstruct_oi(
+            copy(xm), vcat(θs, 1.0), data, tess, base, tepochs; fit_v0 = false, nouter = 1)
+    end
+
 end
