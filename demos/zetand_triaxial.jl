@@ -23,9 +23,13 @@ using ROTIR, Printf
 
 const PROT = 17.769426        # d, tidally locked
 const ZETDIR = joinpath(pkgdir(ROTIR), "demos", "zetAnd")
-# Roettenbacher et al.'s equatorial:polar ratio. NOT a ground truth — it is another group's
-# result under their own model, and ζ And's real figure is unknowable. Agreement is evidence
-# that neither analysis is badly wrong, nothing stronger.
+# Roettenbacher et al.'s single "major-to-minor axis ratio". NOT an equatorial:polar ratio,
+# and not a ground truth: it is another group's result under their own model, and ζ And's real
+# figure is unknowable. Their model carries ONE ratio, so its two shorter axes are equal — and
+# `zetand_fig10_match.jl` confirms that from their own Figure 10, which draws 1.0629 : 1.0008 : 1.
+# A ROTIR triaxial fit has three, so `eqpol` below is NOT the same quantity as their 1.063 and
+# the two should not be read off against each other. The like-for-like comparison is in
+# `zetand_fig10_family.jl`, which fits THEIR family and gets 1.0626 against their 1.063.
 const LIT_EQ_POL = 1.06
 
 function zetdata()
@@ -42,8 +46,8 @@ function show_fit(tag, r, nd, el)
             tag, r.radius_x, r.radius_y, r.radius_z, r.inclination, r.position_angle, r.ld1)
     @printf("%-10s equatorial elongation %.4f (tidal) | polar flattening %.4f (rotational)\n",
             "", r.equatorial_elongation, r.polar_flattening)
-    @printf("%-10s equatorial/polar = %.4f  vs Roettenbacher %.2f    mean D = %.4f mas\n",
-            "", eqpol(r), LIT_EQ_POL, 2r.mean_radius)
+    @printf("%-10s equatorial/polar = %.4f   major/minor = %.4f   mean D = %.4f mas\n",
+            "", eqpol(r), r.radius_x/min(r.radius_y, r.radius_z), 2r.mean_radius)
     @printf("%-10s chi2/n = %.3f   (sphere %.3f)   %.0f s\n", "", r.chi2/nd, r.chi2_sphere/nd, el)
 end
 
@@ -105,14 +109,16 @@ function main()
                 r.inclination, r.position_angle)
     end
 
-    @printf("\nSo: this analysis gives %.3f, the spot-induced bias measured on the synthetic\n",
+    @printf("\nSo: this analysis gives equatorial/polar %.3f with a spot-induced bias of +1.1 %%\n",
             eqpol(fits[3]))
-    @printf("star above is +1.1 %%, and Roettenbacher et al. give %.2f. Two independent analyses\n",
+    @printf("measured on the synthetic star above. Roettenbacher et al.'s %.3f is a MAJOR-TO-MINOR\n",
             LIT_EQ_POL)
-    @printf("agreeing to about the size of that bias — not a measurement hitting a truth, which\n")
-    @printf("is unknowable here. The residual chi2/n of %.2f is the spot signal, and that is\n",
+    @printf("ratio of a two-axis figure and is not this number; fitting their family instead gives\n")
+    @printf("1.0626 against their 1.063 (`zetand_fig10_family.jl`), which is the comparison that\n")
+    @printf("means something — and it is not a measurement hitting a truth, which is unknowable\n")
+    @printf("here. The residual chi2/n of %.2f is the spot signal, and that is what the imaging\n",
             fits[3].chi2/nd)
-    @printf("what the imaging step is for.\n")
+    @printf("step is for.\n")
 end
 
 main()
