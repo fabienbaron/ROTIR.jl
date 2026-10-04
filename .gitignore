@@ -69,3 +69,6 @@ build/
 # demos/spica_kurucz_grid.jl and demos/zetand_alpha_audit.jl for the download.
 /demos/data/*.pck19
 /demos/data/*.pck
+
+# Working notes, deliberately untracked
+TODO.md
