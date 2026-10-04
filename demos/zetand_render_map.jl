@@ -45,6 +45,22 @@ function main()
     out = joinpath(zet, "zetAnd2019A_map_rotir.png")
     PythonPlot.savefig(out, dpi = 150, bbox_inches = "tight")
     println("wrote ", out)
+
+    # AND THE SAME ARRAY IN ROTIR'S MODEL FRAME, which is a different picture: the map is stored
+    # as her figure plots it, while the chi2 uses its equator-flipped parity (the one ζ And's
+    # visibilities select, by a factor two). Rendering both makes the distinction visible, and
+    # incidentally shows that these panels are OUR DATA rather than a copy of her raster — one
+    # is the mirror of the other.
+    flip = vec(Int.(readdlm(joinpath(zet, "healpix_flip_3.txt"))))
+    plot_mollweide(m[flip], star; vmin = 0.8025, vmax = 0.9977, colormap = "gist_heat",
+                   title = "ROTIR model frame (equator-flipped), what the chi2 uses",
+                   labels = false, lon_color = "black", lat_color = "black",
+                   grid_style = ":", grid_alpha = 0.9,
+                   lon_spacing = 30, lat_spacing = 30,
+                   colorbar_ticks = 2, colorbar_label = "")
+    out = joinpath(zet, "zetAnd2019A_map_rotir_modelframe.png")
+    PythonPlot.savefig(out, dpi = 150, bbox_inches = "tight")
+    println("wrote ", out)
 end
 
 main()
