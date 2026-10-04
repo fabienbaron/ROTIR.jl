@@ -23,7 +23,10 @@ using ROTIR, Printf
 
 const PROT = 17.769426        # d, tidally locked
 const ZETDIR = joinpath(pkgdir(ROTIR), "demos", "zetAnd")
-const LIT_EQ_POL = 1.06       # published equatorial:polar axis ratio
+# Roettenbacher et al.'s equatorial:polar ratio. NOT a ground truth — it is another group's
+# result under their own model, and ζ And's real figure is unknowable. Agreement is evidence
+# that neither analysis is badly wrong, nothing stronger.
+const LIT_EQ_POL = 1.06
 
 function zetdata()
     files = sort(filter(f -> endswith(f, ".oifits"), readdir(ZETDIR)))
@@ -39,7 +42,7 @@ function show_fit(tag, r, nd, el)
             tag, r.radius_x, r.radius_y, r.radius_z, r.inclination, r.position_angle, r.ld1)
     @printf("%-10s equatorial elongation %.4f (tidal) | polar flattening %.4f (rotational)\n",
             "", r.equatorial_elongation, r.polar_flattening)
-    @printf("%-10s equatorial/polar = %.4f  vs published %.2f    mean D = %.4f mas\n",
+    @printf("%-10s equatorial/polar = %.4f  vs Roettenbacher %.2f    mean D = %.4f mas\n",
             "", eqpol(r), LIT_EQ_POL, 2r.mean_radius)
     @printf("%-10s chi2/n = %.3f   (sphere %.3f)   %.0f s\n", "", r.chi2/nd, r.chi2_sphere/nd, el)
 end
@@ -100,11 +103,14 @@ function main()
                 r.inclination, r.position_angle)
     end
 
-    @printf("\nSo: the figure measured on the real data is %.3f, the spot-induced bias is about\n",
+    @printf("\nSo: this analysis gives %.3f, the spot-induced bias measured on the synthetic\n",
             eqpol(fits[3]))
-    @printf("+1 %%, and the published ratio is %.2f. The residual chi2/n of %.2f is the spot\n",
-            LIT_EQ_POL, fits[3].chi2/nd)
-    @printf("signal, which is what the imaging step is for.\n")
+    @printf("star above is +1 %%, and Roettenbacher et al. give %.2f. Two independent analyses\n",
+            LIT_EQ_POL)
+    @printf("agreeing to about the size of that bias — not a measurement hitting a truth, which\n")
+    @printf("is unknowable here. The residual chi2/n of %.2f is the spot signal, and that is\n",
+            fits[3].chi2/nd)
+    @printf("what the imaging step is for.\n")
 end
 
 main()

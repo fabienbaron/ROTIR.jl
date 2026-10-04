@@ -133,8 +133,14 @@ rotational.
 | `inc`, `PA` [deg] | 64.7, 122.8 | 68.0, 123.7 |
 | χ²/n (sphere) | 3.63 (9.13) | 3.60 (9.26) |
 
-against the published equatorial-to-polar ratio of **1.06**. The 0.4 % difference between the
-two meshes is the discretisation error on this quantity.
+against the **1.06** of Roettenbacher et al.'s independent analysis. The 0.4 % difference
+between the two meshes is the discretisation error on this quantity.
+
+!!! note "There is no ground truth here"
+    1.06 is another group's result under their own model, not a measured truth — ζ And's real
+    figure is unknowable. Two analyses agreeing to 1 % is evidence that neither is badly wrong,
+    which is a weaker and more useful statement. The only numbers below with a genuine truth
+    are the synthetic ones, where the figure was put in by hand.
 
 !!! warning "Restart, or you will get a different answer"
     This objective has several basins and the wrong ones look converged. Twelve starts on ζ And
@@ -150,8 +156,9 @@ two meshes is the discretisation error on this quantity.
     still wrong and three extra parameters are free to absorb model error. With T3φ excluded
     the fit sees only V² and T3amp, where an asymmetric brightness distribution readily mimics
     an elongated disc. The size of that effect is measurable: synthetic data from a *known*
-    figure carrying three spots at the 20 % contrast of ζ And's published map returns the
-    equatorial/polar ratio **1 % too large** (1.070 against a truth of 1.060). So a shape at
+    figure carrying three spots at the 20 % contrast of ζ And's reconstructed map returns the
+    equatorial/polar ratio **1 % too large** (1.070 against the 1.060 that was put in — a real
+    truth, because this star is synthetic). So a shape at
     the few-percent level is believable here and one at the tens-of-percent level is the spots
     talking — and either way the imaging step, not a bound, is what should absorb them.
 

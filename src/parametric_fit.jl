@@ -527,10 +527,11 @@ function fit_ellipsoid_ld(data, tessels;
         error("fit_ellipsoid_ld: method must be :neldermead, :ultranest or :nautilus")
     # RESTARTS ARE NOT A LUXURY HERE, and the measurement is on real data: ζ And at
     # HEALPix 3, twelve starts over `inc0` x `pa0`, gave THREE basins — the best at
-    # chi2/n = 3.626 (equatorial/polar = 1.070, matching the published 1.06), a pole-on corner
-    # at 4.325 with `radius_z` pinned to its ceiling, and an edge-on one at 5.561. Four of the
-    # twelve, including the default start, landed in the pole-on corner and reported a figure
-    # 0.41 where the truth is 1.06. A single Nelder-Mead run on this objective is a coin toss,
+    # chi2/n = 3.626 (equatorial/polar = 1.070, agreeing with Roettenbacher et al.'s 1.06),
+    # a pole-on corner at 4.325 with `radius_z` pinned to its ceiling, and an edge-on one at
+    # 5.561. Four of the twelve, including the default start, landed in the pole-on corner and
+    # reported 0.41 against the 1.07 the other basin and the literature agree on. A single
+    # Nelder-Mead run on this objective is a coin toss,
     # and the bad basin LOOKS converged — hence the deterministic sweep, and hence the
     # warnings above, which fire on exactly those corners.
     #
