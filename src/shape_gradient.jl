@@ -135,7 +135,12 @@ function projected_vertices_and_derivs(tessels::tessellation{T}, star_params, t;
 
     inc_rad = T(star_params.inclination) * deg2rad
     PA_rad  = T(star_params.position_angle) * deg2rad
-    ψ = T(2π) * T(t) / T(star_params.rotation_period)
+    # `t0`, THE PHASE ZERO, read exactly as `rotate_star` reads it. This is the single place
+    # the two GRADIENT paths get their phase — `project_geometry` (the parametric/Zygote route)
+    # delegates here too — so if this disagreed with `rotate_star` the forward model and its
+    # derivative would be built at different rotations and nothing would say so.
+    t0 = hasproperty(star_params, :t0) ? T(star_params.t0) : zero(T)
+    ψ = T(2π) * (T(t) - t0) / T(star_params.rotation_period)
 
     # Rotation matrix and derivatives (chain rule: inc/PA in degrees, so multiply by deg2rad)
     R    = rotation_matrix(ψ, inc_rad, PA_rad)

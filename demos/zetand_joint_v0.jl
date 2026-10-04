@@ -72,6 +72,13 @@ const PROT = 17.769426
 const ZET  = joinpath(pkgdir(ROTIR), "demos", "zetAnd")
 const NSIDE_EXP = 3            # 768 tessels, "matching the CHARA Array's spatial resolution"
 const ALPHA = 0.22             # Kurucz ATLAS9, H band, 4750 K / logg 2.5
+# THEIR phase zero, so the reconstruction lands in THEIR longitude system and the comparison
+# needs no hand-tuned shift. T0 is their time of nodal passage from the ellipsoidal light
+# curve; the half period is because their ephemeris refers to the OTHER node. Measured once
+# (chi2/n 19.34 at T0, 2.11 at T0 + P/2, and a full scan optimal at exactly +0.500 P) and used
+# as a definition since. See docs/src/guides/conventions.md.
+const THEIR_T0 = 49992.281
+const OUR_T0   = THEIR_T0 + PROT/2
 
 getenvi(k, d) = parse(Int, get(ENV, k, string(d)))
 getenvf(k, d) = parse(Float64, get(ENV, k, string(d)))
@@ -79,15 +86,16 @@ getenvf(k, d) = parse(Float64, get(ENV, k, string(d)))
 function main()
     files = sort(filter(f -> endswith(f, ".oifits"), readdir(ZET)))
     data  = [readoifits(joinpath(ZET, f); verbose = false)[1] for f in files]
-    mjd   = [minimum(d.v2_mjd) for d in data]
-    ts    = mjd .- minimum(mjd)
+    # MJD passed straight through: `t0` in `base` below carries the phase zero, so there is no
+    # arbitrary "first epoch is zero" origin and no fitted offset anywhere in this file.
+    ts    = [minimum(d.v2_mjd) for d in data]
     nd    = sum(d.nv2 + d.nt3amp + d.nt3phi for d in data)
     tess  = tessellation_healpix(NSIDE_EXP; T = Float64)
     @printf("%d epochs, %d data (V² + T3amp + T3φ), %d tessels\n\n", length(data), nd, tess.npix)
 
     base = (surface_type = 1, radius_x = 1.3275, radius_y = 1.2663, radius_z = 1.2120,
             tpole = 4372.0, ldtype = 3, ld1 = ALPHA, ld2 = 0.0, beta = 0.25,
-            inclination = 64.7, position_angle = 122.8, rotation_period = PROT)
+            inclination = 64.7, position_angle = 122.8, rotation_period = PROT, t0 = OUR_T0)
 
     # Starting point: the uniform-ellipsoid fit of `zetand_triaxial.jl`, and a UNIFORM map —
     # deliberately not their published one, so the result does not inherit it.

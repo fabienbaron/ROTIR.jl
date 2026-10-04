@@ -2,15 +2,18 @@
 # the figure a UNIFORM surface prefers. Same data, same prior, better geometry.
 using ROTIR, Printf, DelimitedFiles, Statistics
 const PROT=17.769426; const ZET=joinpath(pkgdir(ROTIR),"demos","zetAnd")
+# phase zero STATED, not fitted: their nodal passage plus half a period, because their
+# ephemeris refers to the other node (docs/src/guides/conventions.md). This replaced a fitted
+# PHASE0 in a relative-epoch frame; the two agree to ~0.002 in phase.
+const OUR_T0 = 49992.281 + PROT/2
 # re-optimised against her fixed map, with T3phi in
 const FIG=(surface_type=1, radius_x=1.3332, radius_y=1.2545, radius_z=1.2269, tpole=5000.0,
            ldtype=3, ld1=0.145, ld2=0.0, beta=0.25, inclination=71.3, position_angle=124.3,
-           rotation_period=PROT)
-const PHASE0=0.5061
+           rotation_period=PROT, t0=OUR_T0)
 function main()
     files=sort(filter(f->endswith(f,".oifits"),readdir(ZET)))
     data=[readoifits(joinpath(ZET,f);verbose=false)[1] for f in files]
-    mjd=[minimum(d.v2_mjd) for d in data]; ts=(mjd .- minimum(mjd)) .- PHASE0*PROT
+    ts=[minimum(d.v2_mjd) for d in data]      # absolute MJD; t0 carries the phase
     tess=tessellation_healpix(3;T=Float64); stars=create_star_multiepochs(tess,FIG,ts)
     setup_oi!(data,stars); npix=stars[1].npix
     seen=falses(npix); for s in stars; seen[s.index_quads_visible].=true; end

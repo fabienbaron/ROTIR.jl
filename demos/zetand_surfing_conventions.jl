@@ -134,7 +134,9 @@
 using ROTIR, Printf, DelimitedFiles, Statistics
 
 const PROT     = 17.769426
-const THEIR_T0 = 49992.281
+const THEIR_T0 = 49992.281      # their time of NODAL passage, from the ellipsoidal light curve
+# ROTIR's phase zero is the OTHER node: see item 6. Measured, then used as a definition.
+const OUR_T0   = THEIR_T0 + PROT/2
 const ALPHA    = 0.269          # fixed, after Roettenbacher et al. 2016
 const INFLATE  = 1.65           # their error-bar inflation
 const ZET      = joinpath(pkgdir(ROTIR), "demos", "zetAnd")
@@ -155,11 +157,15 @@ function main()
     Tmap = pub[flip] .* 4600.0
     @printf("their map: %.0f - %.0f K (mean %.0f)\n\n", minimum(Tmap), maximum(Tmap), mean(Tmap))
 
-    function chi2(rx, ry, rz, inc, pa, ld, ph; x = Tmap)
+    # `t0` is a SURFACE PARAMETER now, so the epochs go in as plain MJD and the phase zero is
+    # stated rather than tuned. `OUR_T0` is their published nodal passage plus half a period,
+    # because their ephemeris refers to the other node — see item 6 above and
+    # `docs/src/guides/conventions.md`. The old spelling shifted `tepochs` by a fitted 0.5077.
+    function chi2(rx, ry, rz, inc, pa, ld, t0 = OUR_T0; x = Tmap)
         p = (surface_type = 1, radius_x = rx, radius_y = ry, radius_z = rz, tpole = 4372.0,
              ldtype = 3, ld1 = ld, ld2 = 0.0, beta = 0.25, inclination = inc,
-             position_angle = pa, rotation_period = PROT)
-        stars = create_star_multiepochs(tess, p, (mjd .- minimum(mjd)) .- ph*PROT)
+             position_angle = pa, rotation_period = PROT, t0 = t0)
+        stars = create_star_multiepochs(tess, p, mjd)
         c = 0.0
         for (i, s) in enumerate(stars)
             # THEIR forward model: intensity proportional to temperature, i.e. ROTIR's :linear
@@ -180,19 +186,18 @@ function main()
                               ("their ratio read as PROLATE", r*rzP, rzP,   rzP),
                               ("our fitted triaxial figure",  1.3332, 1.2545, 1.2269))
         @printf("%-32s %10.3f %10.3f\n", tag,
-                chi2(rx, ry, rz, 69.3, 124.0, 0.269, 0.5077),
-                chi2(rx, ry, rz, 69.3, 124.0, 0.145, 0.5077))
+                chi2(rx, ry, rz, 69.3, 124.0, 0.269),
+                chi2(rx, ry, rz, 69.3, 124.0, 0.145))
     end
     @printf("\nmean diameter: theirs %.4f mas (equivalent LD disc), ours %.4f mas\n", th,
             2*cbrt(1.3332*1.2545*1.2269))
-    best = chi2(1.3332, 1.2545, 1.2269, 69.3, 124.0, 0.145, 0.5077)
+    best = chi2(1.3332, 1.2545, 1.2269, 69.3, 124.0, 0.145)
     @printf("\nbest of the above on published errors: chi2/n = %.3f;  on their inflated ones: %.3f\n",
             best, best/INFLATE^2)
-    @printf("phase at THEIR T0 instead of half a period away: chi2/n = %.3f\n",
-            chi2(1.3332, 1.2545, 1.2269, 69.3, 124.0, 0.145,
-                 mod((minimum(mjd) - THEIR_T0)/PROT, 1)))
+    @printf("t0 at THEIR T0 instead of the other node:        chi2/n = %.3f\n",
+            chi2(1.3332, 1.2545, 1.2269, 69.3, 124.0, 0.145, THEIR_T0))
     @printf("uniform surface, same figure:                    chi2/n = %.3f\n",
-            chi2(1.3332, 1.2545, 1.2269, 69.3, 124.0, 0.145, 0.5077; x = fill(4372.0, tess.npix)))
+            chi2(1.3332, 1.2545, 1.2269, 69.3, 124.0, 0.145; x = fill(4372.0, tess.npix)))
 end
 
 main()

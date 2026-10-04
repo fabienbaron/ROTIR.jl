@@ -34,22 +34,30 @@ const PROT   = 17.769426
 # half a period away. So the map's longitude zero and the nodal passage differ by half a turn,
 # which is a convention difference and not an error in either.
 #
-# 0.5077 is "half a period after their T0" expressed in this script's frame. An earlier value
-# of 0.511 came from fitting the phase WITHOUT closure phases; with T3phi in, the minimum is
-# sharp enough (within +0.1 in chi2/n over 0.010 in phase) that the difference matters.
-const PHASE0 = 0.5077
+# THE PHASE ZERO IS NOW STATED, NOT FITTED. It used to be `PHASE0 = 0.5077`, a value obtained
+# by fitting the phase in this script's own frame (an earlier 0.511 came from fitting WITHOUT
+# closure phases; with T3phi in, the minimum is sharp — within +0.1 in chi2/n over 0.010 in
+# phase). It is now the surface parameter `t0`: their published nodal passage plus half a
+# period, because their ephemeris refers to the OTHER node. A scan of the whole period puts the
+# optimum at exactly T0 + 0.500 P, so nothing is lost by stating it.
+# See docs/src/guides/conventions.md.
+const THEIR_T0 = 49992.281
+const OUR_T0   = THEIR_T0 + PROT/2
 const ZET    = joinpath(pkgdir(ROTIR), "demos", "zetAnd")
 
 # the figure from demos/zetand_triaxial.jl, held FIXED here
 const FIGURE = (surface_type = 1, radius_x = 1.3275, radius_y = 1.2663, radius_z = 1.2120,
                 tpole = 5000.0, ldtype = 3, ld1 = 0.139, ld2 = 0.0, beta = 0.25,
-                inclination = 67.8, position_angle = 126.2, rotation_period = PROT)
+                inclination = 67.8, position_angle = 126.2, rotation_period = PROT,
+                t0 = OUR_T0)
 
 function setup()
     files = sort(filter(f -> endswith(f, ".oifits"), readdir(ZET)))
     data  = [readoifits(joinpath(ZET, f); verbose = false)[1] for f in files]
-    mjd   = [minimum(d.v2_mjd) for d in data]
-    ts    = (mjd .- minimum(mjd)) .- PHASE0*PROT      # same frame as the published map
+    # ABSOLUTE MJD: `t0` in FIGURE carries the phase zero, so the epochs need no origin of
+    # their own. Subtracting the first epoch here while `t0` is an MJD would put the phase off
+    # by thousands of periods' worth of arbitrary offset.
+    ts    = [minimum(d.v2_mjd) for d in data]
     tess  = tessellation_healpix(3; T = Float64)
     stars = create_star_multiepochs(tess, FIGURE, ts)
     setup_oi!(data, stars)                            # the dense path image_reconstruct_oi uses

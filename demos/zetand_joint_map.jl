@@ -28,9 +28,10 @@ lo = min(minimum(ours), minimum(theirs)); hi = max(maximum(ours), maximum(theirs
 # epoch ever sees. The joint fit's own geometry, so the masked region is the one THIS
 # reconstruction could not constrain. (`mollplot_temperature_healpix` is the map-only form but
 # lives inside ROTIRPythonPlotExt and is not re-exported.)
-fit = (surface_type = 1, radius_x = 1.3406, radius_y = 1.2818, radius_z = 1.2271,
+fit = (surface_type = 1, radius_x = 1.3407, radius_y = 1.2800, radius_z = 1.2285,
        tpole = 4372.0, ldtype = 3, ld1 = 0.22, ld2 = 0.0, beta = 0.25,
-       inclination = 62.59, position_angle = 124.08, rotation_period = PROT)
+       inclination = 63.04, position_angle = 124.20, rotation_period = PROT,
+       t0 = 49992.281 + PROT/2)
 tess = tessellation_healpix(3; T = Float64)
 star = create_star(tess, fit, 0.0)
 
@@ -50,11 +51,15 @@ end
 
 # ─── comparing the two maps at all requires putting them in the SAME frame ───────────────
 #
-# A naive facet-by-facet correlation gives −0.21, which says nothing about the star. Our map
-# lives in ROTIR's body frame with t = 0 at the first epoch; theirs is referenced to their
-# T0 = MJD 49992.281, and `zetand_surfing_conventions.jl` already measures the longitude zero
-# as sitting HALF A PERIOD from that T0. So the frames differ by an unknown rotation, and the
-# honest comparison scans it rather than assuming it away.
+# This USED to need a 180 deg rotation: the reconstruction lived in ROTIR's body frame with
+# t = 0 at the first epoch, while theirs is referenced to their T0, and a naive facet-by-facet
+# correlation came out at -0.21. `zetand_joint_v0.jl` now passes their ephemeris as the surface
+# `t0` (their nodal passage plus half a period, since their T0 is the other node — see
+# docs/src/guides/conventions.md), so the two maps should already be in the SAME longitude
+# system and the offset below should come out near zero.
+#
+# The scan is KEPT anyway. It is the end-to-end check on that whole convention chain, and a
+# chain that is only ever asserted is one nobody notices breaking.
 #
 # The scan also covers the longitude PARITY, for the same reason `zetand_fig10_match.jl` had
 # to: a reflected map has the same contrast and the same statistics, and only the structure
@@ -82,8 +87,10 @@ end
 best = BEST[]
 @printf("\nbest alignment: correlation %.4f at a longitude offset of %.0f deg%s\n",
         best[1], best[2], best[3] ? ", with the longitude REFLECTED" : "")
-@printf("  (unaligned, for contrast: %.4f — which is why the raw number means nothing)\n",
-        cor(ours, theirs))
+@printf("  unaligned, i.e. as reconstructed:        %.4f\n", cor(ours, theirs))
+println(best[2] == 0.0 && !best[3] ?
+        "  => the two are ALREADY in the same longitude system, which is the check passing" :
+        "  => a residual rotation remains: the convention chain is NOT closing, look at t0")
 @printf("contrast ratio (ours/theirs, as sd/mean): %.3f\n",
         (std(ours)/mean(ours)) / (std(theirs)/mean(theirs)))
 

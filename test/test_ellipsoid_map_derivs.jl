@@ -171,4 +171,27 @@ using Test, ROTIR, FiniteDifferences, LinearAlgebra
             copy(xm), vcat(θs, 1.0), data, tess, base, tepochs; fit_v0 = false, nouter = 1)
     end
 
+    @testset "the phase epoch t0 reaches the gradient path too" begin
+        # `t0` was added to the schema and to `rotate_star`; `projected_vertices_and_derivs` is
+        # where BOTH gradient routes get their phase (`project_geometry`, the parametric/Zygote
+        # one, delegates here). If the two disagreed, the forward model and its derivative would
+        # be built at different rotations and nothing would say so — the fit would simply
+        # descend a gradient belonging to another star.
+        for t0 in (0.0, 3.7, -2.1)
+            p = merge(base, (rotation_period = 10.0, t0 = t0))
+            st = create_star(tess, p, 5.0)
+            pw, pn, _, _, _, _ = projected_vertices_and_derivs(tess, p, 5.0;
+                                                               nparams = 5, derivs = false)
+            @test maximum(abs, st.proj_west  .- pw) < 1e-12
+            @test maximum(abs, st.proj_north .- pn) < 1e-12
+        end
+        # and t0 shifts the phase rather than doing nothing: t0 = 1 at t = 4 IS t0 = 0 at t = 3
+        pa = merge(base, (rotation_period = 10.0, t0 = 1.0))
+        pb = merge(base, (rotation_period = 10.0, t0 = 0.0))
+        @test create_star(tess, pa, 4.0).proj_west == create_star(tess, pb, 3.0).proj_west
+        # a star_params WITHOUT the field still works, and equals t0 = 0 exactly
+        pc = merge(base, (rotation_period = 10.0,))
+        @test create_star(tess, pc, 3.0).proj_west == create_star(tess, pb, 3.0).proj_west
+    end
+
 end

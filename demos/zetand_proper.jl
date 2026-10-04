@@ -81,11 +81,15 @@ function main()
     # Planck reproduces exactly the intensity map that :linear was already using, so chi2 is
     # identical to machine precision — the correction moves the astrophysics, not the data.
     Tproper = [temperature_from_intensity(r, TEFF_ANCHOR, band) for r in Irel]
+    # `t0` rather than a phase shift on the epochs: their nodal passage plus half a period,
+    # since their ephemeris refers to the other node (docs/src/guides/conventions.md).
+    OUR_T0 = 49992.281 + PROT/2
     function chi2(ld, ph, mode)
         p = (surface_type = 1, radius_x = 1.3332, radius_y = 1.2545, radius_z = 1.2269,
              tpole = TEFF_ANCHOR, ldtype = 3, ld1 = ld, ld2 = 0.0, beta = 0.25,
-             inclination = 71.3, position_angle = 124.3, rotation_period = PROT)
-        stars = create_star_multiepochs(tess, p, (mjd .- minimum(mjd)) .- ph*PROT)
+             inclination = 71.3, position_angle = 124.3, rotation_period = PROT,
+             t0 = OUR_T0 + ph*PROT)        # ph is now a RESIDUAL offset, 0 at the convention
+        stars = create_star_multiepochs(tess, p, mjd)
         x, model, bnd = mode === :proper ? (Tproper, :planck, band) : (Irel, :linear, nothing)
         c = 0.0
         for (i, s) in enumerate(stars)
@@ -97,7 +101,10 @@ function main()
         end
         c/nd
     end
-    cp = chi2(0.145, 0.5061, :proper); ci = chi2(0.145, 0.5061, :intensity)
+    # `ph` is a RESIDUAL on top of the convention now, so 0 is the stated phase. It used to be
+    # 0.5061, a fitted shift in this script's old relative-epoch frame; the two agree to 0.002
+    # in phase, which is the resolution the old scan had.
+    cp = chi2(0.145, 0.0, :proper); ci = chi2(0.145, 0.0, :intensity)
     @printf("\nchi2/n: proper temperature map through Planck %.6f\n", cp)
     @printf("        the same star as an intensity map        %.6f   (difference %.2e)\n",
             ci, abs(cp-ci))

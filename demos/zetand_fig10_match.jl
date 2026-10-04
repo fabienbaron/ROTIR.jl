@@ -75,14 +75,21 @@ const RX, RY, RZ = 2.6529/2, 2.4979/2, 2.4959/2
 const INC  = 69.44
 const LAM  = 1.605e-6
 const PHI  = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875]
+# Their panel labels are a rotational phase measured from their ephemeris, so an epoch is
+# T0 + phi*P. The surface parameter `t0` then carries the convention instead of a hard-coded
+# half period: their T0 is the OTHER node, hence + P/2 (docs/src/guides/conventions.md).
+const THEIR_T0 = 49992.281
+const OUR_T0   = THEIR_T0 + PROT/2
+"the epoch of panel k, in the same units as `t0`"
+epoch_of(k) = THEIR_T0 + PHI[k]*PROT
 
 # ------------------------------------------------------------------------------------------
 # rendering helpers
 # ------------------------------------------------------------------------------------------
-params(pa, ld1 = 0.269) =
+params(pa, ld1 = 0.269; t0 = OUR_T0) =
     (surface_type = 1, radius_x = RX, radius_y = RY, radius_z = RZ, tpole = 4372.0,
      ldtype = 3, ld1 = ld1, ld2 = 0.0, beta = 0.25, inclination = INC,
-     position_angle = pa, rotation_period = PROT)
+     position_angle = pa, rotation_period = PROT, t0 = t0)
 
 """Per-pixel facet index: the visible facet whose projected quad contains the pixel centre,
 frontmost first. This is the answer to "which published pixels show which facet"."""
@@ -211,7 +218,10 @@ function pass2_values(tess, Vp, Mp, T10)
             FI = Vector{Matrix{Int}}(undef, 8); LD = Vector{Vector{Float64}}(undef, 8)
             NZ = Vector{Vector{Float64}}(undef, 8); IX = Vector{Vector{Int}}(undef, 8)
             for k in 1:8
-                st = create_star(tess, params(pa), mod(sense*PHI[k] + delta, 1.0)*PROT)
+                # `delta` and `sense` are still SCANNED here: this pass is what establishes
+                # the convention, so it must not assume it. `t0 = 0` makes the scan absolute.
+                st = create_star(tess, params(pa; t0 = 0.0),
+                                 mod(sense*PHI[k] + delta, 1.0)*PROT)
                 IX[k] = findall(st.normals[:,3] .> 0)
                 FI[k] = facet_index(st, IX[k], NX, PIX)
                 LD[k] = st.ldmap; NZ[k] = st.normals[:,3]
@@ -251,7 +261,7 @@ function pass3_laws(tess, Vp, Mp, T10)
     println("\nWHAT THEY PLOTTED — per-facet samples at the winning configuration")
     PV = Float64[]; MU = Float64[]; TT = Float64[]; PK = Int[]
     for k in 1:8
-        st = create_star(tess, params(124.30), mod(PHI[k] + 0.5, 1.0)*PROT)
+        st = create_star(tess, params(124.30), epoch_of(k))
         idx = findall(st.normals[:,3] .> 0)
         # the winning configuration is (PA 124.30, delta 0.5, sense +1, identity map) with
         # col ~ +West and row ~ -North, so the render's rows reverse into the published frame.
@@ -301,7 +311,7 @@ function dump_model(tess, T10)
     println("\nsub-observer geometry at the winning configuration")
     println("  panel   sub-observer longitude   visible facets")
     for k in 1:8
-        st = create_star(tess, params(124.30), mod(PHI[k] + 0.5, 1.0)*PROT)
+        st = create_star(tess, params(124.30), epoch_of(k))
         idx = findall(st.normals[:,3] .> 0); fi = facet_index(st, idx, NX, PIX)
         for i in CartesianIndices(fi)
             q = fi[i]; q == 0 && continue

@@ -21,15 +21,19 @@
 # ~690 data-unconstrained modes, which no amount of re-optimisation explores. Reproducing it
 # needs an actual sampler, not an ensemble of fits.
 using ROTIR, Printf, DelimitedFiles, Statistics, Random
-const PROT=17.769426; const PHASE0=0.511
+const PROT=17.769426
+# phase zero STATED, not fitted: their nodal passage plus half a period, because
+# their ephemeris refers to the other node (docs/src/guides/conventions.md). This
+# replaced a fitted PHASE0 in a relative-epoch frame; the two agree to ~0.002 in phase.
+const OUR_T0 = 49992.281 + PROT/2
 const ZET=joinpath(pkgdir(ROTIR),"demos","zetAnd")
 const FIGURE=(surface_type=1, radius_x=1.3275, radius_y=1.2663, radius_z=1.2120,
               tpole=5000.0, ldtype=3, ld1=0.139, ld2=0.0, beta=0.25,
-              inclination=67.8, position_angle=126.2, rotation_period=PROT)
+              inclination=67.8, position_angle=126.2, rotation_period=PROT, t0=OUR_T0)
 function main()
     files=sort(filter(f->endswith(f,".oifits"),readdir(ZET)))
     data=[readoifits(joinpath(ZET,f);verbose=false)[1] for f in files]
-    mjd=[minimum(d.v2_mjd) for d in data]; ts=(mjd .- minimum(mjd)) .- PHASE0*PROT
+    ts=[minimum(d.v2_mjd) for d in data]      # absolute MJD; t0 carries the phase
     tess=tessellation_healpix(3;T=Float64); stars=create_star_multiepochs(tess,FIGURE,ts)
     setup_oi!(data,stars); npix=stars[1].npix
     seen=falses(npix); for s in stars; seen[s.index_quads_visible].=true; end

@@ -62,6 +62,13 @@ const PROT = 17.769426
 const ZET  = joinpath(pkgdir(ROTIR), "demos", "zetAnd")
 # Figure 10's own geometry, as `zetand_fig10_match.jl` measures it off the published page
 const RX, RY, RZ, INC, PA = 2.6529/2, 2.4979/2, 2.4959/2, 69.44, 124.30
+# The phase zero is now STATED rather than scanned. Their T0 is a nodal passage from the
+# ellipsoidal light curve, and refers to the other node than ROTIR's psi = 0, hence + P/2.
+# A scan of the whole period finds its optimum at exactly T0 + 0.500 P, so nothing is lost by
+# fixing it — and alpha is no longer determined jointly with a nuisance phase.
+# See docs/src/guides/conventions.md.
+const THEIR_T0 = 49992.281
+const OUR_T0   = THEIR_T0 + PROT/2
 
 const PACK = length(ARGS) >= 1 ? ARGS[1] :
              get(ENV, "KURUCZ_PACK", joinpath(@__DIR__, "data", "ip00k2.pck19"))
@@ -97,7 +104,10 @@ end
 function main()
     fs   = sort(filter(f -> endswith(f, ".oifits"), readdir(ZET)))
     data = [readoifits(joinpath(ZET, f); verbose = false)[1] for f in fs]
-    mj   = [minimum(x.v2_mjd) for x in data]; ts = mj .- minimum(mj)
+    # ABSOLUTE MJD, because `t0` below is an absolute epoch. Subtracting the first epoch here
+    # while passing an MJD `t0` puts the phase off by ~2800 periods' worth of arbitrary offset,
+    # which shows up as a chi2/n of 12 instead of 2.6 — the two must use the same origin.
+    ts   = [minimum(x.v2_mjd) for x in data]
     nd   = sum(d.nv2 + d.nt3amp for d in data)
     tess = tessellation_healpix(3; T = Float64)
     T10  = vec(readdlm(joinpath(ZET, "zetAnd_fig10_epochA_T.txt")))
@@ -107,11 +117,11 @@ function main()
 
     # The model is computed once per (alpha, phase); V0 is a multiplicative calibration applied
     # afterwards, so scanning it costs nothing.
-    function obs_for(x, al, ph)
+    function obs_for(x, al, t0 = OUR_T0)
         p = (surface_type = 1, radius_x = RX, radius_y = RY, radius_z = RZ, tpole = 4372.0,
              ldtype = 3, ld1 = al, ld2 = 0.0, beta = 0.25, inclination = INC,
-             position_angle = PA, rotation_period = PROT)
-        stars = create_star_multiepochs(tess, p, ts .- ph*PROT)
+             position_angle = PA, rotation_period = PROT, t0 = t0)
+        stars = create_star_multiepochs(tess, p, ts)
         [ROTIR.cvis_to_obs(ROTIR.fused_cvis(x, s, data[i]; intensity_model = :linear),
                            data[i])[1:2] for (i, s) in enumerate(stars)]
     end
@@ -123,24 +133,22 @@ function main()
         end
         c
     end
-    als = collect(0.0:0.01:0.45); phs = collect(0.40:0.01:0.65); V0s = collect(0.94:0.002:1.10)
-    println("their geometry held FIXED at Figure 10's; alpha, phase and V0 scanned")
+    als = collect(0.0:0.01:0.45); V0s = collect(0.94:0.002:1.10)
+    println("their geometry held FIXED at Figure 10's; alpha and V0 scanned, phase FIXED by t0")
     println("  surface      V0              alpha   chi2/n")
     for (nm, x) in (("uniform  ", uni), ("their map", T10))
-        res = fill(Inf, length(als), length(phs), length(V0s))
+        res = fill(Inf, length(als), length(V0s))
         @threads for ia in eachindex(als)
-            for (ip, ph) in enumerate(phs)
-                O = obs_for(x, als[ia], ph)
-                for (iv, V0) in enumerate(V0s); res[ia,ip,iv] = chi2_at(O, V0); end
-            end
+            O = obs_for(x, als[ia])
+            for (iv, V0) in enumerate(V0s); res[ia,iv] = chi2_at(O, V0); end
         end
-        iv1 = argmin(abs.(V0s .- 1.0)); s1 = res[:,:,iv1]; k1 = argmin(s1)
-        @printf("  %s    %.3f (fixed)   %.2f    %.3f\n", nm, 1.0, als[k1[1]], s1[k1]/nd)
+        iv1 = argmin(abs.(V0s .- 1.0)); s1 = res[:,iv1]; k1 = argmin(s1)
+        @printf("  %s    %.3f (fixed)   %.2f    %.3f\n", nm, 1.0, als[k1], s1[k1]/nd)
         k = argmin(res)
-        @printf("  %s    %.3f (free)    %.2f    %.3f\n", nm, V0s[k[3]], als[k[1]], res[k]/nd)
-        ia = argmin(abs.(als .- 0.269)); s2 = res[ia,:,:]; k2 = argmin(s2)
+        @printf("  %s    %.3f (free)    %.2f    %.3f\n", nm, V0s[k[2]], als[k[1]], res[k]/nd)
+        ia = argmin(abs.(als .- 0.269)); s2 = res[ia,:]; k2 = argmin(s2)
         @printf("  %s    %.3f (free)    0.269   %.3f   <- their alpha, best V0 for it\n",
-                nm, V0s[k2[2]], s2[k2]/nd)
+                nm, V0s[k2], s2[k2]/nd)
     end
     println("\n  their published V0 = 1.02 +- 0.02; ROTIR, which has no such parameter, " *
             "recovers it.")
