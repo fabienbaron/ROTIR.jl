@@ -112,13 +112,15 @@ else
     @testset "fit_ellipsoid_ld with :nautilus" begin
         # The case the bug hurt most: its own docstring says the region sampler struggles on
         # these five parameters, so a nested sampler is the point rather than a luxury.
+        # ONE epoch, so the rotation phase cannot matter and no period is needed; the
+        # single-phase warning is expected and is not what this test is about.
         r = fit_ellipsoid_ld([d], tess; tepochs = [0.0], ldtype = 3,
-                             req0 = 0.6, f0 = 0.05, inc0 = 45.0, pa0 = 45.0, ld0 = 0.3,
-                             seed_from_sphere = false,
-                             req_bounds = (0.3, 1.2), f_bounds = (0.0, 0.3),
+                             r0 = 0.6, inc0 = 45.0, pa0 = 45.0, ld0 = 0.3,
+                             seed_from_sphere = false, r_bounds = (0.3, 1.2),
                              weights = [1.0, 1.0, 0.0], method = :nautilus,
                              min_num_live_points = 100, verbose = false)
-        @test isfinite(r.req) && isfinite(r.flattening) && isfinite(r.ld1)
+        @test isfinite(r.radius_x) && isfinite(r.radius_y) && isfinite(r.radius_z)
+        @test isfinite(r.ld1)
         @test isfinite(r.logz)
         @test size(r.samples, 1) > 0
     end

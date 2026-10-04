@@ -109,3 +109,13 @@ implementation.
 4. the `tpole` null-space gate above, and that Planck breaks it.
 
 Run the suite with `julia --project=. -e 'using Pkg; Pkg.test()'`.
+
+## The ellipsoid's θ layout
+
+The triaxial ellipsoid's parameter vector, its box and the name → position map. Listed here
+because [`fit_ellipsoid_ld`](@ref) fits exactly this layout's first five entries plus `ld1`:
+the three semi-axes are the model's own parameters, not a reparameterization of them.
+
+```@docs
+ellipsoid_param_names
+```

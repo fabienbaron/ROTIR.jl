@@ -158,6 +158,11 @@ end
     # behind refusing to free `tpole` under a linear intensity law.
     include(joinpath(TESTDIR, "test_ellipsoid_logpi.jl"))
 
+    # And that `fit_ellipsoid_ld` RECOVERS a figure it is given. The gradient tests above
+    # cannot see a wrong shape FAMILY — the function fitted an oblate spheroid while the model
+    # carries three radii, and on a tidally distorted star that drives the shape to its bound.
+    include(joinpath(TESTDIR, "test_ellipsoid_recovery.jl"))
+
     # The two GRAVITY-DARKENING laws and the registry that selects between them: ELR against
     # the closed forms in the paper, the equatorial symmetry a finite-difference check cannot
     # see, and both laws through `build_parametric_logπ`.

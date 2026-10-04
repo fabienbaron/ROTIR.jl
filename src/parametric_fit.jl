@@ -336,15 +336,38 @@ end
 """
     fit_ellipsoid_ld(data, tessels; kwargs...) -> NamedTuple
 
-Fit an **oblate spheroid with a uniform surface**, limb darkening only — the next model up
+Fit a **triaxial ellipsoid with a uniform surface**, limb darkening only — the next model up
 from [`fit_sphere_ld`](@ref) when a star is measurably non-circular on the sky but you do not
 want to commit to a gravity-darkening law.
 
-Free parameters: equatorial radius `req` (mas), flattening `f = 1 − r_pol/r_eq`, inclination
-and position angle (degrees), and `ld1`. The geometry uses `radius_x = radius_y = req` and
-`radius_z = req·(1−f)`, i.e. rotational symmetry about the polar axis — the underlying
-`surface_type = 1` allows three independent semi-axes, but fitting a triaxial ellipsoid to
-interferometry is almost never justified.
+Free parameters: the three body-frame semi-axes `radius_x`, `radius_y`, `radius_z` (mas),
+inclination and position angle (degrees), and `ld1`. That is the model's own parameterization —
+`surface_type = 1` carries three independent radii and
+[`ellipsoid_param_names`](@ref) lists them — so nothing here is a reparameterization of it.
+
+!!! warning "This function used to fit an oblate spheroid, and that was wrong"
+    Until this change it imposed `radius_x = radius_y = req` and `radius_z = req*(1 - f)`,
+    fitting a 5-parameter OBLATE figure: a two-dimensional slice of the model's three-radius
+    shape space, with the symmetry axis pinned to the spin axis. A tidally distorted star —
+    the usual reason a giant is non-circular — is elongated TOWARDS ITS COMPANION, i.e.
+    `radius_x > radius_y ≈ radius_z`, which that slice cannot represent at any parameter value.
+    Asked for such a figure it drives `f` to its bound and reports a shape that is not the
+    star's. The old `req0`, `f0`, `req_bounds` and `f_bounds` keywords are refused rather than
+    silently reinterpreted.
+
+!!! note "The spin phase is now load-bearing"
+    An oblate figure is axisymmetric, so `rotation_period` and the epoch times did not affect
+    it and the old code hardcoded `rotation_period = 1.0`. A triaxial figure presents a
+    DIFFERENT projected ellipse at every rotation phase — which is exactly what makes the three
+    radii separately identifiable — so the period is required whenever the epochs differ, and
+    there is no default. `t0` sets the phase zero (`rotate_star` uses `ψ = 2π(t - t0)/P` and the
+    schema has no phase-offset parameter). For a synchronised binary, set `t0` to the
+    conjunction epoch so that phase 0 is the companion-facing orientation; otherwise the fitted
+    axes are labelled against an arbitrary zero and only their RATIOS are meaningful.
+
+    From a single rotation phase the projected outline is one ellipse — three numbers — against
+    five shape-and-orientation parameters, so the radii are NOT separately identifiable. The
+    fit still runs (the best-fitting projected ellipse is well defined) and warns.
 
 !!! note "Uniform surface on purpose"
     The surface is held uniform (`uniform = true` in [`parametric_chi2`](@ref)), NOT
@@ -352,106 +375,216 @@ interferometry is almost never justified.
     with an unverified `rpole = radius_x` and a `# to check` in the source — so folding it
     into a shape fit would attribute its errors to the shape. If you want a physical
     gravity-darkened oblate star, use `surface_type = 2` (rapid rotator) and `fit_parametric`,
-    which solves the Roche problem properly.
+    which solves the Roche problem properly; for a tidally distorted star in a close binary the
+    physically correct figure is `surface_type = 3` (Roche lobe), which has ONE shape parameter
+    rather than three free radii.
 
 !!! warning "Degeneracies"
-    Pole-on (`inc → 0`) the projection is circular whatever the flattening, so `f`, `inc` and
-    `PA` all become unidentifiable together; and a nearly circular star leaves `PA` free. Check
-    the fitted `f` against its uncertainty before believing an orientation.
+    Pole-on (`inc → 0`) the projection is circular whatever the shape, so the radii, `inc` and
+    `PA` become jointly unidentifiable; and a nearly spherical star leaves `PA` free. `inc` is
+    bounded to [0°, 90°] and `PA` to [0°, 180°] because a figure at `180° − inc` and at
+    `PA + 180°` are all but indistinguishable — all but, rather than exactly, because for a
+    triaxial body flipping the inclination reverses the direction the long axis sweeps with
+    phase, which a long enough phase baseline can in principle tell apart. Check every fitted
+    radius against its uncertainty before believing an orientation.
 
-Same `weights = [1, 1, 0]` default as [`fit_sphere_ld`](@ref), and for the same reason: a
-uniform ellipsoid is still centrosymmetric in projection, so it predicts closure phases of
-0° or 180° only.
+`restarts` (default 6) sweeps the starting orientation and keeps the best χ², because this
+objective has several basins and the bad ones look converged — see the comment at the optimiser
+for the ζ And measurement that sets the default. Pass `restarts = 1` to reproduce a single run
+from `inc0`/`pa0`.
+
+A uniform ellipsoid is still centrosymmetric in projection, so it predicts closure phases of
+0° or 180° only — hence the same `weights = [1, 1, 0]` default as [`fit_sphere_ld`](@ref). On a
+spotted star the T3φ residual is the spot signal, and it is usually far larger than the shape
+signal: ζ And's figure is 6 % distorted (0.14 mas, a third of a resolution element at CHARA/H)
+against a ~20 % surface brightness contrast. A uniform-surface shape fit on such a star is
+driven by the spots, which is an argument for a joint model + imaging fit rather than for
+tightening the bounds.
 """
 function fit_ellipsoid_ld(data, tessels;
                           tepochs = zeros(length(data)),
                           ldtype::Int = 3, tpole::Real = 5000.0,
-                          req0 = nothing, f0::Real = 0.02, inc0 = nothing, pa0::Real = 45.0,
+                          r0 = nothing, inc0 = nothing, pa0::Real = 45.0,
                           ld0 = nothing, seed_from_sphere::Bool = true,
-                          req_bounds = (0.05, 20.0), f_bounds = (0.0, 0.6),
+                          rotation_period = nothing, t0::Real = 0.0,
+                          r_bounds = (0.05, 20.0),
                           inc_bounds = (0.0, 90.0), pa_bounds = (0.0, 180.0),
                           ld_bounds = ldtype == 3 ? (0.0, 4.0) : (0.0, 1.0),
                           weights = [1.0, 1.0, 0.0],
                           method::Symbol = :neldermead,
                           algorithm::Symbol = :LN_NELDERMEAD,
-                          maxeval::Int = 4000, xtol_rel::Real = 1e-6, ftol_rel::Real = 1e-8,
+                          restarts::Int = 6,
+                          maxeval::Int = 6000, xtol_rel::Real = 1e-6, ftol_rel::Real = 1e-8,
                           min_num_live_points::Int = 400, use_stepsampler::Bool = true,
                           # TRUE — see the note on `fit_sphere_ld`. Nested threading is
                           # safe since `:t3`'s scratch moved into a pool; before that it was
                           # `false` because the sampler's concurrent likelihood calls shared
                           # one plan's grids.
                           threaded::Bool = true,
-                          verbose::Bool = false)
+                          verbose::Bool = false,
+                          # REFUSED, not reinterpreted: these named the oblate parameterization
+                          # this function used to impose. Accepting them silently would fit a
+                          # different model than the caller's script says it fits.
+                          req0 = nothing, f0 = nothing, req_bounds = nothing,
+                          f_bounds = nothing)
+    for (k, v) in (("req0", req0), ("f0", f0), ("req_bounds", req_bounds),
+                   ("f_bounds", f_bounds))
+        v === nothing || error(
+            "fit_ellipsoid_ld: `$k` belonged to the oblate parameterization (radius_x = " *
+            "radius_y = req, radius_z = req*(1-f)) that this function no longer imposes. It " *
+            "now fits the model's own three semi-axes. Use `r0` (a scalar or a 3-tuple of " *
+            "starting radii in mas) and `r_bounds`, which apply to all three.")
+    end
     data isa AbstractVector || (data = [data])
+    ts = collect(float.(tepochs)) .- float(t0)
+    # THE PERIOD HAS NO DEFAULT when it matters. A triaxial figure's sky projection depends on
+    # the rotation phase, so a wrong period is a wrong model rather than a wrong scale — and
+    # the old hardcoded `rotation_period = 1.0` would silently turn a 20-day baseline into 20
+    # full turns. When every epoch is the same instant the phase cannot matter, and only then
+    # is a placeholder safe.
+    P = rotation_period
+    if P === nothing
+        if length(unique(ts)) <= 1
+            P = 1.0
+        else
+            error("fit_ellipsoid_ld: `rotation_period` is required for multi-epoch data. A " *
+                  "triaxial figure presents a different projected ellipse at every rotation " *
+                  "phase — that is what identifies the three radii — so the period sets the " *
+                  "model, not just a time unit. Pass the photometric or orbital period in the " *
+                  "same units as `tepochs` (days), and `t0` for the phase zero.")
+        end
+    end
+    P > 0 || error("fit_ellipsoid_ld: `rotation_period` must be positive, got $P")
+    phases = sort(unique(round.(mod.(ts ./ P, 1.0); digits = 6)))
+    if length(phases) <= 1
+        @warn "fit_ellipsoid_ld: all epochs fall at the same rotation phase, so the data " *
+              "constrain ONE projected ellipse — three numbers against five shape and " *
+              "orientation parameters. The returned radii are one point on a degenerate " *
+              "surface, not a measurement of the figure." phase = only(phases)
+    end
     # Seed from the SPHERE fit by default. Starting cold, Nelder-Mead walks into the pole-on
-    # corner (inc → 0/180°, where the projection is circular and the flattening is
-    # unidentifiable) and stalls with parameters pinned at bounds and a χ² WORSE than the
-    # nested sphere — which is impossible for a converged fit, since the sphere is the f = 0
-    # special case. Seeding puts the simplex in the right basin.
+    # corner (inc → 0/180°, where the projection is circular and the shape is unidentifiable)
+    # and stalls with parameters pinned at bounds and a χ² WORSE than the nested sphere —
+    # which is impossible for a converged fit, since the sphere is the equal-radii special
+    # case. Seeding puts the simplex in the right basin.
     chi2_sphere = Inf
-    if seed_from_sphere && (req0 === nothing || ld0 === nothing)
+    if seed_from_sphere && (r0 === nothing || ld0 === nothing)
         sph = fit_sphere_ld(data, tessels; tepochs = tepochs, ldtype = ldtype, tpole = tpole,
                             weights = weights, algorithm = algorithm)
-        req0 === nothing && (req0 = sph.radius)
-        ld0  === nothing && (ld0  = sph.ld1)
+        r0  === nothing && (r0  = sph.radius)
+        ld0 === nothing && (ld0 = sph.ld1)
         chi2_sphere = sph.chi2
     end
-    if req0 === nothing
+    if r0 === nothing
         B = sqrt.(data[1].uv[1,:].^2 .+ data[1].uv[2,:].^2)
-        req0 = clamp(0.5 * 206264806.2 / (2 * maximum(B)), req_bounds[1]*2, req_bounds[2]/2)
+        r0 = clamp(0.5 * 206264806.2 / (2 * maximum(B)), r_bounds[1]*2, r_bounds[2]/2)
     end
+    # A SCALAR START IS BROKEN DELIBERATELY. At exactly equal radii the body is a sphere, which
+    # has no orientation at all: `inc` and `PA` sit on a flat direction and a derivative-free
+    # simplex has nothing to descend. 2 % is far below any shape these data could confuse it
+    # with and far above the mesh's own asphericity.
+    rx0, ry0, rz0 = r0 isa Number ? (1.02*r0, float(r0), 0.98*r0) : float.(Tuple(r0))
     ld0 === nothing && (ld0 = ldtype == 3 ? 1.0 : 0.3)
-    # Two exact two-fold degeneracies removed by the bounds above rather than left for the
-    # optimiser to wander through: an oblate spheroid at inclination i looks identical at
-    # 180° − i, and at position angle PA + 180°.
     inc0 === nothing && (inc0 = 60.0)
-    mk(req, fl, inc, pa, l1) = (surface_type = 1, radius_x = req, radius_y = req,
-                                radius_z = req*(1 - fl), tpole = tpole, ldtype = ldtype,
-                                ld1 = l1, ld2 = 0.0, beta = 0.25,
-                                inclination = inc, position_angle = pa, rotation_period = 1.0)
+    mk(rx, ry, rz, inc, pa, l1) = (surface_type = 1, radius_x = rx, radius_y = ry,
+                                   radius_z = rz, tpole = tpole, ldtype = ldtype,
+                                   ld1 = l1, ld2 = 0.0, beta = 0.25,
+                                   inclination = inc, position_angle = pa,
+                                   rotation_period = P)
     nd = sum(d.nv2 + d.nt3amp + d.nt3phi for d in data)
     obj(θ) = begin
-        c = parametric_chi2(mk(θ...), tessels, data, tepochs; weights = weights, uniform = true)
-        verbose && @info "fit_ellipsoid_ld" req=θ[1] f=θ[2] inc=θ[3] PA=θ[4] ld1=θ[5] chi2=c
+        c = parametric_chi2(mk(θ...), tessels, data, ts; weights = weights, uniform = true)
+        verbose && @info "fit_ellipsoid_ld" rx=θ[1] ry=θ[2] rz=θ[3] inc=θ[4] PA=θ[5] ld1=θ[6] chi2=c
         isfinite(c) ? c : 1e30
     end
-    lo5 = [req_bounds[1], f_bounds[1], inc_bounds[1], pa_bounds[1], ld_bounds[1]]
-    hi5 = [req_bounds[2], f_bounds[2], inc_bounds[2], pa_bounds[2], ld_bounds[2]]
+    lo6 = [r_bounds[1], r_bounds[1], r_bounds[1], inc_bounds[1], pa_bounds[1], ld_bounds[1]]
+    hi6 = [r_bounds[2], r_bounds[2], r_bounds[2], inc_bounds[2], pa_bounds[2], ld_bounds[2]]
+    names6 = ["radius_x", "radius_y", "radius_z", "inc", "PA", "ld1"]
+    # The shape numbers worth reading, as opposed to the three radii separately: how elongated
+    # the equator is (tidal) and how flattened the figure is pole to equator (rotational).
+    # Reported alongside the radii because those two have different physical causes and the
+    # three radii on their own do not separate them.
+    shape(x) = (equatorial_elongation = x[1]/x[2],
+                polar_flattening = 1 - 2x[3]/(x[1] + x[2]),
+                mean_radius = cbrt(x[1]*x[2]*x[3]))
     if method in (:ultranest, :nautilus)
-        # 5 parameters with two near-degenerate directions: the region sampler struggles, so
-        # the slice step sampler is the default here (unlike the 2-parameter sphere). Nautilus
-        # has no equivalent knob — its neural bounds are what it uses instead — so the keyword
-        # is simply not passed on to it.
-        un = _fit_nested(method, θ -> obj(θ), ["req","flattening","inc","PA","ld1"], lo5, hi5;
+        # 6 parameters with several near-degenerate directions: the region sampler struggles,
+        # so the slice step sampler is the default here (unlike the 2-parameter sphere).
+        # Nautilus has no equivalent knob — its neural bounds are what it uses instead — so the
+        # keyword is simply not passed on to it.
+        un = _fit_nested(method, θ -> obj(θ), names6, lo6, hi6;
                          min_num_live_points = min_num_live_points, threaded = threaded,
                          use_stepsampler = use_stepsampler, verb = verbose)
         m = un.median
-        return (req = m[1], flattening = m[2], inclination = m[3], position_angle = m[4],
-                ld1 = m[5], rpol = m[1]*(1-m[2]), chi2 = obj(m), chi2_per_datum = obj(m)/nd,
-                chi2_sphere = chi2_sphere, params = mk(m...), logz = un.logz,
-                logzerr = un.logzerr, samples = un.samples, q16 = un.q16, q84 = un.q84,
-                status = method)
+        return (radius_x = m[1], radius_y = m[2], radius_z = m[3], inclination = m[4],
+                position_angle = m[5], ld1 = m[6], shape(m)...,
+                rotation_period = P, phases = phases,
+                chi2 = obj(m), chi2_per_datum = obj(m)/nd, chi2_sphere = chi2_sphere,
+                params = mk(m...), logz = un.logz, logzerr = un.logzerr,
+                samples = un.samples, q16 = un.q16, q84 = un.q84, status = method)
     end
     method === :neldermead ||
         error("fit_ellipsoid_ld: method must be :neldermead, :ultranest or :nautilus")
-    opt = NLopt.Opt(algorithm, 5)
-    opt.lower_bounds  = lo5
-    opt.upper_bounds  = hi5
-    opt.min_objective = (θ, grad) -> obj(θ)
-    opt.maxeval       = maxeval
-    opt.xtol_rel      = xtol_rel
-    opt.ftol_rel      = ftol_rel
-    opt.initial_step  = [0.1*req0, 0.05, 10.0, 20.0, 0.2]
-    fopt, xopt, status = NLopt.optimize(opt, [req0, f0, inc0, pa0, ld0])
+    # RESTARTS ARE NOT A LUXURY HERE, and the measurement is on real data: ζ And at
+    # HEALPix 3, twelve starts over `inc0` x `pa0`, gave THREE basins — the best at
+    # chi2/n = 3.626 (equatorial/polar = 1.070, matching the published 1.06), a pole-on corner
+    # at 4.325 with `radius_z` pinned to its ceiling, and an edge-on one at 5.561. Four of the
+    # twelve, including the default start, landed in the pole-on corner and reported a figure
+    # 0.41 where the truth is 1.06. A single Nelder-Mead run on this objective is a coin toss,
+    # and the bad basin LOOKS converged — hence the deterministic sweep, and hence the
+    # warnings above, which fire on exactly those corners.
+    #
+    # The sweep is over orientation only. The radii and `ld1` are seeded from the sphere, which
+    # is a good start for all of them; it is `inc`/`PA` that select the basin.
+    incs = restarts <= 1 ? [inc0] :
+           collect(range(inc_bounds[1] + 0.2*(inc_bounds[2]-inc_bounds[1]),
+                         inc_bounds[1] + 0.8*(inc_bounds[2]-inc_bounds[1]),
+                         length = max(2, round(Int, sqrt(restarts)))))
+    pas  = restarts <= 1 ? [pa0] :
+           collect(range(pa_bounds[1], pa_bounds[2],
+                         length = max(2, cld(restarts, length(incs))) + 1))[1:end-1]
+    fopt = Inf; xopt = [rx0, ry0, rz0, inc0, pa0, ld0]; status = :none
+    for i0 in incs, p0 in pas
+        opt = NLopt.Opt(algorithm, 6)
+        opt.lower_bounds  = lo6
+        opt.upper_bounds  = hi6
+        opt.min_objective = (θ, grad) -> obj(θ)
+        opt.maxeval       = maxeval
+        opt.xtol_rel      = xtol_rel
+        opt.ftol_rel      = ftol_rel
+        opt.initial_step  = [0.1*rx0, 0.1*ry0, 0.1*rz0, 10.0, 20.0, 0.2]
+        f, x, st = NLopt.optimize(opt, [rx0, ry0, rz0, clamp(i0, inc_bounds...),
+                                        clamp(p0, pa_bounds...), ld0])
+        verbose && @info "fit_ellipsoid_ld restart" inc0=i0 pa0=p0 chi2=f
+        f < fopt && ((fopt, xopt, status) = (f, x, st))
+    end
     # The sphere is nested inside this model, so a converged ellipsoid can never fit worse.
     # If it does, the optimiser stalled — say so instead of returning a plausible-looking
     # parameter set.
     if isfinite(chi2_sphere) && fopt > chi2_sphere*(1 + 1e-8)
         @warn "fit_ellipsoid_ld did not converge: χ² ($(fopt)) exceeds the nested sphere fit " *
               "($(chi2_sphere)). Returned parameters are unreliable — check for values pinned " *
-              "at bounds (inc, PA and flattening are jointly unidentifiable pole-on)." xopt
+              "at bounds (the radii, inc and PA are jointly unidentifiable pole-on)." xopt
     end
-    return (req = xopt[1], flattening = xopt[2], inclination = xopt[3], position_angle = xopt[4],
-            ld1 = xopt[5], rpol = xopt[1]*(1-xopt[2]), chi2 = fopt, chi2_per_datum = fopt/nd,
-            chi2_sphere = chi2_sphere, params = mk(xopt...), status = status)
+    # AT-BOUND, MEASURED AGAINST THE RANGE, not multiplicatively. `x <= l*(1 + 1e-6)` can
+    # never fire on a bound of 0 — which is `inc`'s and `PA`'s — and `x >= h*(1 - 1e-6)` missed
+    # a radius sitting at 99.94 % of its ceiling on real data. A fraction of the interval
+    # catches both.
+    atbound = [n for (n, x, l, h) in zip(names6, xopt, lo6, hi6)
+               if x <= l + 1e-3*(h - l) || x >= h - 1e-3*(h - l)]
+    isempty(atbound) || @warn "fit_ellipsoid_ld: parameters pinned at a bound — the figure " *
+        "the data want is outside the box, or outside this model." atbound
+    # POLE-ON IS THE DEGENERATE CORNER and it is reached long before `inc` hits zero: the
+    # projected outline of ANY ellipsoid is circular at inc = 0, so the radii stop being
+    # identifiable smoothly as inc falls. A fit that walks here has usually found a way to
+    # absorb something that is not shape — surface structure, most often — rather than a
+    # nearly pole-on star.
+    xopt[4] < 15.0 && @warn "fit_ellipsoid_ld: inclination fitted to $(round(xopt[4], digits=2))°, " *
+        "where the projection is nearly circular and the three radii are weakly identifiable. " *
+        "Treat the figure as unmeasured unless an independent inclination says otherwise."
+    return (radius_x = xopt[1], radius_y = xopt[2], radius_z = xopt[3], inclination = xopt[4],
+            position_angle = xopt[5], ld1 = xopt[6], shape(xopt)...,
+            rotation_period = P, phases = phases,
+            chi2 = fopt, chi2_per_datum = fopt/nd, chi2_sphere = chi2_sphere,
+            params = mk(xopt...), status = status)
 end

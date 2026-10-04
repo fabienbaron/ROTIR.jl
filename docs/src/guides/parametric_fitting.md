@@ -26,7 +26,7 @@ comparison.
 |---|---|---|
 | [`parametric_chi2`](@ref) | any `surface_type` | none — evaluates χ² at fixed parameters |
 | [`fit_sphere_ld`](@ref) | round star, uniform surface | `radius`, `ld1` (+`ld2`) |
-| [`fit_ellipsoid_ld`](@ref) | oblate spheroid, uniform surface | `req`, flattening, `inc`, `PA`, `ld1` |
+| [`fit_ellipsoid_ld`](@ref) | triaxial ellipsoid, uniform surface | `radius_x`, `radius_y`, `radius_z`, `inc`, `PA`, `ld1` |
 
 Both fitters default to NLopt's Nelder–Mead (`:LN_NELDERMEAD`) — derivative-free and
 bound-constrained, which is the right trade at two to five parameters where the χ² is smooth
@@ -103,43 +103,68 @@ The discretisation-induced χ² is negligible at every resolution (rms `ΔV² = 
 nside 3 against typical error bars of `2e-3`). nside 3 is adequate for a size estimate;
 use 4–5 if the limb-darkening coefficient itself is the measurement.
 
-## Fitting an oblate star
+## Fitting a non-spherical star
 
 ```julia
-fit = fit_ellipsoid_ld([data], tessels; ldtype = 3, tepochs = [0.0])
-fit.req, fit.rpol, fit.flattening, fit.inclination, fit.position_angle, fit.ld1
-fit.chi2, fit.chi2_sphere     # ALWAYS compare these two — see below
+fit = fit_ellipsoid_ld(data, tessels; tepochs = ts, rotation_period = 17.769426, ldtype = 3)
+fit.radius_x, fit.radius_y, fit.radius_z, fit.inclination, fit.position_angle, fit.ld1
+fit.equatorial_elongation, fit.polar_flattening      # the two shape numbers worth reading
+fit.chi2, fit.chi2_sphere                            # ALWAYS compare these two — see below
 ```
 
-On RW Cep this returns `req = 1.504 mas`, `f = 0.047`, `inc = 87.9°`, `PA = 0°`,
-`ld1 = 1.615`, at `χ²/n = 4.397` against the sphere's `4.820`. Both parameters are genuinely
-constrained — scanning them at the optimum gives
+The free parameters are the model's own three semi-axes. This matters more than it sounds:
+until 2026-10-03 this function imposed `radius_x = radius_y` and fitted an **oblate** figure,
+which cannot represent a tidally distorted star — elongated *towards its companion*, so
+`radius_x > radius_y ≈ radius_z` — at any parameter value. Asked for one it drives the shape
+to its bound.
 
-| PA | 0° | 40° | 80° | 120° | 160° | 180° |
-|---|---|---|---|---|---|---|
-| χ²/n | **4.397** | 4.954 | 5.501 | 5.879 | 4.431 | **4.397** |
+The two reported shape numbers separate the two physical causes: `equatorial_elongation`
+= `radius_x/radius_y` is tidal, `polar_flattening` = `1 − 2·radius_z/(radius_x+radius_y)` is
+rotational.
 
-| f | 0.000 | 0.020 | 0.047 | 0.080 | 0.120 |
-|---|---|---|---|---|---|
-| χ²/n | 5.128 | 4.695 | **4.397** | 5.014 | 8.701 |
+**Worked example, ζ And** (six MIRC-X epochs over 1.13 rotations, `P = 17.769426 d`):
 
-(PA = 0° and 180° agree exactly, as they must.)
+| | nside 3 | nside 2 |
+|---|---|---|
+| `radius_x`, `radius_y`, `radius_z` [mas] | 1.3275, 1.2663, 1.2120 | 1.3364, 1.2728, 1.2237 |
+| equatorial elongation | 1.048 | 1.050 |
+| polar flattening | 0.066 | 0.062 |
+| equatorial/polar | **1.070** | **1.066** |
+| `inc`, `PA` [deg] | 64.7, 122.8 | 68.0, 123.7 |
+| χ²/n (sphere) | 3.63 (9.13) | 3.60 (9.26) |
 
-!!! warning "A better χ² is not evidence of oblateness"
-    RW Cep is a slow-rotating supergiant with no reason to be measurably oblate, yet the
-    ellipsoid improves χ² by Δχ² ≈ 1200. That improvement is real but its *interpretation*
-    is not: at `χ²/n = 4.4` the model is still badly wrong, and the three extra parameters
-    are free to absorb model error. With T3φ excluded the fit sees only V² and T3amp, and an
-    asymmetric brightness distribution readily mimics an elongated disc in those. Treat a
-    nonzero flattening here as "the spots are not being modelled" rather than "the star is
-    oblate" — and let the imaging step reconstruct them instead.
+against the published equatorial-to-polar ratio of **1.06**. The 0.4 % difference between the
+two meshes is the discretisation error on this quantity.
+
+!!! warning "Restart, or you will get a different answer"
+    This objective has several basins and the wrong ones look converged. Twelve starts on ζ And
+    at nside 3 gave three: the physical one above at `χ²/n = 3.626`, a **pole-on** corner at
+    4.325 with `radius_z` pinned to its ceiling and `inc = 9°`, and an edge-on one at 5.561.
+    Four of the twelve — including the default start — landed in the pole-on corner and
+    reported an equatorial/polar ratio of 0.41 where the answer is 1.07. Hence `restarts = 6`
+    by default, and hence the warnings the function emits when a parameter sits at a bound or
+    the inclination falls below 15°.
+
+!!! warning "A better χ² is not evidence of a shape"
+    The ellipsoid improves ζ And's χ²/n from 9.13 to 3.63, but at `χ²/n = 3.6` the model is
+    still wrong and three extra parameters are free to absorb model error. With T3φ excluded
+    the fit sees only V² and T3amp, where an asymmetric brightness distribution readily mimics
+    an elongated disc. The size of that effect is measurable: synthetic data from a *known*
+    figure carrying three spots at the 20 % contrast of ζ And's published map returns the
+    equatorial/polar ratio **1 % too large** (1.070 against a truth of 1.060). So a shape at
+    the few-percent level is believable here and one at the tens-of-percent level is the spots
+    talking — and either way the imaging step, not a bound, is what should absorb them.
 
     Parameter significance computed from Δχ² is meaningless whenever `χ²/n ≫ 1`, because the
     error bars no longer describe the residuals.
 
-The geometry sets `radius_x = radius_y = req` and `radius_z = req·(1−f)`, i.e. rotational
-symmetry about the polar axis. `surface_type = 1` permits three independent semi-axes, but
-fitting a triaxial ellipsoid to interferometry is rarely justified.
+!!! note "The rotation phase is now load-bearing"
+    An oblate figure is axisymmetric, so the epoch times did not affect it. A triaxial one
+    presents a different projected ellipse at every rotation phase — which is exactly what
+    makes the three radii separately identifiable — so `rotation_period` is **required** for
+    multi-epoch data and has no default, and `t0` sets the phase zero. From a single phase the
+    projected outline is one ellipse, three numbers against five shape and orientation
+    parameters; the fit runs and warns, and the radii are one point on a degenerate surface.
 
 !!! note "Uniform surface on purpose"
     `fit_ellipsoid_ld` holds the surface uniform rather than calling
@@ -149,17 +174,20 @@ fitting a triaxial ellipsoid to interferometry is rarely justified.
     gravity-darkened oblate star use `surface_type = 2` and `fit_parametric`.
 
 !!! warning "Degeneracies, and the convergence guard"
-    Pole-on (`inc → 0`) the projection is circular whatever the flattening, so `f`, `inc` and
+    Pole-on (`inc → 0`) the projection is circular whatever the shape, so the radii, `inc` and
     `PA` become jointly unidentifiable. Started cold, Nelder-Mead walks straight into that
-    corner: an early version of this fitter returned `f = 0.354` with `inc` and `PA` pinned
-    at their bounds and a χ² *worse* than the sphere.
+    corner: an early version of this fitter returned a flattening of 0.354 with `inc` and `PA`
+    pinned at their bounds and a χ² *worse* than the sphere.
 
-    Three things prevent it now. `req0`/`ld0` are seeded from [`fit_sphere_ld`](@ref) by
-    default (`seed_from_sphere = true`); the bounds are `inc ∈ [0°, 90°]` and
-    `PA ∈ [0°, 180°)`, removing the exact two-fold degeneracies `i ↔ 180° − i` and
-    `PA ↔ PA + 180°`; and because the sphere is the `f = 0` special case, a converged
-    ellipsoid can never fit worse — if it does, the function **warns** and returns
-    `chi2_sphere` so you can check rather than receive a plausible-looking parameter set.
+    Four things prevent it now. `r0`/`ld0` are seeded from [`fit_sphere_ld`](@ref) by default
+    (`seed_from_sphere = true`); `restarts` sweeps the starting orientation and keeps the best
+    χ²; the bounds are `inc ∈ [0°, 90°]` and `PA ∈ [0°, 180°)`, removing the two-fold
+    degeneracies `i ↔ 180° − i` and `PA ↔ PA + 180°` (all but exact for a triaxial figure,
+    since flipping the inclination reverses the direction the long axis sweeps with phase); and
+    because the sphere is the equal-radii special case, a converged ellipsoid can never fit
+    worse — if it does, the function **warns** and returns `chi2_sphere` so you can check
+    rather than receive a plausible-looking parameter set. It also warns when any parameter
+    lands within 0.1 % of a bound, or when `inc` falls below 15°.
 
 ## Choosing the optimiser: `method`
 
@@ -229,7 +257,7 @@ absorb much of the limb signal, leaving the coefficient far less determined than
 χ² minimum suggests. If the width is the result you care about, the optimiser cannot give it
 to you.
 
-**You want to compare models.** `fit_ellipsoid_ld` nests `fit_sphere_ld` at `f = 0`, so Δχ²
+**You want to compare models.** `fit_ellipsoid_ld` nests `fit_sphere_ld` at equal radii, so Δχ²
 looks like a clean test — but Δχ² only means what you think when `χ²/n ≈ 1`. On RW Cep it is
 4.4, the error bars do not describe the residuals, and an apparently decisive Δχ² ≈ 1200 is
 not evidence of oblateness. `log(Z)` from both fits is the honest comparison, because it
