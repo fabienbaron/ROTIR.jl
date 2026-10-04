@@ -28,7 +28,16 @@
 using ROTIR, Printf, DelimitedFiles, Statistics
 
 const PROT   = 17.769426
-const PHASE0 = 0.511          # the published map's phase zero, from zetand_published_map.jl
+# THE MAP'S PHASE ZERO, AND IT IS HALF A PERIOD FROM THE PUBLISHED T0. Roettenbacher et al.
+# give a time of nodal passage T0 = MJD 49992.281, and our first epoch sits at phase 0.9923 of
+# it — i.e. essentially AT it. Using that directly is catastrophic: chi2/n = 19.36 against 2.44
+# half a period away. So the map's longitude zero and the nodal passage differ by half a turn,
+# which is a convention difference and not an error in either.
+#
+# 0.5077 is "half a period after their T0" expressed in this script's frame. An earlier value
+# of 0.511 came from fitting the phase WITHOUT closure phases; with T3phi in, the minimum is
+# sharp enough (within +0.1 in chi2/n over 0.010 in phase) that the difference matters.
+const PHASE0 = 0.5077
 const ZET    = joinpath(pkgdir(ROTIR), "demos", "zetAnd")
 
 # the figure from demos/zetand_triaxial.jl, held FIXED here
