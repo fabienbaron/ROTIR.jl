@@ -61,11 +61,22 @@ def main():
     for i in range(1, n+1):
         rows = F[F[:, 0] == i]
         corners = rows[rows[:, 1] <= 4]
-        lon, lat = corners[:, 2].copy(), corners[:, 3]
-        branches = ([np.where(lon < 0, lon+360, lon), np.where(lon > 0, lon-360, lon)]
-                    if lon.max() - lon.min() > 180 else [lon])
+        ctr_lon = rows[rows[:, 1] == 5][0, 2]
+        lat = corners[:, 3]
+        # UNWRAP AGAINST THE FACET'S OWN CENTRE, not against the corner spread. A facet at the
+        # +-180 deg seam has corners on both branches, and testing `max - min > 180` leaves the
+        # ones whose centre is near the seam drawn as a band straight across the plot. Pulling
+        # every corner onto the branch nearest its centre makes the polygon compact, and the
+        # part that falls outside +-180 is drawn again on the opposite edge, where it belongs.
+        lon = ctr_lon + (corners[:, 2] - ctr_lon + 180) % 360 - 180
+        branches = [lon]
+        if lon.min() < -180: branches.append(lon + 360)
+        if lon.max() >  180: branches.append(lon - 360)
         for L in branches:
-            X, Y = project(np.clip(L, -180, 180), lat)
+            keep = np.clip(L, -180, 180)
+            if keep.max() - keep.min() > 180:     # still degenerate: skip rather than smear
+                continue
+            X, Y = project(keep, lat)
             draw.polygon([(x*SCALE, y*SCALE) for x, y in zip(X, Y)],
                          outline=(0, 160, 255), width=2)
         c = rows[rows[:, 1] == 5][0]

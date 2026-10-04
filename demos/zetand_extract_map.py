@@ -42,6 +42,7 @@ import subprocess, sys, os
 import numpy as np
 from PIL import Image
 from scipy.optimize import least_squares
+from scipy.spatial import cKDTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PDF  = os.path.join(HERE, "zetAnd", "zetAnd2019A.pdf")
@@ -94,46 +95,50 @@ def main():
           f"aspect {a/b:.4f} (Mollweide 2.0) rms {rms:.2f} px")
     bar  = im[470, 215:622]                   # the colourbar ramp, left = VMIN
     vals = np.linspace(VMIN, VMAX, len(bar))
+
+    # EVERY PIXEL IS ASSIGNED TO A FACET, rather than every facet sampling a patch around its
+    # projected centre. A patch has three failure modes that this does not: it runs off the plot
+    # for a limb facet (and the background inverts to the colourbar MAXIMUM, so those facets came
+    # back white); it cannot straddle the +-180 deg seam, where a facet's pixels are split
+    # between the two edges of the plot; and a facet whose centre lands exactly ON the ellipse
+    # has no patch to speak of. Going the other way, pixel -> facet, all three disappear: a
+    # facet simply collects whichever of its pixels are drawn, wherever they are.
+    ys, xs = np.mgrid[0:im.shape[0], 0:im.shape[1]]
+    xn, yn = (xs - xc)/a, (yc - ys)/b
+    inside = xn**2 + yn**2 < 0.995**2
+    th  = np.arcsin(np.clip(yn[inside], -1, 1))
+    lat = np.degrees(np.arcsin(np.clip((2*th + np.sin(2*th))/np.pi, -1, 1)))
+    lon = np.degrees(np.pi*xn[inside]/np.maximum(np.cos(th), 1e-12))
+    ok  = np.abs(lon) <= 180
+    P   = im[inside][ok]
+
     lonlat = np.loadtxt(lonlat_file)
-    xn, yn = mollweide(lonlat[:, 0], lonlat[:, 1])      # AS PLOTTED — see the docstring
-    px, py = xc + xn*a, yc - yn*b
-    out = np.full(len(px), np.nan)
-    nudged = 0
-    for i, (X, Y) in enumerate(zip(px, py)):
-        # EDGE TESSELS NEED THE ELLIPSE, and this is the one filter that cannot be inferred from
-        # colour. The ramp ends at white, so a BACKGROUND pixel inverts to 0.9977 — the maximum —
-        # at a colour distance of 8.9, well inside the tolerance below, and the grey test spares
-        # it on purpose so that genuinely bright map values survive. A patch straddling the
-        # boundary therefore pulls its tessel to maximum brightness, and the map renders with
-        # white wedges along the limb where the figure is dark red. Masking to the fitted
-        # ellipse is exact and costs nothing.
-        for step in range(8):                            # walk inward if the patch is starved
-            xs = np.clip(np.arange(int(X)-3, int(X)+4), 0, im.shape[1]-1)
-            ys = np.clip(np.arange(int(Y)-3, int(Y)+4), 0, im.shape[0]-1)
-            gx, gy = np.meshgrid(xs, ys)
-            on_disc = (((gx-xc)/a)**2 + ((gy-yc)/b)**2 < 0.995**2).reshape(-1)
-            patch = im[np.ix_(ys, xs)].reshape(-1, 3)
-            d = ((patch[:, None, :] - bar[None, :, :])**2).sum(2)
-            j = d.argmin(1)
-            good = (np.sqrt(d[np.arange(len(patch)), j]) < 25) & on_disc
-            # THE COLOUR FILTER DOES NOT CATCH THE GRATICULE EITHER. The ramp starts at pure
-            # black, so a black gridline pixel sits exactly ON it and inverts to the floor.
-            # Measured: 2.1 % of accepted pixels per tessel are grey on average and 57 % for a
-            # tessel lying along the solid equator, whose median came out at 0.8025 where
-            # purging gives 0.887. Grey is the signature, because the ramp is grey only at its
-            # two endpoints.
-            grey = (patch.max(1) - patch.min(1) < 12) & (patch.sum(1) < 690)
-            keep = good & ~grey
-            keep = keep if keep.sum() >= 5 else good      # all-graticule: take what there is
-            if keep.sum() >= 5:
-                out[i] = np.median(vals[j][keep])         # median too: dotted lines are 1-2 px
-                break
-            # starved: step 2 px towards the centre of the plot and try again
-            nx, ny = xc - X, yc - Y
-            nrm = np.hypot(nx, ny) + 1e-9
-            X += 2*nx/nrm; Y += 2*ny/nrm
-            nudged += 1
-    print(f"edge tessels needing an inward nudge: {nudged} steps")
+    cl, sl = np.cos(np.radians(lonlat[:, 0])), np.sin(np.radians(lonlat[:, 0]))
+    cb, sb = np.cos(np.radians(lonlat[:, 1])), np.sin(np.radians(lonlat[:, 1]))
+    tree = cKDTree(np.column_stack([cb*cl, cb*sl, sb]))
+    clo, slo = np.cos(np.radians(lon[ok])), np.sin(np.radians(lon[ok]))
+    cla, sla = np.cos(np.radians(lat[ok])), np.sin(np.radians(lat[ok]))
+    _, owner = tree.query(np.column_stack([cla*clo, cla*slo, sla]))
+
+    d = ((P[:, None, :] - bar[None, :, :])**2).sum(2)
+    j = d.argmin(1)
+    on_ramp = np.sqrt(d[np.arange(len(P)), j]) < 25
+    # THE COLOUR FILTER DOES NOT CATCH THE GRATICULE. The ramp starts at pure black, so a black
+    # gridline pixel sits exactly ON it and inverts to the floor. Grey is the signature, because
+    # the ramp is grey only at its two endpoints. The median does the rest: the dotted graticule
+    # is 1-2 px wide against a few hundred pixels per facet.
+    grey = (P.max(1) - P.min(1) < 12) & (P.sum(1) < 690)
+    v = vals[j]
+    out = np.full(len(lonlat), np.nan)
+    counts = np.zeros(len(lonlat), dtype=int)
+    for t in range(len(lonlat)):
+        m = (owner == t) & on_ramp & ~grey
+        if m.sum() < 5:
+            m = (owner == t) & on_ramp
+        counts[t] = m.sum()
+        if m.sum() >= 1:
+            out[t] = np.median(v[m])
+    print(f"pixels assigned: {len(P)}; per facet min {counts.min()} median {int(np.median(counts))} max {counts.max()}")
     print(f"sampled {np.isfinite(out).sum()}/{len(out)} tessels, "
           f"range {np.nanmin(out):.4f}..{np.nanmax(out):.4f}, mean {np.nanmean(out):.4f}")
     np.savetxt(OUT, out)
