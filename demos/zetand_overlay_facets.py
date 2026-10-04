@@ -100,6 +100,17 @@ def main():
         box = (max(0, xr.min()-6), max(0, y_eq-70),
                min(im.width, xr.min()+110), min(im.height, y_eq+70))
         return im.crop(box).resize(((box[2]-box[0])*5, (box[3]-box[1])*5), Image.NEAREST)
+    # the full side-by-side, original beside our re-render of the extracted map
+    o = Image.open(os.path.join(ZET, "zetAnd2019A_orig.png")).convert("RGB")
+    u = Image.open(os.path.join(ZET, "zetAnd2019A_map_rotir.png")).convert("RGB")
+    H, pad = 620, 24
+    oi = o.resize((int(o.width*H/o.height), H), Image.LANCZOS)
+    ui = u.resize((int(u.width*H/u.height), H), Image.LANCZOS)
+    cmp_ = Image.new("RGB", (oi.width + ui.width + 3*pad, H + 2*pad), "white")
+    cmp_.paste(oi, (pad, pad)); cmp_.paste(ui, (2*pad + oi.width, pad))
+    out = os.path.join(ZET, "zetAnd2019A_map_compare.png")
+    cmp_.save(out); print("wrote", out)
+
     L = crop_tip(os.path.join(ZET, "zetAnd2019A_orig.png"))
     R = crop_tip(os.path.join(ZET, "zetAnd2019A_map_rotir.png"))
     cv = Image.new("RGB", (L.width + R.width + 30, max(L.height, R.height)), "white")
