@@ -72,9 +72,19 @@
 # 5. ERRORS INFLATED BY 1.65 to reach chi2 ~ 1, so a chi2 computed on the published error bars
 #    must be divided by 1.65^2 = 2.72 before it is compared with theirs.
 #
-# 6. P = 17.769426 d and T0 = MJD 49992.281 (time of nodal passage), both FIXED. The map's
-#    longitude zero is HALF A PERIOD from that T0: at their T0 the map fits at chi2/n = 19.36,
-#    half a period away at 2.44.
+# 6. P = 17.769426 d and T0 = MJD 49992.281 (time of nodal passage, from the ellipsoidal
+#    light curve), both FIXED. THEIR T0 IS THE OPPOSITE NODE to ROTIR's phase zero. Passing
+#    MJD epochs directly with the surface parameter `t0` (see docs/src/guides/conventions.md):
+#
+#        t0 = T0          chi2/n = 19.34
+#        t0 = T0 + P/2    chi2/n =  2.11      <- and a scan of the whole period agrees,
+#                                                finding its optimum at exactly T0 + 0.500 P
+#
+#    So use `t0 = 49992.281 + 17.769426/2` and no hand-tuned phase. A nodal passage is where
+#    the star sits on the line of nodes, i.e. the tidal axis lies across the line of sight —
+#    maximum projected elongation, and a light-curve MAXIMUM for an ellipsoidal variable. That
+#    is the same kind of instant ROTIR's psi = 0 is; the half period is only WHICH node, which
+#    the ephemeris defines and this table measures once.
 #
 # 7. FIGURE, their Table 6, 2026 column: theta_LD = 2.495 +- 0.014 mas, major-to-minor axis
 #    ratio 1.063 +- 0.013, inclination 69.3 +- 6.9 deg, pole PA 124.0 +- 2.9 deg.

@@ -259,7 +259,11 @@ function rotate_star(xyz, star_params, t; T = float(real(eltype(xyz))))
   # quantities and should not be substituted for one another.
   p = convert_params(T, star_params)
   npix = size(xyz,1)
-  compound_rotation = rot_vertex(T(2pi)*t/p.rotation_period, p.inclination*T(pi/180.), p.position_angle*T(pi/180.));
+  # `t0` is the PHASE ZERO, in the epochs' own units. `hasproperty` rather than a required
+  # field: every star_params built before it existed still works, and 0 is the historical
+  # behaviour exactly. See the convention note above for what t = t0 means on the surface.
+  t0 = hasproperty(p, :t0) ? T(p.t0) : zero(T)
+  compound_rotation = rot_vertex(T(2pi)*(t - t0)/p.rotation_period, p.inclination*T(pi/180.), p.position_angle*T(pi/180.));
   return reshape(reshape(xyz,(npix*5,3))*compound_rotation, (npix,5,3));
 end
 

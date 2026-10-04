@@ -98,6 +98,93 @@ This was verified numerically: a spin feature at `(West=1, North=0)` at
 `(North=1, East=0)` at `ν=0` moves to `(North=0, East=1)` at `ν=π/2`.
 Both trace counterclockwise arcs on the standard sky plot.
 
+## Rotation phase and the epoch `t0`
+
+The surface spins at
+
+```math
+\psi = 2\pi\,(t - t_0) / P_\mathrm{rot}
+```
+
+with `t0` and `rotation_period` in the same units as the epochs you pass. `t0` defaults
+to `0`, which is the behaviour ROTIR had before it existed.
+
+### What `ψ = 0` means on the surface
+
+Two facts, both measured from the rotation matrix rather than asserted, and both needed
+before any map can be compared with a published one:
+
+* the **sub-observer longitude is 270°**, and it *decreases* with phase:
+
+  ```math
+  \lambda_\mathrm{sub-obs} = 270° - 360°\,(t - t_0)/P_\mathrm{rot}
+  ```
+
+  where longitude is `atan2(y, x)` of the body-frame tessel centre, in `[0°, 360°)`;
+
+* the **body +x axis lies exactly in the plane of the sky** — its line-of-sight component
+  is `0`. For `surface_type = 1` that axis is `radius_x`, so for a prolate (tidally
+  distorted) figure `ψ = 0` is a **maximum-elongation** phase, not a conjunction.
+
+### Setting `t0` from a published ephemeris
+
+For a tidally locked binary the long axis points at the companion, so the two statements
+above line up with the usual orbital language:
+
+| At `t = t0` | |
+|---|---|
+| long axis | in the plane of the sky |
+| orbital position | **nodal passage** (the star is on the line of nodes) |
+| projected area | maximum |
+| ellipsoidal light curve | **maximum** |
+
+So a published *time of nodal passage* — which is what an ellipsoidal light curve gives you,
+since its maxima are the nodal passages — can be used as `t0` directly, and the map then
+lives in that paper's longitude system.
+
+!!! note "Two nodal passages per orbit"
+    A prolate figure's silhouette repeats every **half** rotation: the long axis is in the
+    plane of the sky at `ψ = 0` *and* at `ψ = 0.5`, and the projected shape cannot tell them
+    apart. What distinguishes them is which *end* of the tidal axis faces the companion, i.e.
+    the ascending versus the descending node. That is settled by the ephemeris's own
+    definition, not by fitting — but if you adopt a `t0` without knowing which node it refers
+    to, expect a half-period ambiguity, and resolve it against the surface map or the radial
+    velocities.
+
+!!! warning "`t0` here is not the orbital `T0`"
+    ROTIR's **orbital** `T0` (`ORBIT_ELEMENTS`, `src/orbits.jl`) is the time of **periastron**
+    passage: the solver uses `M = n·(t − T0)`. A circular-orbit spectroscopic ephemeris has no
+    periastron and quotes a **nodal** passage instead. The two are different quantities and
+    must not be substituted for one another. The surface `t0` documented here is the rotation
+    phase zero and is independent of both.
+
+### Worked example: ζ And
+
+Roettenbacher et al. quote `P = 17.769426 d` and a time of nodal passage
+`T0 = MJD 49992.281`, obtained from the ellipsoidal light curve. Their published map, their
+geometry, and the six 2019 epochs passed as **MJD directly**:
+
+| surface `t0` | χ²/n |
+|---|---|
+| `T0` | 19.34 |
+| `T0 + P/2` | **2.11** |
+| best over a scan of the full period | 2.11, at `T0 + 0.500 P` |
+
+So their ephemeris refers to **the other node**: in ROTIR's convention their `T0` is `ψ = 0.5`,
+not `ψ = 0`. Use
+
+```julia
+t0 = 49992.281 + 17.769426/2        # their T0 is the opposite nodal passage
+```
+
+and pass MJD epochs unshifted. The scan landing on `0.500` to its resolution is the point —
+this is a convention offset, not a fitted phase, and nothing here is tuned to the data.
+
+The half period is the ascending-versus-descending ambiguity of the note above, resolved once
+by measurement and then used as a definition. `demos/zetand_surfing_conventions.jl` prints the
+table; `demos/zetand_joint_map.jl` still *measures* the residual longitude offset between a
+ROTIR reconstruction and theirs rather than assuming it, as an end-to-end check of this chain.
+
 ## Visibility
 
 A surface element is visible when its outward normal has a positive

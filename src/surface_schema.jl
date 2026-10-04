@@ -78,6 +78,14 @@ const _ORIENTATION = [
               "Spin-axis PA on the sky, North through East."),
     ParamSpec(:rotation_period, "Rotation period", "d", 1.0, 1e-6, 1e5, :orientation,
               "Divides the epoch to give the rotation phase; never 0."),
+    ParamSpec(:t0, "Phase epoch T0", "d", 0.0, -Inf, Inf, :orientation,
+              "Zero of the rotation phase, in the same units as the epochs: " *
+              "psi = 2*pi*(t - t0)/rotation_period. At t = t0 the body +x axis lies in the " *
+              "PLANE OF THE SKY and the sub-observer longitude is 270 deg. For a tidally " *
+              "locked binary +x is the tidal axis, so t0 is a nodal passage — the long axis " *
+              "across the line of sight, maximum projected elongation, a light-curve MAXIMUM " *
+              "for an ellipsoidal variable. Set it to a published ephemeris T0 to put a map " *
+              "in that paper's longitude system; 0 reproduces the historical behaviour."),
 ]
 
 const _THERMAL = [
@@ -185,6 +193,7 @@ const _ORIENTATION_SYNC = [
     ParamSpec(:rotation_period, "Rotation period", "d", 10.0, 1e-6, 1e5, :orientation,
               "Tidally locked components have rotation_period == P; that is the default " *
               "here. Setting it away from P models a non-synchronous rotator."),
+    _ORIENTATION[4],          # t0, the phase zero — same meaning as for a single star
 ]
 
 const _FILLOUT = [
