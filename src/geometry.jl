@@ -233,6 +233,30 @@ function rotate_star(xyz, star_params, t; T = float(real(eltype(xyz))))
   #   inc = inclination (tilt spin axis from line of sight)
   #   PA  = position angle (orient projected spin axis on sky, N through E)
   # Spin axis direction: R[3,:] = [-sin(inc)*sin(PA), sin(inc)*cos(PA), cos(inc)]
+  #
+  # WHAT ψ = 0 MEANS ON THE SURFACE, measured rather than asserted, because every comparison
+  # with a published map needs it and it was undocumented:
+  #
+  #   * the SUB-OBSERVER LONGITUDE is 270°, and it DECREASES with phase:
+  #         sub-observer longitude = 270° − 360°·(t / rotation_period)
+  #     (longitude here is atan2(y, x) of the body-frame facet centre, in [0, 360).)
+  #   * the body +x AXIS LIES IN THE PLANE OF THE SKY — its line-of-sight component is exactly
+  #     0. For `surface_type = 1` that axis is `radius_x`, the tidal/long axis of a prolate
+  #     figure, so ψ = 0 is a MAXIMUM-ELONGATION phase, not a conjunction.
+  #
+  # THE HALF-PERIOD AMBIGUITY, AND WHY ADOPTING SOMEONE ELSE'S T0 DOES NOT REMOVE IT. A prolate
+  # figure's silhouette has period ½ in phase: the long axis is side-on at ψ = 0 AND at ψ = 0.5,
+  # and the two are indistinguishable from the projected shape alone. Any phase convention
+  # anchored to the SHAPE therefore inherits a half-period ambiguity, whoever defines it. This
+  # is exactly what `demos/zetand_fig10_match.jl` runs into: its silhouette fit pins the
+  # geometry but leaves a 0.5 ambiguity, and only the facet VALUES break it.
+  #
+  # So the thing that resolves it is not a better T0, it is information that distinguishes the
+  # two ends of the tidal axis — the surface map, or the orbit's radial velocity, which says
+  # which conjunction is which. Note also that ROTIR's ORBITAL `T0` is the time of PERIASTRON
+  # (`src/orbits.jl` solves M = n·(t − T0)), while a circular-orbit SB1 ephemeris like ζ And's
+  # quotes a time of NODAL passage, where periastron is undefined. The two are different
+  # quantities and should not be substituted for one another.
   p = convert_params(T, star_params)
   npix = size(xyz,1)
   compound_rotation = rot_vertex(T(2pi)*t/p.rotation_period, p.inclination*T(pi/180.), p.position_angle*T(pi/180.));

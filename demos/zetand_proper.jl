@@ -19,6 +19,15 @@
 #     the Rayleigh-Jeans limit for a K giant. At 1.605 um and 4400 K, hc/(lambda k T) = 2.04,
 #     so dlnI/dlnT = 2.36 rather than 1.
 #
+# CORRECTED 2026-10-04: 2.36 IS A BLACKBODY, AND THE STAR IS NOT ONE. Kurucz ATLAS9 at
+# logg 2.5 — the gravity their own polar radius 15.0 R_sun and mass 2.6 M_sun imply — gives
+# dlnI/dlnT = **1.51** in H band, because H- opacity falls with temperature and partly cancels
+# the Planck steepening. Everything below inverts a blackbody and therefore OVERSTATES the
+# correction: the spot deficit comes out 273 K where a real atmosphere gives 417 K, against
+# their published 630 K. The right headline is "overstated by about 1.5x", not 2.3x. Their 2016
+# paper says they convert with Kurucz models themselves, which makes the blackbody doubly the
+# wrong reference. `demos/zetand_alpha_audit.jl` reads the same grid.
+#
 # The correction is to invert the real Planck function instead of a proportionality. It needs an
 # absolute anchor, because a flux-normalised visibility fixes only the CONTRAST: the mean
 # temperature has to come from spectroscopy, not from here. `TEFF_ANCHOR` is that input and the

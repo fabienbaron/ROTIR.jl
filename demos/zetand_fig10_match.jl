@@ -46,9 +46,19 @@
 #     panel interiors come out at 4530-4599 K, which is saturation, not physics.
 #   * the conversion is LINEAR in temperature. Against the same map and geometry, I = T gives
 #     r = 0.9909 and rms 13.0 K, Planck at 1.605 um gives 0.9152 and 39.1 K, T^4 gives 0.7795
-#     and 60.7 K. H band is not the Rayleigh-Jeans limit for a K giant -- at 1.605 um and
-#     4372 K, hc/(lambda k T) = 2.05 and dlnI/dlnT = 2.36 -- so their intensity maps and
-#     geometry are unaffected but their TEMPERATURE deficits are too shallow by roughly 2x.
+#     and 60.7 K; the best power law is I ~ T^0.96.
+#
+#     DO NOT READ THE PLANCK ROW AS "THE CORRECT ANSWER". A blackbody has dlnI/dlnT = 2.35 at
+#     4372 K, but a real H-band atmosphere is much shallower — Kurucz ATLAS9 at logg 2.5 gives
+#     **1.51**, since H- opacity falls with temperature and partly cancels the Planck
+#     steepening. Scored the same way, Kurucz gives r = 0.97597 and rms 21.1 K: still behind
+#     linear, but far ahead of a blackbody. Inverting their map through each, their spot
+#     deficits are overstated by **1.51x** against a Kurucz atmosphere (417 K rather than the
+#     published 630 K) and by 2.31x against a blackbody. The honest figure is ~1.5x.
+#
+#     Their own 2016 methods section says they convert WITH Kurucz models ("for [Fe/H]=-0.25
+#     and appropriate log g"), which the measured exponent of 0.96 does not match. That tension
+#     is unresolved; this figure is the only evidence either way, and it says 0.96.
 #
 # The limb-darkening exponent their figure is drawn with is alpha = 0.285 best-fitting, with
 # their fixed 0.269 statistically indistinguishable (r 0.99103 vs 0.99091) and 0.145 excluded

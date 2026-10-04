@@ -20,7 +20,29 @@
 #        I = T^4                   r = 0.7795   rms = 60.7 K
 #
 #    This matters: at 1.605 um and 4372 K, hc/(lambda k T) = 2.05, so H band is NOT the
-#    Rayleigh-Jeans limit for a K giant and dlnI/dlnT = 2.36, not 1. See `zetand_proper.jl`.
+#    Rayleigh-Jeans limit for a K giant. See `zetand_proper.jl`.
+#
+#    CORRECTED 2026-10-04, AND THE CORRECTION IS LARGE. The comparison above uses a BLACKBODY,
+#    for which dlnI/dlnT = 2.35 at 4372 K. A real H-band atmosphere is far shallower: Kurucz
+#    ATLAS9 at logg 2.5 gives **dlnI/dlnT = 1.51**, because H- opacity falls with temperature
+#    and partly cancels the Planck steepening. Repeating the regression against a Kurucz
+#    intensity rather than a blackbody:
+#
+#        I = T       (linear)        r = 0.99091   rms 13.0 K
+#        I = Kurucz(T, logg 2.5)     r = 0.97597   rms 21.1 K
+#        I = Planck(T, 1.605 um)     r = 0.91519   rms 39.1 K
+#
+#    Linear still fits their figure best — the best power law is I ~ T^0.96 — but a blackbody
+#    is the WRONG thing to call the correct answer, and the size of their error shrinks with it.
+#    Reading their map as an intensity and inverting it properly:
+#
+#        through a Kurucz atmosphere : 3955-4516 K, deficit 417 K, overstated x1.51
+#        through a blackbody         : 4098-4463 K, deficit 273 K, overstated x2.31
+#
+#    So the right statement is "overstated by about 1.5", not 2.3. Their 2016 paper also SAYS
+#    they convert with Kurucz models ("for [Fe/H]=-0.25 and appropriate log g"), which the
+#    figure's measured exponent of 0.96 does not match — that tension is unresolved and the
+#    figure is the only evidence either way.
 #
 # 2. LIMB DARKENING alpha = 0.269, FIXED, not fitted — "after R. M. Roettenbacher et al. (2016)",
 #    adopted to avoid "confusion between limb darkening and spots on the limb". Figure 10's own
@@ -29,10 +51,21 @@
 #    consistent with Table 6 — and the data still want ~0.15 in every shape family, including
 #    theirs. See `zetand_fig10_family.jl`: that disagreement is real, not a convention error.
 #
-# 3. NO SPATIAL PRIOR. The imaging is MCMC only: each map is "an average of 50 instances
-#    (24 walkers over 500 iterations)". Positivity, and smoothness that is emergent from
-#    averaging the posterior rather than imposed. See `zetand_ensemble_test.jl` for why
-#    averaging OPTIMISATIONS does not reproduce that.
+# 3. THEY DO HAVE SPATIAL REGULARISERS, and an earlier version of this file said they did not.
+#    Roettenbacher et al. 2016's methods section (arXiv:1709.10107 page 17) states: "In addition
+#    to minimizing the chi2 statistic, we also incorporated priors on each parameter and could
+#    experiment with a variety of imaging regularizers, such at Total Variation (TV) or L2norm
+#    of wavelet coefficients." The 2026 paper's page 2 likewise lists "input stellar parameters,
+#    regularization, and other" constraints as what reduces the degeneracy.
+#
+#    WHAT NEITHER PAPER SAYS is which regulariser produced the published maps, or at what
+#    weight. "Could experiment with" is the strongest claim available. So a comparison can say
+#    that SURFING has TV and a wavelet L2 norm, and cannot say the published images used either.
+#
+#    The imaging is also an ENSEMBLE: each 2026 map is "an average of 50 instances (each running
+#    24 walkers over 500 iterations)", so whatever prior is applied, smoothness also arrives
+#    from averaging the posterior. See `zetand_ensemble_test.jl` for why averaging OPTIMISATIONS
+#    does not reproduce that.
 #
 # 4. 768 SURFACE ELEMENTS, nside_exp = 3, "matching the CHARA Array's spatial resolution".
 #
