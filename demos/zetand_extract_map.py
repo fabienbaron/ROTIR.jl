@@ -98,24 +98,42 @@ def main():
     xn, yn = mollweide(lonlat[:, 0], lonlat[:, 1])      # AS PLOTTED — see the docstring
     px, py = xc + xn*a, yc - yn*b
     out = np.full(len(px), np.nan)
+    nudged = 0
     for i, (X, Y) in enumerate(zip(px, py)):
-        xs = np.clip(np.arange(int(X)-3, int(X)+4), 0, im.shape[1]-1)
-        ys = np.clip(np.arange(int(Y)-3, int(Y)+4), 0, im.shape[0]-1)
-        patch = im[np.ix_(ys, xs)].reshape(-1, 3)
-        d = ((patch[:, None, :] - bar[None, :, :])**2).sum(2)
-        j = d.argmin(1)
-        good = np.sqrt(d[np.arange(len(patch)), j]) < 25
-        # THE COLOUR FILTER DOES NOT CATCH THE GRATICULE. The ramp starts at pure black, so a
-        # black gridline pixel sits exactly ON the ramp and inverts to the colourbar floor.
-        # Measured: 2.1 % of accepted pixels per tessel are grey on average and 57 % for the
-        # worst, which is a tessel lying along the solid equator — its median came out at the
-        # floor, 0.8025, where purging gives 0.887. Grey is the signature, because the ramp is
-        # grey only at its two endpoints.
-        grey = (patch.max(1) - patch.min(1) < 12) & (patch.sum(1) < 690)
-        keep = good & ~grey
-        keep = keep if keep.sum() >= 5 else good          # all-graticule: take what there is
-        if keep.sum() >= 5:
-            out[i] = np.median(vals[j][keep])             # median too: dotted lines are 1-2 px
+        # EDGE TESSELS NEED THE ELLIPSE, and this is the one filter that cannot be inferred from
+        # colour. The ramp ends at white, so a BACKGROUND pixel inverts to 0.9977 — the maximum —
+        # at a colour distance of 8.9, well inside the tolerance below, and the grey test spares
+        # it on purpose so that genuinely bright map values survive. A patch straddling the
+        # boundary therefore pulls its tessel to maximum brightness, and the map renders with
+        # white wedges along the limb where the figure is dark red. Masking to the fitted
+        # ellipse is exact and costs nothing.
+        for step in range(8):                            # walk inward if the patch is starved
+            xs = np.clip(np.arange(int(X)-3, int(X)+4), 0, im.shape[1]-1)
+            ys = np.clip(np.arange(int(Y)-3, int(Y)+4), 0, im.shape[0]-1)
+            gx, gy = np.meshgrid(xs, ys)
+            on_disc = (((gx-xc)/a)**2 + ((gy-yc)/b)**2 < 0.995**2).reshape(-1)
+            patch = im[np.ix_(ys, xs)].reshape(-1, 3)
+            d = ((patch[:, None, :] - bar[None, :, :])**2).sum(2)
+            j = d.argmin(1)
+            good = (np.sqrt(d[np.arange(len(patch)), j]) < 25) & on_disc
+            # THE COLOUR FILTER DOES NOT CATCH THE GRATICULE EITHER. The ramp starts at pure
+            # black, so a black gridline pixel sits exactly ON it and inverts to the floor.
+            # Measured: 2.1 % of accepted pixels per tessel are grey on average and 57 % for a
+            # tessel lying along the solid equator, whose median came out at 0.8025 where
+            # purging gives 0.887. Grey is the signature, because the ramp is grey only at its
+            # two endpoints.
+            grey = (patch.max(1) - patch.min(1) < 12) & (patch.sum(1) < 690)
+            keep = good & ~grey
+            keep = keep if keep.sum() >= 5 else good      # all-graticule: take what there is
+            if keep.sum() >= 5:
+                out[i] = np.median(vals[j][keep])         # median too: dotted lines are 1-2 px
+                break
+            # starved: step 2 px towards the centre of the plot and try again
+            nx, ny = xc - X, yc - Y
+            nrm = np.hypot(nx, ny) + 1e-9
+            X += 2*nx/nrm; Y += 2*ny/nrm
+            nudged += 1
+    print(f"edge tessels needing an inward nudge: {nudged} steps")
     print(f"sampled {np.isfinite(out).sum()}/{len(out)} tessels, "
           f"range {np.nanmin(out):.4f}..{np.nanmax(out):.4f}, mean {np.nanmean(out):.4f}")
     np.savetxt(OUT, out)
