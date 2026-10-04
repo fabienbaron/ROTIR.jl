@@ -64,6 +64,24 @@ function main()
             best/nd, mod(bestθ[1], 1), bestθ[2], bestθ[3], bestθ[4])
     @printf("  improvement over a uniform surface: %.0f %%\n\n", 100*(1 - best/unif))
 
+    # HOW WELL IS THE PHASE PINNED? It is the one number that had to be invented: the figure
+    # carries no longitude labels at all (title, colourbar and its two numbers are the only ink
+    # outside the ellipse), so there is nothing to read off. What is fitted conflates her
+    # longitude origin with her reference epoch — both are a rigid rotation about the spin axis
+    # and enter the model identically, so no data can separate them.
+    @printf("\nphase scan at the fitted orientation (the one number with nothing to read off):\n")
+    phs = 0:0.01:0.99
+    cs = [chi2(x, mkp(bestθ[4], bestθ[2], bestθ[3]), t .- ph*PROT)/nd for ph in phs]
+    i0 = argmin(cs); within = phs[cs .< cs[i0] + 0.1]
+    @printf("  minimum %.3f at phase %.2f | worst %.3f | within +0.1 over %.3f in phase = %.0f deg\n",
+            cs[i0], phs[i0], maximum(cs), maximum(within)-minimum(within),
+            360*(maximum(within)-minimum(within)))
+    @printf("  i.e. phase zero at MJD %.3f, given this inclination, PA and figure.\n",
+            minimum(mjd) + phs[i0]*PROT)
+    @printf("  A %.1fx swing in chi2 with phase is itself evidence the map is real: an\n",
+            maximum(cs)/cs[i0])
+    @printf("  arbitrary pattern would not care where it was pointed.\n\n")
+
     @printf("For reference, the four latitude/longitude parities of the same extraction, each\n")
     @printf("with its own orientation refitted (measured when the convention was chosen):\n")
     @printf("    lat flipped   chi2/n = 2.293   <- the one shipped\n")
