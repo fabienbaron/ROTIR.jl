@@ -157,7 +157,7 @@ between the two meshes is the discretisation error on this quantity.
     the fit sees only V² and T3amp, where an asymmetric brightness distribution readily mimics
     an elongated disc. The size of that effect is measurable: synthetic data from a *known*
     figure carrying three spots at the 20 % contrast of ζ And's reconstructed map returns the
-    equatorial/polar ratio **1 % too large** (1.070 against the 1.060 that was put in — a real
+    equatorial/polar ratio **1.1 % too large** (1.072 against the 1.060 that was put in — a real
     truth, because this star is synthetic). So a shape at
     the few-percent level is believable here and one at the tens-of-percent level is the spots
     talking — and either way the imaging step, not a bound, is what should absorb them.

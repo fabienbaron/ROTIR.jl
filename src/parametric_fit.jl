@@ -396,10 +396,11 @@ from `inc0`/`pa0`.
 A uniform ellipsoid is still centrosymmetric in projection, so it predicts closure phases of
 0° or 180° only — hence the same `weights = [1, 1, 0]` default as [`fit_sphere_ld`](@ref). On a
 spotted star the T3φ residual is the spot signal, and it is usually far larger than the shape
-signal: ζ And's figure is 6 % distorted (0.14 mas, a third of a resolution element at CHARA/H)
-against a ~20 % surface brightness contrast. A uniform-surface shape fit on such a star is
-driven by the spots, which is an argument for a joint model + imaging fit rather than for
-tightening the bounds.
+signal: ζ And is reconstructed as ~6 % distorted (0.14 mas, a third of a resolution element at
+CHARA/H) against a ~20 % surface brightness contrast, and that contrast biases the fitted axis
+ratio by ~1 % (measured on a synthetic spotted star in `demos/zetand_triaxial.jl`). So a shape
+at the few-percent level survives the spots here and one at the tens-of-percent level does not
+— and either way a joint model + imaging fit, not a tighter bound, is what should absorb them.
 """
 function fit_ellipsoid_ld(data, tessels;
                           tepochs = zeros(length(data)),

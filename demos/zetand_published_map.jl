@@ -45,7 +45,15 @@ function main()
     unif = chi2(fill(5000.0, tess.npix), mkp(1.0, 64.7, 122.8), t)
     @printf("uniform surface on the same figure:  chi2/n = %.3f\n\n", unif/nd)
 
+    # THE MAP IS STORED AS PLOTTED. ζ And's visibilities select its EQUATOR-FLIPPED parity,
+    # which is a statement about the model frame, not about the figure: `plot_mollweide` has no
+    # flip in it (colatitude runs pi -> 0 against latitude -90 -> +90, consistently), so the
+    # parity belongs to how ROTIR orients a star relative to how the reconstruction did. The
+    # flip is an exact permutation of HEALPix centres — a bijection and an involution, worst
+    # centre mismatch 0.028 deg — precomputed in `healpix_flip_3.txt`.
     m = vec(readdlm(joinpath(ZETDIR, "zetAnd2019A_map.txt")))
+    flip = vec(Int.(readdlm(joinpath(ZETDIR, "healpix_flip_3.txt"))))
+    m = m[flip]
     x = 5000.0 .* (m ./ maximum(m))
     # The map's orientation is NOT published with it: the phase zero, the inclination and the
     # position angle it was reconstructed at all have to be refitted here, and the overall size
@@ -85,10 +93,10 @@ function main()
 
     @printf("For reference, the four latitude/longitude parities of the same extraction, each\n")
     @printf("with its own orientation refitted (measured when the convention was chosen):\n")
-    @printf("    lat flipped   chi2/n = 2.293   <- the one shipped\n")
-    @printf("    as plotted    chi2/n = 3.892\n")
-    @printf("    lon flipped   chi2/n = 4.367\n")
-    @printf("    both flipped  chi2/n = 4.203\n")
+    @printf("    equator flipped  chi2/n = 1.875   <- the parity used above\n")
+    @printf("    as plotted       chi2/n = 3.892\n")
+    @printf("    lon flipped      chi2/n = 4.367\n")
+    @printf("    both flipped     chi2/n = 4.203\n")
     @printf("Only one parity beats the uniform surface, which is what says the extraction is\n")
     @printf("signal rather than an artefact of inverting a colormap.\n")
 end

@@ -76,7 +76,9 @@ function main()
     truth = (surface_type = 1, radius_x = 1.350, radius_y = 1.310, radius_z = 1.255,
              tpole = 5000.0, ldtype = 3, ld1 = 0.20, ld2 = 0.0, beta = 0.25,
              inclination = 65.0, position_angle = 40.0, rotation_period = PROT)
-    ctr = tess.unit_xyz[:, 1, :]
+    # [:, 5, :] IS THE TESSEL CENTRE; 1:4 are its corners. Using index 1 puts every spot
+    # 12 deg from where this code says it is — about 1.7 facet widths at nside_exp 3.
+    ctr = tess.unit_xyz[:, 5, :]
     spot(lon, lat, σ) = begin
         n = [cosd(lat)*cosd(lon), cosd(lat)*sind(lon), sind(lat)]
         exp.(-([acosd(clamp(sum(ctr[i,:] .* n), -1, 1)) for i in 1:size(ctr,1)] ./ σ).^2)
@@ -105,7 +107,7 @@ function main()
 
     @printf("\nSo: this analysis gives %.3f, the spot-induced bias measured on the synthetic\n",
             eqpol(fits[3]))
-    @printf("star above is +1 %%, and Roettenbacher et al. give %.2f. Two independent analyses\n",
+    @printf("star above is +1.1 %%, and Roettenbacher et al. give %.2f. Two independent analyses\n",
             LIT_EQ_POL)
     @printf("agreeing to about the size of that bias — not a measurement hitting a truth, which\n")
     @printf("is unknowable here. The residual chi2/n of %.2f is the spot signal, and that is\n",

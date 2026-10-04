@@ -30,9 +30,13 @@ HOW IT IS KNOWN TO WORK, since a colour inversion is easy to get subtly wrong:
     reaches chi2/n = 2.29 against 3.63 for a uniform surface on the same figure, the other
     three being WORSE than uniform (3.89, 4.20, 4.37).
 
-LATITUDE IS FLIPPED relative to the plot. That is the parity the data select, and it is what
-this script writes; whether the flip lives in the figure's convention or in ROTIR's is not
-something the data can say.
+THE MAP IS WRITTEN AS PLOTTED, latitude included, so rendering it with ROTIR's own
+`plot_mollweide` reproduces the figure. ζ And's visibilities then select the EQUATOR-FLIPPED
+parity of it (chi2/n 1.88 against 3.63 for a uniform surface, the three other parities being
+worse than uniform), so the flip is applied on the way into the forward model, not here — see
+`demos/zetand_published_map.jl` and `healpix_flip_3.txt`, which is that flip as an exact
+permutation of HEALPix centres. Keeping the two frames apart matters: the plot convention and
+the model convention are different questions, and only the second is something the data answer.
 """
 import subprocess, sys, os
 import numpy as np
@@ -81,7 +85,7 @@ def main():
     if not os.path.exists(lonlat_file):
         sys.exit(f"missing {lonlat_file}; write it from Julia with\n"
                  "  using ROTIR, DelimitedFiles\n"
-                 "  t = tessellation_healpix(3); c = t.unit_xyz[:, 1, :]\n"
+                 "  t = tessellation_healpix(3); c = t.unit_xyz[:, 5, :]   # 5 = CENTRE\n"
                  "  writedlm(path, hcat([atand(c[i,2], c[i,1]) for i in 1:t.npix],\n"
                  "                      [asind(clamp(c[i,3], -1, 1)) for i in 1:t.npix]))")
     im = raster()
@@ -91,7 +95,7 @@ def main():
     bar  = im[470, 215:622]                   # the colourbar ramp, left = VMIN
     vals = np.linspace(VMIN, VMAX, len(bar))
     lonlat = np.loadtxt(lonlat_file)
-    xn, yn = mollweide(lonlat[:, 0], -lonlat[:, 1])      # LATITUDE FLIPPED — see the docstring
+    xn, yn = mollweide(lonlat[:, 0], lonlat[:, 1])      # AS PLOTTED — see the docstring
     px, py = xc + xn*a, yc - yn*b
     out = np.full(len(px), np.nan)
     for i, (X, Y) in enumerate(zip(px, py)):
