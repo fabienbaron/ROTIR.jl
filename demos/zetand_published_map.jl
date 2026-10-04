@@ -28,9 +28,10 @@ function main()
 
     # the figure from demos/zetand_triaxial.jl, scaled by `s`
     R = (1.3275, 1.2663, 1.2120)
-    mkp(s, inc, pa) = (surface_type = 1, radius_x = s*R[1], radius_y = s*R[2], radius_z = s*R[3],
-                       tpole = 5000.0, ldtype = 3, ld1 = 0.139, ld2 = 0.0, beta = 0.25,
-                       inclination = inc, position_angle = pa, rotation_period = PROT)
+    mkp(s, inc, pa, ld) = (surface_type = 1, radius_x = s*R[1], radius_y = s*R[2],
+                           radius_z = s*R[3], tpole = 5000.0, ldtype = 3, ld1 = ld,
+                           ld2 = 0.0, beta = 0.25, inclination = inc, position_angle = pa,
+                           rotation_period = PROT)
     function chi2(x, p, ts)
         stars = create_star_multiepochs(tess, p, ts)
         c = 0.0
@@ -42,7 +43,7 @@ function main()
         c
     end
 
-    unif = chi2(fill(5000.0, tess.npix), mkp(1.0, 64.7, 122.8), t)
+    unif = chi2(fill(5000.0, tess.npix), mkp(1.0, 64.7, 122.8, 0.139), t)
     @printf("uniform surface on the same figure:  chi2/n = %.3f\n\n", unif/nd)
 
     # THE MAP IS STORED AS PLOTTED. ζ And's visibilities select its EQUATOR-FLIPPED parity,
@@ -58,19 +59,24 @@ function main()
     # The map's orientation is NOT published with it: the phase zero, the inclination and the
     # position angle it was reconstructed at all have to be refitted here, and the overall size
     # is freed as a check — if the figure is right it should come back at 1.
-    best = Inf; bestθ = zeros(4)
+    # `ld1` IS FREE, because with it pinned to our own fitted value part of this chi2 would be
+    # testing our limb darkening rather than her map. She used a power law, which is
+    # `ldtype = 3` here. It turns out not to matter: freeing it moves chi2/n by 0.006 and the
+    # exponent lands at 0.131 against the 0.139 the uniform-surface shape fit chose, so the
+    # comparison is not being carried by the limb-darkening choice.
+    best = Inf; bestθ = zeros(5)
     for ph0 in 0.0:0.25:0.75, inc0 in (45.0, 70.0)
-        opt = NLopt.Opt(:LN_NELDERMEAD, 4)
-        opt.lower_bounds = [-1.0, 20.0,   0.0, 0.8]
-        opt.upper_bounds = [ 2.0, 90.0, 180.0, 1.25]
-        opt.maxeval = 1500; opt.xtol_rel = 1e-7
-        opt.min_objective = (θ, g) -> chi2(x, mkp(θ[4], θ[2], θ[3]), t .- θ[1]*PROT)
-        f, xo, _ = NLopt.optimize(opt, [ph0, inc0, 122.8, 1.0])
+        opt = NLopt.Opt(:LN_NELDERMEAD, 5)
+        opt.lower_bounds = [-1.0, 20.0,   0.0, 0.8,  0.0]
+        opt.upper_bounds = [ 2.0, 90.0, 180.0, 1.25, 4.0]
+        opt.maxeval = 2500; opt.xtol_rel = 1e-7
+        opt.min_objective = (θ, g) -> chi2(x, mkp(θ[4], θ[2], θ[3], θ[5]), t .- θ[1]*PROT)
+        f, xo, _ = NLopt.optimize(opt, [ph0, inc0, 126.0, 1.0, 0.139])
         f < best && (best = f; bestθ = copy(xo))
     end
-    @printf("the extracted map, orientation refitted:\n")
-    @printf("  chi2/n = %.3f   phase %.3f   inc %.1f deg   PA %.1f deg   size x%.3f\n",
-            best/nd, mod(bestθ[1], 1), bestθ[2], bestθ[3], bestθ[4])
+    @printf("the extracted map, orientation and limb darkening refitted:\n")
+    @printf("  chi2/n = %.3f   phase %.3f   inc %.1f deg   PA %.1f deg   size x%.3f   ld1 %.3f\n",
+            best/nd, mod(bestθ[1], 1), bestθ[2], bestθ[3], bestθ[4], bestθ[5])
     @printf("  improvement over a uniform surface: %.0f %%\n\n", 100*(1 - best/unif))
 
     # HOW WELL IS THE PHASE PINNED? It is the one number that had to be invented: the figure
@@ -80,7 +86,7 @@ function main()
     # and enter the model identically, so no data can separate them.
     @printf("\nphase scan at the fitted orientation (the one number with nothing to read off):\n")
     phs = 0:0.01:0.99
-    cs = [chi2(x, mkp(bestθ[4], bestθ[2], bestθ[3]), t .- ph*PROT)/nd for ph in phs]
+    cs = [chi2(x, mkp(bestθ[4], bestθ[2], bestθ[3], bestθ[5]), t .- ph*PROT)/nd for ph in phs]
     i0 = argmin(cs); within = phs[cs .< cs[i0] + 0.1]
     @printf("  minimum %.3f at phase %.2f | worst %.3f | within +0.1 over %.3f in phase = %.0f deg\n",
             cs[i0], phs[i0], maximum(cs), maximum(within)-minimum(within),
@@ -93,7 +99,7 @@ function main()
 
     @printf("For reference, the four latitude/longitude parities of the same extraction, each\n")
     @printf("with its own orientation refitted (measured when the convention was chosen):\n")
-    @printf("    equator flipped  chi2/n = 1.978   <- the parity used above\n")
+    @printf("    equator flipped  chi2/n = 1.972   <- the parity used above\n")
     @printf("    as plotted       chi2/n = 3.564\n")
     @printf("    both flipped     chi2/n = 3.959\n")
     @printf("    lon flipped      chi2/n = 4.584\n")
