@@ -35,10 +35,11 @@
 #
 # AND WHAT THEY PLOTTED. Regressing per-facet published value on the map gives
 #
-#     published = 3490 + 0.2494 * (T * mu^0.269),  rms 14 K
+#     published = 3496 + 0.2478 * (T * mu^0.269),  rms 13 K
 #
-# a single affine relation holding across all eight panels (per-panel fits give A = 3473-3502,
-# B = 0.2466-0.2513, so they did NOT auto-scale each panel). Two consequences:
+# a single affine relation holding across all eight panels -- fitting it panel by panel gives
+# A = 3460-3521 and B = 0.2427-0.2540, a 2 % spread, so they did NOT auto-scale each panel and
+# one calibration can be quoted for the whole figure. Two consequences:
 #
 #   * the panels are INTENSITY on their own linear scale. The "Temperature (K)" colourbar sits
 #     between the Mollweide and the panels and belongs to the Mollweide; read against it the
@@ -238,7 +239,7 @@ end
 
 function pass3_laws(tess, Vp, Mp, T10)
     println("\nWHAT THEY PLOTTED — per-facet samples at the winning configuration")
-    PV = Float64[]; MU = Float64[]; TT = Float64[]
+    PV = Float64[]; MU = Float64[]; TT = Float64[]; PK = Int[]
     for k in 1:8
         st = create_star(tess, params(124.30), mod(PHI[k] + 0.5, 1.0)*PROT)
         idx = findall(st.normals[:,3] .> 0)
@@ -250,11 +251,21 @@ function pass3_laws(tess, Vp, Mp, T10)
             s = findall(i -> fi[i] == q && Mp[k,i] != 0x00, CartesianIndices(fi))
             length(s) < 40 && continue
             push!(PV, median([Float64(Vp[k,i]) for i in s]))
-            push!(MU, st.normals[q,3]); push!(TT, T10[q])
+            push!(MU, st.normals[q,3]); push!(TT, T10[q]); push!(PK, k)
         end
     end
     score(X) = (b = cov(X,PV)/var(X); a = mean(PV) - b*mean(X);
                 (cor(X,PV), sqrt(mean((PV .- (a .+ b.*X)).^2))))
+    # Did they auto-scale each panel, or share one normalisation? Fit the affine relation panel
+    # by panel: a spread in A and B would mean each imshow set its own vmin/vmax, and then no
+    # single calibration could be quoted for the figure.
+    println("  colour normalisation, fitted separately per panel:")
+    for k in 1:8
+        sel = PK .== k
+        X = TT[sel] .* MU[sel].^0.269; Y = PV[sel]
+        b = cov(X,Y)/var(X); a = mean(Y) - b*mean(X)
+        @printf("    phi %.3f   A = %7.1f   B = %.4f\n", PHI[k], a, b)
+    end
     println("  intensity law at their fixed alpha = 0.269:")
     for (nm, I) in (("I = T (linear)", TT),
                     ("I = Planck(T, 1.605um)", [ROTIR.planck_and_dT(t, LAM)[1] for t in TT]),
@@ -275,7 +286,7 @@ function pass3_laws(tess, Vp, Mp, T10)
 end
 
 function dump_model(tess, T10)
-    A, B = 3489.9, 0.2494
+    A, B = 3495.8, 0.2478              # the global per-facet regression of pass 2
     mdl = zeros(Float32, NX, NX, 8); muim = zeros(Float32, NX, NX, 8)
     println("\nsub-observer geometry at the winning configuration")
     println("  panel   sub-observer longitude   visible facets")
