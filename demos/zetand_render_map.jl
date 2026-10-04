@@ -33,6 +33,15 @@ function main()
                        default_star_params(0; radius = 1.0, ldtype = 0), 0.0)
     plot_mollweide(m, star; vmin = 0.8025, vmax = 0.9977, colormap = "gist_heat",
                    figtitle = "zet And 2019A — extracted")
+    # STRIP THE DEGREE LABELS. `mollplot_temperature_healpix` writes longitude labels ACROSS the
+    # map at the equator and latitude labels around it; the original figure has neither, so they
+    # make a side-by-side harder to read — and they defeat an automatic fit of the plot ellipse,
+    # which is how the comparison in this directory is measured. The graticule itself is kept,
+    # since the original has one too.
+    fig = PythonPlot.gcf()
+    ax = fig.axes[0]
+    ax.set_xticklabels(PythonPlot.pylist([]))
+    ax.set_yticklabels(PythonPlot.pylist([]))
     out = joinpath(zet, "zetAnd2019A_map_rotir.png")
     PythonPlot.savefig(out, dpi = 150, bbox_inches = "tight")
     println("wrote ", out)
