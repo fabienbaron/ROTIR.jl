@@ -993,7 +993,31 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
   return
 end
 
-function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], vmin = -Inf, vmax = Inf, colormap="gist_heat", figtitle="Mollweide", incl=90.0)
+"""
+    mollplot_temperature_longlat(tmap, ntheta, nphi; kwargs...)
+
+Mollweide plot of a lat/long mesh, through PythonPlot. Takes the SAME display keywords as
+[`mollplot_temperature_healpix`](@ref) — `graticule`, `labels`, `lon_spacing`, `lat_spacing`,
+`grid_style`, `grid_alpha`, `colorbar`, `colorbar_label`, `colorbar_ticks`, `title`,
+`axis_lines` and friends — because [`plot_mollweide`](@ref) forwards its keywords to whichever
+of the two the mesh calls for, and a keyword that works on one tessellation and throws on the
+other is a trap for the caller, who did not choose the mesh.
+"""
+function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], vmin = -Inf,
+                                      vmax = Inf, colormap="gist_heat", figtitle="Mollweide",
+                                      title=nothing, incl=90.0,
+                                      lon_color="white", lat_color="black",
+                                      graticule::Bool=true, labels::Bool=true,
+                                      lon_spacing::Real=30, lat_spacing::Real=30,
+                                      grid_style="-", grid_alpha::Real=0.6,
+                                      colorbar::Bool=true, colorbar_label="Temperature (K)",
+                                      colorbar_ticks::Int=7,
+                                      axis_lines::Bool=false, axis_color="black",
+                                      axis_style="-", axis_width::Real=1.0,
+                                      mask_unobserved=true, bad_color="lightgray")
+  mod(90, lat_spacing) == 0 || error(
+      "mollplot_temperature_longlat: `lat_spacing` must divide 90 (got $lat_spacing); see " *
+      "`mollplot_temperature_healpix` for why.")
   set_oiplot_defaults()
   xsize = 2000
   ysize = div(xsize,2)
@@ -1004,8 +1028,19 @@ function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], v
   # project the map to a rectangular matrix xsize x ysize
   PHI = [i for j in theta, i in phi]
   THETA = [j for j in theta, i in phi]
-  grid_pix = longlat_ang2pix(ntheta, nphi, THETA, PHI);
-  grid_map = tmap[circshift(grid_pix,(0,Int(xsize/2)))]
+  grid_pix = circshift(longlat_ang2pix(ntheta, nphi, THETA, PHI), (0, Int(xsize/2)))
+  grid_map = Float64.(tmap[grid_pix])
+  # MASK UNOBSERVED PIXELS, as the HEALPix variant does. This function accepted
+  # `mask_unobserved`/`bad_color` and ignored them for as long as it had them, so a caller who
+  # asked for the never-seen half of a star to be greyed out got a fully painted sphere and no
+  # warning — and `plot_mollweide` hands these keywords to whichever variant the MESH selects,
+  # which the caller did not choose.
+  if mask_unobserved && visible_pixels != []
+    vis_set = Set(visible_pixels)
+    for idx in eachindex(grid_pix)
+      grid_pix[idx] in vis_set || (grid_map[idx] = NaN)
+    end
+  end
   fig = figure(figtitle, figsize=(10, 7))
   clf();
   ax = subplot(111,projection="mollweide",title=figtitle)
@@ -1024,25 +1059,40 @@ function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], v
       vmax = maximum(tmap[visible_pixels]);
     end
   end
-  moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=colormap)
+  cmap_obj = matplotlib.colormaps[colormap]   # matplotlib.cm.get_cmap removed in 3.9
+  cmap_obj.set_bad(color=bad_color)
+  moll = pcolormesh(longitude, latitude, grid_map, vmin=vmin, vmax=vmax, rasterized=true, cmap=cmap_obj)
   # graticule
-  ax.set_longitude_grid(30)
-  ax.set_latitude_grid(30)
+  ax.set_longitude_grid(lon_spacing)
+  ax.set_latitude_grid(lat_spacing)
   ax.set_longitude_grid_ends(90)
   spacing = 0.04
   subplots_adjust(bottom=spacing, top=1-spacing, left=spacing, right=1-spacing)
-  grid(true)
+  grid(graticule)
   if incl != 90.0
     ax.axhline(-incl * pi/180, c="black", ls="-.")
   end
+  if axis_lines
+    ax.axhline(0.0, c=axis_color, ls=axis_style, lw=axis_width)
+    ax.axvline(0.0, c=axis_color, ls=axis_style, lw=axis_width)
+  end
 
-  ticks = collect(range(vmin, stop=vmax, length=7));
-  cb = colorbar(moll, orientation="horizontal", shrink=.6, pad=0.05, ticks=ticks)
-  cb.ax.xaxis.labelpad=5
-  cb.ax.xaxis.set_label_text("Temperature (K)")
-  # workaround for issue with viewers, see colorbar docstring
-  cb.solids.set_edgecolor("face")
-  ax.tick_params(axis="x", labelsize=15)
-  ax.tick_params(axis="y", labelsize=15)
+  if colorbar
+    ticks = collect(range(vmin, stop=vmax, length=max(2, colorbar_ticks)));
+    cb = PythonPlot.colorbar(moll, orientation="horizontal", shrink=.6, pad=0.05, ticks=ticks)
+    cb.ax.xaxis.labelpad=5
+    cb.ax.xaxis.set_label_text(String(colorbar_label))
+    # workaround for issue with viewers, see colorbar docstring
+    cb.solids.set_edgecolor("face")
+  end
+  ax.tick_params(axis="x", labelsize=15, colors=lon_color)
+  ax.tick_params(axis="y", labelsize=15, colors=lat_color)
+  ax.xaxis.grid(graticule, color=lon_color, alpha=grid_alpha, linestyle=grid_style)
+  ax.yaxis.grid(graticule, color=lat_color, alpha=grid_alpha, linestyle=grid_style)
+  if !labels
+    ax.set_xticklabels(PythonPlot.pylist([]))
+    ax.set_yticklabels(PythonPlot.pylist([]))
+  end
+  title !== nothing && ax.set_title(String(title))
   return
 end

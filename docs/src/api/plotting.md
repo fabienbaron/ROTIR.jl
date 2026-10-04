@@ -187,8 +187,70 @@ With only N×2, the points are drawn without error bars.
 | `incl` | `90.0` | Draw the observability limit at latitude `-incl` |
 | `lon_color` | `"white"` | Colour of the meridians and their tick labels |
 | `lat_color` | `"black"` | Colour of the parallels and their tick labels |
-| `figtitle` | `"Mollweide"` | Figure title |
+| `figtitle` | `"Mollweide"` | Names the FIGURE WINDOW — it does **not** appear in a saved file; use `title` |
+| `title` | `nothing` | Axes title, which is what a saved PNG shows |
 | `ntheta`, `nphi` | `nothing` | Lat/long grid dimensions; recovered from the mesh when omitted |
 
 `ntheta` / `nphi` apply only to a lat/long tessellation. `stellar_geometry` does not store
 them, so they are recovered from the mesh unless you pin them.
+
+### Controlling the furniture
+
+A figure made to be **read** and one made to be **compared** against someone else's want
+different things: degree labels and seven colourbar ticks help the first and get in the way of
+the second. Each piece can be turned off or restyled, and every default reproduces the previous
+behaviour.
+
+| Keyword | Default | Description |
+|---------|---------|-------------|
+| `graticule` | `true` | Draw meridians and parallels at all |
+| `lon_spacing` | `20` (HEALPix), `30` (lat/long) | Meridian spacing in degrees |
+| `lat_spacing` | `15` (HEALPix), `30` (lat/long) | Parallel spacing in degrees — **must divide 90** |
+| `labels` | `true` | The degree labels; `false` keeps the lines and drops the numbers |
+| `grid_style` | `"-"` | Linestyle of the graticule, e.g. `":"` for dotted |
+| `grid_alpha` | `0.6` | Alpha of the graticule |
+| `axis_lines` | `false` | Draw the equator and central meridian SOLID over the graticule |
+| `axis_color`, `axis_style`, `axis_width` | `"black"`, `"-"`, `1.0` | How those two are drawn |
+| `colorbar` | `true` | Draw the colourbar |
+| `colorbar_label` | `"Temperature (K)"` | Its label; pass `""` for none |
+| `colorbar_ticks` | `7` | How many ticks it carries |
+
+!!! warning "`lat_spacing` must divide 90"
+    matplotlib's `GeoAxes.set_latitude_grid(d)` places parallels at `arange(-90+d, 90, d)` and
+    labels them with `ThetaFormatter(d)`, which rounds to multiples of `d`. At `d = 20` the
+    ticks land at ±10, ±30, ±50, ±70 — none of them multiples of 20 — and come out labelled
+    -80, -40, -20, 0, 0, 20, 40, 80: a duplicated zero and every label wrong by 10–20°.
+    Verified with a fiducial map (bands at latitude 0 and +60): the DATA is placed correctly, so
+    only the labels were wrong. 15 and 30 are safe; a value that does not divide 90 is refused
+    rather than mislabelled.
+
+!!! note "`colorbar_label` is not always kelvin"
+    It used to say `"Temperature (K)"` unconditionally, so a normalised surface brightness came
+    out labelled in kelvin. Set it to whatever the map actually is.
+
+**Matching a published figure.** The settings below reproduce the house style of healpy's
+`mollview`, which is what most published HEALPix stellar maps are drawn with — dotted graticule,
+solid equator and central meridian, no degree labels, and a colourbar carrying only its two end
+values. `demos/zetand_render_map.jl` uses exactly this to put a ROTIR plot beside a published
+one.
+
+```julia
+plot_mollweide(map, star; vmin = 0.8025, vmax = 0.9977, colormap = "gist_heat",
+               title = "ζ And 2019A",
+               labels = false, lon_color = "black", lat_color = "black",
+               grid_style = ":", grid_alpha = 0.9,
+               lon_spacing = 30, lat_spacing = 30, axis_lines = true,
+               colorbar_ticks = 2, colorbar_label = "")
+```
+
+### The two back ends take different keywords
+
+`plot_mollweide` is the PythonPlot route and everything above applies to it, for a HEALPix mesh
+and a lat/long one alike — the keywords are forwarded to whichever variant the MESH selects, so
+one that worked on a HEALPix star and threw on a lat/long one would be a trap for a caller who
+did not choose the mesh.
+
+`plot_mollweide_makie` is the GLMakie route, which is what the GUI draws with. It has
+its own `labels` and `colorbar` switches plus `nlon`/`nlat` and `figsize`, and does not take the
+styling keywords above. The two live in separate package extensions — `ROTIRPythonPlotExt` and
+`ROTIRMakieExt` — so neither can be affected by a change to the other.

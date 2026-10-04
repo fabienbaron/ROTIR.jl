@@ -209,6 +209,13 @@ plot_mollweide(tmap, stars[1];
 )
 ```
 
+Every piece of furniture — the graticule, its spacing and linestyle, the degree labels, the
+colourbar and its label and tick count, and a solid equator and central meridian — can be
+turned off or restyled. That is what makes a ROTIR figure directly comparable with a published
+one, and the full list with a worked healpy-style example is under
+[Controlling the furniture](@ref) in the plotting API reference. Note that `figtitle` names the
+FIGURE WINDOW and never appears in a saved file; `title` is the axes title you want.
+
 When `visible_pixels` is provided and `mask_unobserved = true` (the default),
 pixels that were never observed are rendered in `bad_color`. Use
 `sometimes_visible(stars)` to get the list of pixels visible at any epoch:
