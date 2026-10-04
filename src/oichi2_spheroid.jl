@@ -375,13 +375,21 @@ function spheroid_chi2_f(x, star, data; verbose::Bool = false,
   return chi2_v2 + chi2_t3amp + chi2_t3phi
 end
 
-@views function spheroid_chi2_fg(x, g, star, data; verbose::Bool = true)
+@views function spheroid_chi2_fg(x, g, star, data; verbose::Bool = true,
+                                 intensity_model::Symbol = :linear, band = nothing)
   npix = star.npix;
   T = eltype(x);
   indx = star.index_quads_visible
   w = star.vis_weights[indx] .* star.ldmap[indx]  # soft visibility × limb darkening
-  xw = x[indx] .* w           # weighted pixel values
-  cvis_model = poly_to_cvis(x, star);
+  # THE SURFACE VARIABLE IS A TEMPERATURE once `intensity_model !== :linear`, and the forward
+  # model needs its INTENSITY. `spheroid_chi2_f` (:363) and `poly_to_cvis` (:18) have taken
+  # `intensity_model` since the Planck law was added; this gradient did not, so an imaging run
+  # that asked for `:planck` got its VALUE from the Planck model and its GRADIENT from the
+  # linear proxy — a descent on one function reported as another. Under `:linear` every line
+  # below reduces to what it was.
+  I = intensity_model === :linear ? x : intensity(x, intensity_model, band)
+  xw = I[indx] .* w           # weighted pixel values
+  cvis_model = poly_to_cvis(x, star; intensity_model = intensity_model, band = band);
   v2_model = cvis_to_v2(cvis_model, data.indx_v2);
   t3_model, t3amp_model, t3phi_model = cvis_to_t3(cvis_model, data.indx_t3_1, data.indx_t3_2 ,data.indx_t3_3);
   chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
@@ -392,11 +400,18 @@ end
   g_t3amp = real(transpose(star.polyft[data.indx_t3_1,:]) *(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_2,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_3,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
   g_t3phi = T(360/pi)*imag(transpose(star.polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
   gsum = g_v2 + g_t3amp + g_t3phi;
-  flux = poly_to_flux(x, star);
+  flux = poly_to_flux(x, star; intensity_model = intensity_model, band = band);
   # Gradient w.r.t. x: chain rule through soft visibility weights
-  # gsum is ∂χ²/∂(xw), so ∂χ²/∂x = w .* ∂χ²/∂(xw) (after flux normalization)
+  # gsum is ∂χ²/∂(xw), so ∂χ²/∂I = w .* ∂χ²/∂(xw) (after flux normalization)
   g_normalized = (gsum .- dot(xw, gsum) * star.polyflux / flux) / flux;
-  g[indx] = w .* g_normalized;
+  # AND THROUGH THE INTENSITY LAW. It is pointwise, so dI/dx is diagonal and `_intensity_dT`
+  # returns it; under `:linear` it is identically 1 and this is the old expression.
+  if intensity_model === :linear
+    g[indx] = w .* g_normalized;
+  else
+    dI = _intensity_dT(x, intensity_model, band)
+    g[indx] = w .* g_normalized .* dI[indx];
+  end
   if verbose == true
     printstyled(@sprintf("V2: %.4f ", chi2_v2/data.nv2), color=:red)
     printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
@@ -443,14 +458,16 @@ function _epoch_weights(w, nepochs::Int, ::Type{T}) where T
 end
 
 function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[],
-                                    verbose=false, T=eltype(x))
+                                    verbose=false, T=eltype(x),
+                                    intensity_model::Symbol = :linear, band = nothing)
   #g[:] .= T(0);
   nepochs = length(data)
   chi2_t = zeros(T, nepochs);
   #npix = stars[1].npix
   singleepoch_g = [zeros(T, length(x)) for i=1:nepochs];
   Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-    chi2_t[i] = spheroid_chi2_fg(x, singleepoch_g[i], stars[i], data[i], verbose=verbose);
+    chi2_t[i] = spheroid_chi2_fg(x, singleepoch_g[i], stars[i], data[i], verbose=verbose,
+                                 intensity_model=intensity_model, band=band);
   end
   # PER-EPOCH WEIGHTS, applied to the criterion AND to the gradient. This warned "not
   # implemented" and silently ignored the argument; the commented-out attempt beside it
@@ -1119,11 +1136,14 @@ No throttling policy is imposed beyond the count: at roughly 60 µs per likeliho
 every 25 evaluations is not measurable, and a caller that wants every one can say so.
 """
 function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf, maxiter = 100, regularizers =[],
+                              intensity_model::Symbol = :linear, band = nothing,
                               callback = nothing, callback_every::Int = 25)
   x_sol = [];
   nevals = Ref(0)
   crit_imaging = function (x, g)
-      f = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers, epochs_weights=epochs_weights, verbose = verbose)
+      f = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers,
+                                     epochs_weights=epochs_weights, verbose = verbose,
+                                     intensity_model = intensity_model, band = band)
       nevals[] += 1
       if callback !== nothing && (nevals[] == 1 || nevals[] % max(1, callback_every) == 0)
           # A callback that throws must not take the reconstruction with it: it is a progress

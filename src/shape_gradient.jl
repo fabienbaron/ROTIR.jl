@@ -571,7 +571,8 @@ Outer loop alternates between:
 function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
                                data, tessels_base, star_params_base, tepochs;
                                maxiter_xmap::Int=200, maxiter_θ::Int=50,
-                               nouter::Int=5, reg_weight::T=T(1e-5),
+                               nouter::Int=5, reg_weight::T=T(10),
+                               regularizer::String="sobel",
                                θ_lower::Union{Vector{T},Nothing}=nothing,
                                θ_upper::Union{Vector{T},Nothing}=nothing,
                                κ=T(50), verbose::Bool=true) where T
@@ -633,8 +634,24 @@ function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
         stars = create_star_multiepochs(tessels, star_params, tepochs)
         setup_oi!(data, stars)
 
-        # Step 2: Optimize xmap with fixed geometry
-        regularizers = [["tv2", reg_weight, tv_neighbors_healpix(n), 1:npix]]
+        # Step 2: Optimize xmap with fixed geometry.
+        #
+        # `sobel`, NOT `tv2`, and the weight changes by six orders with it. The repo's own
+        # ladder (docs/src/guides/reconstruction.md) measures, on RW Cep at nside 3: tv2 at its
+        # best weight 1e-4 gives chi2v2/n = 2.29, which is WORSE than using no prior at all
+        # (2.00), while sobel at 1e1 gives 1.86 and the best chi2t3phi too. tv2's k^4 response
+        # is already flattening structure the closure phases can see by the time it suppresses
+        # tessel-scale noise.
+        #
+        # THE WEIGHT IS NOT TRANSFERABLE BETWEEN THE TWO. A tv2 weight is O(1e-5..1e-4) and a
+        # Sobel weight O(1..1e2), because tv2 rides on the map's absolute temperature while the
+        # Sobel forms divide by mean(x)^2 and carry the 4*pi/npix solid angle. Swapping the name
+        # alone would leave this effectively unregularised, which is why `reg_weight`'s default
+        # moved with it. Re-run the ladder for a new dataset: the balance against chi2 still
+        # scales with the number of data points.
+        regularizers = regularizer in ("sobel", "sobel2") ?
+            [[regularizer, reg_weight, sobel_gradient_healpix(n), 1:npix]] :
+            [[regularizer, reg_weight, tv_neighbors_healpix(n), 1:npix]]
         xmap = image_reconstruct_oi(xmap, data, stars, maxiter=maxiter_xmap,
                                      regularizers=regularizers, verbose=verbose)
 
