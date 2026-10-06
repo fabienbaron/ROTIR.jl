@@ -86,6 +86,16 @@ mutable struct ModelEntry
     # and to occultation.
     place::Symbol
     offset::NTuple{3,Float64}
+    # THE INTENSITY GRID FILE, and the only text-valued setting a component carries.
+    #
+    # The rest of the provider configuration (`intensity_source`, the Teff/logg/λ windows, the
+    # node count — `INTENSITY_PARAMS` in src/surface_schema.jl) lives in `params` like
+    # everything else, and that is safe BY CONSTRUCTION rather than by convention:
+    # `star_params` builds its NamedTuple by iterating `surface_params(surface_type)`, so a key
+    # the surface schema does not declare is invisible to the geometry code. A PATH cannot go
+    # there — the dictionary is `Float64` — so it gets a field of its own rather than a second
+    # dictionary nothing else would use.
+    grid_path::String
 end
 
 """
@@ -318,7 +328,7 @@ function add_model!(session::Session, surface_type;
         ps.name => (ps.lo, ps.hi) for ps in surface_params(spec.code))
     nm = isempty(name) ? "$(spec.name)_$(length(session.models) + 1)" : String(name)
     m = ModelEntry(nm, spec.code, params, Set{Symbol}(), bounds, Dict{Symbol,String}(),
-                   secondary, nothing, :orbit, (0.0, 0.0, 0.0))
+                   secondary, nothing, :orbit, (0.0, 0.0, 0.0), "")
     push!(session.models, m)
     session.current_model = length(session.models)
     return m

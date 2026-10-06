@@ -541,3 +541,191 @@ ld_coefficients_used(ldtype::Integer) =
     Int(ldtype) == 4 ? (:ld1, :ld2, :ld3, :ld4) :
     Int(ldtype) == 2 ? (:ld1, :ld2) :
     Int(ldtype) in (1, 3) ? (:ld1,) : ()
+
+# ── where the intensity comes from, when no LD law is applied ───────────────────────────
+#
+# `ldtype = 0` is the one state in which `ld1`–`ld4` are not merely unused but MEANINGLESS:
+# there is no parametric law, so the μ dependence is whatever the intensity provider carries
+# (src/intensity_provider.jl). `ld_coefficients_used(0)` already says so by returning `()`,
+# and that is the hook both the form and `parametric_layout` hang off.
+#
+# THESE SPECS ARE DELIBERATELY NOT PART OF `surface_params`. `star_params(m)` is built by
+# iterating the surface's own specs, so nothing here can leak into the NamedTuple the geometry
+# code reads — which is right, because none of it describes a surface. `validate_star_params`
+# therefore needs no new rule and keeps its single job as the build gate;
+# [`validate_intensity_source`](@ref) is the matching check, and the GUI shows its messages
+# beside the schema's.
+#
+# WHAT EACH BACKEND ACTUALLY NEEDS, read off the constructors rather than guessed:
+#
+#   1 Planck   `PlanckProvider()` — nothing at all. `owns_mu` is **false**, so this is the
+#              CURRENT `ldtype = 0` behaviour and it is listed to say so out loud: a
+#              uniform-brightness disc, no limb darkening from either side.
+#   2 grid     `load_intensity_grid(path)` → `TabulatedProvider`. A FITS grid written by
+#              `save_intensity_grid`; the four axes come from the file, so the path is the
+#              only parameter there is.
+#   3 Kurucz   `read_kurucz_intensity(path; λrange, Teff, logg)` → `TabulatedProvider`. An
+#              ATLAS9 intensity pack. `λrange` is REQUIRED — the reader refuses without it —
+#              and the two axis windows are optional restrictions worth setting, because the
+#              pack is not a complete rectangle and the missing (Teff, logg) nodes are filled
+#              from the nearest gravity (see src/kurucz_intensity.jl).
+#   4 Korg     `build_korg_grid(; Teff = (lo, hi, n), logg = (lo, hi, n), λ = (lo, hi))` —
+#              SYNTHESIS, so the node counts are the extra parameters. A weak dependency: the
+#              stub carries no methods until `using Korg`, and `interpolate_marcs` spans only
+#              Teff ∈ [2800, 8000] K, which is why 2 and 3 exist at all.
+#
+# λ IS IN NANOMETRES HERE and in metres everywhere else in ROTIR (`band_of`,
+# `read_kurucz_intensity`'s `λrange`, `RectGrid4.λ`). A form is read by a person: an H band is
+# 1650 nm, and `1.65e-6` in a text box is a value nobody can check at a glance. The one
+# conversion lives in [`intensity_lambda_range`](@ref) so there is exactly one place it happens.
+
+"""
+    INTENSITY_PARAMS
+
+The provider form, as [`ParamSpec`](@ref)s, in the order it is shown. A sibling of
+`surface_params`, not a part of it — see the comment above.
+
+`kind` is `:choice` for the backend selector, `:path` for the one text-valued field and
+`:setting` for the numbers. `:setting` rather than `:float` because none of them is a
+COORDINATE: a fit cannot free a grid's Teff window, so the form must not offer free/fixed/tied
+on these rows and `_set_state!` refuses it.
+"""
+const INTENSITY_PARAMS = [
+    ParamSpec(:intensity_source, "Intensity from", "", 1.0, 1.0, 4.0, :intensity,
+              "Which backend supplies I(Teff, logg, mu, lambda) now that no " *
+              "limb-darkening law is applied. Planck carries NO mu dependence, so it is " *
+              "the uniform-brightness disc ldtype = 0 has always given; the other three " *
+              "own the limb darkening themselves, which is the point of switching the law " *
+              "off (a fitted ld1 otherwise absorbs the error in whichever " *
+              "gravity-darkening law was assumed).";
+              kind = :choice,
+              choices = [1 => "Planck (no μ dependence)",
+                         2 => "Tabulated grid (FITS)",
+                         3 => "Kurucz ATLAS9 pack",
+                         4 => "Korg synthesis (MARCS)"]),
+    ParamSpec(:grid_path, "Grid file", "", 0.0, -Inf, Inf, :intensity,
+              "The FITS grid written by save_intensity_grid, or the Kurucz ATLAS9 " *
+              "intensity pack (ip00k2.pck19 and friends). The grids that ship with ROTIR " *
+              "are in the 'ROTIR data' place of the file picker.";
+              kind = :path),
+    ParamSpec(:grid_lambda_min, "λ from", "nm", 1500.0, 1.0, 1e7, :intensity,
+              "Lower edge of the wavelength window to read or synthesize. Required by the " *
+              "Kurucz reader; ROTIR's own units are metres and the conversion happens once.";
+              kind = :setting),
+    ParamSpec(:grid_lambda_max, "λ to", "nm", 1800.0, 1.0, 1e7, :intensity,
+              "Upper edge of the wavelength window. The default spans H band, which is " *
+              "what every dataset that ships with ROTIR was taken in.";
+              kind = :setting),
+    ParamSpec(:grid_teff_min, "Teff from", "K", 3500.0, 1000.0, 60000.0, :intensity,
+              "Lower edge of the Teff axis. For Kurucz it RESTRICTS the pack's own axis, " *
+              "which is worth narrowing: the pack is not a complete rectangle and missing " *
+              "nodes are filled from the nearest gravity.";
+              kind = :setting),
+    ParamSpec(:grid_teff_max, "Teff to", "K", 10000.0, 1000.0, 60000.0, :intensity,
+              "Upper edge of the Teff axis. Korg cannot go above 8000 K at all.";
+              kind = :setting),
+    ParamSpec(:grid_logg_min, "log g from", "dex", 2.0, -1.0, 6.0, :intensity,
+              "Lower edge of the log g axis, in cgs dex.";
+              kind = :setting),
+    ParamSpec(:grid_logg_max, "log g to", "dex", 4.5, -1.0, 6.0, :intensity,
+              "Upper edge of the log g axis, in cgs dex.";
+              kind = :setting),
+    ParamSpec(:grid_nodes, "Nodes per axis", "", 6.0, 2.0, 40.0, :intensity,
+              "How many Teff and log g nodes to SYNTHESIZE. Korg only — a tabulated grid " *
+              "or a Kurucz pack brings its own axes. Cost is one synthesis per node pair, " *
+              "so 6 x 6 is ~10 s and 20 x 20 is minutes.";
+              kind = :setting),
+]
+
+"The backend codes, in the order [`INTENSITY_PARAMS`](@ref) offers them."
+const INTENSITY_SOURCES = (1, 2, 3, 4)
+
+"""
+    intensity_spec(name) -> ParamSpec or nothing
+
+One provider field by name, or `nothing` when the name is not one of them. The membership test
+too: `intensity_spec(:ld1) === nothing`.
+"""
+function intensity_spec(name::Symbol)
+    i = findfirst(ps -> ps.name === name, INTENSITY_PARAMS)
+    return i === nothing ? nothing : INTENSITY_PARAMS[i]
+end
+
+"""
+    intensity_params_used(source) -> Tuple{Symbol,...}
+
+Which provider fields the chosen backend actually reads — the exact counterpart of
+[`ld_coefficients_used`](@ref), and used the same way: a form greys out the rest, so the panel
+says which of the nine rows the backend in force is going to look at.
+"""
+intensity_params_used(source::Integer) =
+    Int(source) == 2 ? (:grid_path,) :
+    Int(source) == 3 ? (:grid_path, :grid_lambda_min, :grid_lambda_max,
+                        :grid_teff_min, :grid_teff_max, :grid_logg_min, :grid_logg_max) :
+    Int(source) == 4 ? (:grid_lambda_min, :grid_lambda_max,
+                        :grid_teff_min, :grid_teff_max, :grid_logg_min, :grid_logg_max,
+                        :grid_nodes) : ()
+
+"""
+    intensity_lambda_range(cfg) -> Tuple{Float64,Float64}
+
+The `(λmin, λmax)` window in **metres**, which is what `read_kurucz_intensity` and the rest of
+ROTIR take. The form carries nanometres; this is the only place that conversion happens.
+"""
+intensity_lambda_range(cfg) = (1e-9 * float(get(cfg, :grid_lambda_min, 1500.0)),
+                               1e-9 * float(get(cfg, :grid_lambda_max, 1800.0)))
+
+"""
+    validate_intensity_source(ldtype, cfg, path) -> Vector{String}
+
+Everything wrong with the provider configuration, one message each; empty means it can be
+built.
+
+`cfg` is a `name => value` mapping for the numeric fields (a `Dict` or a NamedTuple) and
+`path` the text-valued `grid_path`. Only the fields the chosen backend READS are checked —
+`intensity_params_used` says which — because a Teff window left over from a Kurucz grid must
+not refuse a Planck provider that never looks at it.
+
+Not folded into `validate_star_params`: none of this is a `star_params` field, and that
+function is the GUI's build gate, so adding a reason to refuse a model that builds perfectly
+well would stop the panel drawing a surface over a wrong file path.
+"""
+function validate_intensity_source(ldtype, cfg, path::AbstractString)
+    msgs = String[]
+    Int(ldtype) == 0 || return msgs          # no law off, no provider in play
+    src = round(Int, float(get(cfg, :intensity_source, 1.0)))
+    src in INTENSITY_SOURCES ||
+        return ["intensity_source = $src is not one of " *
+                join(("$(k) ($(v))" for (k, v) in INTENSITY_PARAMS[1].choices), ", ")]
+    used = intensity_params_used(src)
+    label = something(findfirst(p -> p.first == src, INTENSITY_PARAMS[1].choices), 0)
+    name = label == 0 ? string(src) : INTENSITY_PARAMS[1].choices[label].second
+    if :grid_path in used
+        p = strip(path)
+        isempty(p) && push!(msgs, "$(name) needs a grid file; none is set")
+        (!isempty(p) && !isfile(p)) && push!(msgs, "no such file: $(p)")
+    end
+    # The RANGES, as ranges. A reversed window is the mistake a two-box form invites, and it
+    # surfaces far away: `read_kurucz_intensity` filters its axis to nothing and reports
+    # "need >=2 Teff and >=2 logg nodes" with no hint that the two numbers are the wrong way
+    # round.
+    for (lo, hi, what) in ((:grid_lambda_min, :grid_lambda_max, "wavelength window"),
+                           (:grid_teff_min, :grid_teff_max, "Teff axis"),
+                           (:grid_logg_min, :grid_logg_max, "log g axis"))
+        (lo in used && hi in used) || continue
+        a = float(get(cfg, lo, intensity_spec(lo).default))
+        b = float(get(cfg, hi, intensity_spec(hi).default))
+        a < b || push!(msgs, "the $(what) is empty or reversed: " *
+                             "$(intensity_spec(lo).label) = $a is not below " *
+                             "$(intensity_spec(hi).label) = $b")
+    end
+    # Korg's own ceiling, checked here rather than left to a LazyMultilinearInterpError from
+    # inside the synthesis loop — which is minutes in and names neither the axis nor the limit.
+    if src == 4
+        hi = float(get(cfg, :grid_teff_max, 10000.0))
+        hi <= 8000.0 || push!(msgs, "Korg's interpolate_marcs stops at Teff = 8000 K, so " *
+                                    "Teff to = $hi K cannot be synthesized; use a Kurucz " *
+                                    "pack or a tabulated grid above that")
+    end
+    return msgs
+end

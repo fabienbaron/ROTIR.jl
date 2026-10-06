@@ -580,6 +580,12 @@ and `kind` says which of the two the form should render.
 Rows a given `ldtype` does not use are still listed, with `state` forced to `fixed`: hiding
 them would make the form jump around as the law is changed, and a value that is never read
 must not be left floating in a fit.
+
+`ldtype = 0` IS THE EXCEPTION, and it is a different case rather than a harder version of the
+same one. There is no law at all then, so `ld1`–`ld4` are not coefficients the law happens not
+to read — they are coefficients of nothing, and the μ dependence comes from an intensity
+provider instead. Those four rows are therefore dropped and `INTENSITY_PARAMS` takes their
+place, under its own `group`. See `_params_table`.
 """
 # The ORBIT group is dropped once there is a companion: it belongs to the PAIR, and a copy in
 # each component frame is two editable copies of one physical orbit that can disagree. See
@@ -635,10 +641,27 @@ and a doc saying where it comes from, because hiding them would make the form ju
 would hide the answer to "what inclination is this actually being drawn at".
 """
 function _params_table(m; orbit::Bool = true, frozen = Set{Symbol}())
-    used = ld_coefficients_used(round(Int, get(m.params, :ldtype, 3.0)))
+    specs = surface_params(m.surface_type)
+    ldt = round(Int, get(m.params, :ldtype, 3.0))
+    used = ld_coefficients_used(ldt)
     rows = String[]
-    for ps in surface_params(m.surface_type)
+    # ONE row builder, so the surface fields and the provider fields below cannot disagree
+    # about the column order or the escaping.
+    row(name, label, unit, value, state, lo, hi, tie, group, kind, ch, doc, inert) =
+        push!(rows, join((name, label, unit, value, state, lo, hi, tie, group, kind, ch,
+                          replace(doc, "\n" => " ", "\t" => " "),
+                          inert ? "1" : "0"), "\t"))
+    for ps in specs
         (orbit || ps.group !== :orbit) || continue
+        # LD COEFFICIENTS DISAPPEAR AT ldtype = 0, rather than being greyed like the ones a
+        # law simply does not read. The difference is real: under laws 1-4 the unused
+        # coefficients still BELONG to the model — showing them greyed is how the form says
+        # which ones the law in force uses, and switching the law brings them back with their
+        # values. At ldtype = 0 there is no law at all, so there is nothing left for a
+        # coefficient to be a coefficient OF: the μ dependence comes from the intensity
+        # provider, whose own fields take their place below. `ld_coefficients_used(0) === ()`
+        # is the test, which is why it is spelled as `isempty(used)` and not as `ldt == 0`.
+        (ps.name in (:ld1, :ld2, :ld3, :ld4) && isempty(used)) && continue
         v  = get(m.params, ps.name, ps.default)
         lo, hi = get(m.bounds, ps.name, (ps.lo, ps.hi))
         tie = get(m.ties, ps.name, "")
@@ -647,14 +670,47 @@ function _params_table(m; orbit::Bool = true, frozen = Set{Symbol}())
         state = !isempty(tie) ? "tied" :
                 (inert ? "fixed" : (ps.name in m.free ? "free" : "fixed"))
         ch = join(("$(k)=$(vv)" for (k, vv) in ps.choices), "|")
+        # WHY A ROW IS GREYED, said here. The panel used to carry the one literal it had a
+        # use for ("not used by the current LD law") and applied it to every inert row — so a
+        # frozen orientation, which is inert for a completely different reason, claimed to be
+        # an unused limb-darkening coefficient. The side that decides is the side that
+        # explains.
         doc = ps.name in frozen ?
               "from the orbit, which is what places the secondary: " *
-              "inclination = 180 - i, position angle = Ω - 180. " * ps.doc : ps.doc
-        push!(rows, join((ps.name, ps.label, ps.unit, _fmt_param(v), state,
-                          _fmt_param(lo), _fmt_param(hi),
-                          tie, ps.group, ps.kind, ch,
-                          replace(doc, "\n" => " ", "\t" => " "),
-                          inert ? "1" : "0"), "\t"))
+              "inclination = 180 - i, position angle = Ω - 180. " * ps.doc :
+              inert ? "not used by the current limb-darkening law. " * ps.doc : ps.doc
+        row(ps.name, ps.label, ps.unit, _fmt_param(v), state, _fmt_param(lo), _fmt_param(hi),
+            tie, ps.group, ps.kind, ch, doc, inert)
+    end
+    # ── and the intensity provider, in place of the coefficients ────────────────────────
+    #
+    # APPENDED TO THE SAME TABLE rather than published as a table of its own. The three
+    # existing tables (`shell_params`, `shell_position_params`, `shell_binary_orbit_params`)
+    # each cost a ListModel, an append loop and a `pcomp` branch in all four setters; these
+    # rows are per-component exactly as the surface fields are, so they travel with them and
+    # the companion's form gets them for nothing. `pgroup` is what sections them under their
+    # own heading, which is the mechanism the form already uses for geometry and thermal.
+    #
+    # Shown only at ldtype = 0: a provider UNDER a parametric law counts limb darkening twice,
+    # which is what `check_provider_consistency` refuses outright.
+    if ldt == 0 && any(ps -> ps.name === :ldtype, specs)
+        isrc = round(Int, get(m.params, :intensity_source, INTENSITY_PARAMS[1].default))
+        iused = intensity_params_used(isrc)
+        for ps in INTENSITY_PARAMS
+            # The selector itself is never inert; the rest are greyed unless the chosen
+            # backend reads them — the same rule, and the same visible signal, as a
+            # limb-darkening coefficient the law does not read.
+            inert = ps.name !== :intensity_source && !(ps.name in iused)
+            v = ps.kind === :path ? m.grid_path :
+                _fmt_param(get(m.params, ps.name, ps.default))
+            ch = join(("$(k)=$(vv)" for (k, vv) in ps.choices), "|")
+            # No state, no tie and no bounds columns worth having: none of these is a
+            # coordinate a fit can move (`:choice`, `:path` and `:setting` all say so), and
+            # `_set_state!` refuses one if the form ever offers it.
+            doc = inert ? "not read by the intensity source in force. " * ps.doc : ps.doc
+            row(ps.name, ps.label, ps.unit, v, "fixed",
+                _fmt_param(ps.lo), _fmt_param(ps.hi), "", ps.group, ps.kind, ch, doc, inert)
+        end
     end
     return join(rows, "\n")
 end
@@ -732,7 +788,13 @@ function shell_set_binary(on, surface_type = 3)
                 Set{Symbol}(),
                 Dict{Symbol,Tuple{Float64,Float64}}(ps.name => (ps.lo, ps.hi)
                                                     for ps in surface_params(st)),
-                Dict{Symbol,String}(), true, nothing, :offset, DEFAULT_COMPANION_OFFSET)
+                Dict{Symbol,String}(), true, nothing, :offset, DEFAULT_COMPANION_OFFSET,
+                # The companion starts with no grid of its own. Not inherited from the
+                # primary: the two stars of a binary are rarely the same kind of thing — one
+                # grid rarely spans both — which is the whole reason the companion is a
+                # component with its own parameters rather than a set of numbers on the
+                # primary.
+                "")
             # The orbit is the PAIR's, so the companion starts from the primary's copy of it
             # rather than from the schema defaults — and with `q` INVERTED, which the Roche
             # potential requires and which a schema default cannot express.
@@ -825,10 +887,15 @@ function shell_set_param2(name, value)
     n = _qmlname(name)
     n === nothing && return NO_QML_NAME
     n in _derived_names(current_model(sh.session)) && return ORBIT_ORIENTS
+    if _set_text_param!(c, n, value)
+        refresh_both!(sh)
+        return ""
+    end
     v = _qmlreal(value, NaN)
     isnan(v) && return "not a number: $(value)"
     c.params[n] = v
     n === :ldtype && _reset_unused_ld!(c)
+    n === :intensity_source && _note_intensity_source(sh, v)
     sh.chi2key[] = nothing
     refresh_both!(sh)
     return ""
@@ -1373,6 +1440,30 @@ _qmlname(x) = x === nothing ? nothing : Symbol(_qmlstr(x))
 const NO_QML_NAME = "no parameter named by the form (the row went away before the edit landed)"
 
 """
+    _set_text_param!(m, n, value) -> Bool
+
+Take a TEXT-valued form field, and say whether this was one.
+
+Exactly one field is text rather than a number — `grid_path`, the intensity grid file — and it
+arrives through the same `shell_set_param` as everything else, because the form has one value
+column and the schema is what says how to render it. The TEST IS THE KIND, not the name: a
+second `:path` field would travel this path with nothing to change here.
+
+Stripped, because a path pasted from a terminal or dropped from a file manager carries
+whitespace, and a trailing space makes `isfile` false for a file that is plainly there. A
+`file://` prefix is removed for the same reason — that is what a drag-and-drop hands over, and
+it is what the rest of this file strips at every other path entry point.
+"""
+function _set_text_param!(m, n::Symbol, value)
+    ps = intensity_spec(n)
+    (ps === nothing || ps.kind !== :path) && return false
+    p = strip(_qmlstr(value))
+    startswith(p, "file://") && (p = p[8:end])
+    m.grid_path = String(p)
+    return true
+end
+
+"""
     shell_set_param(name, value) -> String
 
 Set one parameter. Non-numeric text is refused rather than silently zeroing the field, which
@@ -1385,12 +1476,45 @@ function shell_set_param(name, value)
     n = _qmlname(name)
     n === nothing && return NO_QML_NAME
     n in _derived_names(m) && return ORBIT_ORIENTS
+    if _set_text_param!(m, n, value)
+        refresh_model_tab!(sh)
+        return ""
+    end
     v = _qmlreal(value, NaN)
     isnan(v) && return "not a number: $(value)"
     m.params[n] = v
     n === :ldtype && _reset_unused_ld!(m)
+    n === :intensity_source && _note_intensity_source(sh, v)
     refresh_model_tab!(sh)
     return ""
+end
+
+"""
+    _note_intensity_source(sh, src)
+
+Say, in the console, WHAT CONSUMES the intensity source that was just chosen.
+
+This is here because the honest answer is "not everything yet", and a selector whose effect a
+user has to discover by comparing pictures is worse than one that says so. `ROTIR.build_intensity_provider`
+turns these settings into a provider, and `build_parametric_logπ` is the one χ² that takes one
+(`provider = …`, src/parametric_gradient.jl) — the panel's own surface build and its χ² readout
+go through `compute_ldmap`, which has no provider argument, so at `ldtype = 0` they draw and
+score a surface with no limb darkening whichever backend is selected here.
+
+Once per CHANGE, not once per refresh: `refresh_model_tab!` runs on every keystroke in the
+form, so a note emitted from the table builder would fill the console.
+"""
+function _note_intensity_source(sh::ShellState, src)
+    i = round(Int, Float64(src))
+    j = findfirst(c -> c.first == i, INTENSITY_PARAMS[1].choices)
+    name = j === nothing ? "$(i)" : INTENSITY_PARAMS[1].choices[j].second
+    console!(sh, "intensity source: $(name)")
+    i == 1 && return nothing
+    console!(sh, "  note: this is recorded and checked here, and `build_intensity_provider` " *
+                 "builds it for a script or for the gradient path's `provider =`; the " *
+                 "panel's own surface build and χ² still go through `compute_ldmap`, which " *
+                 "takes no provider, so what is DRAWN at ldtype = 0 has no limb darkening")
+    return nothing
 end
 
 """
@@ -1424,6 +1548,17 @@ function _set_state!(sh::ShellState, m, n::Symbol, s::AbstractString)
     i = findfirst(ps -> ps.name === n, specs)
     if i !== nothing && specs[i].kind === :choice && s != "fixed"
         return "$(specs[i].label) is a discrete choice, not a value that can be $(s)"
+    end
+    # NOR ON A PROVIDER SETTING. `INTENSITY_PARAMS` describes where the intensity comes from
+    # (a backend, a file, the window to read out of it), and none of it is a coordinate: a
+    # grid's Teff axis is a property of the FILE, so freeing it would be a direction the χ² is
+    # not merely flat along but undefined along. The form hides the selector for these kinds;
+    # this is the same rule where the schema can enforce it rather than the QML that draws it.
+    let ips = intensity_spec(n)
+        if ips !== nothing && s != "fixed"
+            return "$(ips.label) configures where the intensity comes from; it is not a " *
+                   "coordinate and cannot be $(s)"
+        end
     end
     # A limb-darkening coefficient the current law does not read is not a coordinate: freeing
     # it would add a direction the χ² is exactly flat along, and tying it would compute a value
@@ -1513,8 +1648,20 @@ function shell_validate_model()
     # BOTH lists: the user should see plausibility advice too. Only `validate_star_params`
     # gates whether the model can be built (see `advise_star_params` for why they are split).
     p = star_params(m)
-    return join(vcat(validate_star_params(p), advise_star_params(p)), "\n")
+    # AND THE PROVIDER, which `validate_star_params` deliberately knows nothing about: none of
+    # `INTENSITY_PARAMS` is a `star_params` field, and that function is the build GATE — a
+    # wrong grid path must not stop the panel drawing the surface, it must say so in the same
+    # place every other problem is reported. Both components, because each carries its own.
+    prov = vcat(_intensity_messages(m, ""),
+                m.companion === nothing ? String[] :
+                _intensity_messages(m.companion, "secondary: "))
+    return join(vcat(validate_star_params(p), advise_star_params(p), prov), "\n")
 end
+
+"[`validate_intensity_source`](@ref) for one component, prefixed so a binary says which."
+_intensity_messages(m, prefix::AbstractString) =
+    [prefix * msg for msg in validate_intensity_source(
+        round(Int, get(m.params, :ldtype, 3.0)), m.params, m.grid_path)]
 
 # ── the plots ───────────────────────────────────────────────────────────────────────────
 
@@ -2959,6 +3106,7 @@ const FIT_METHODS = [
     ("hmc",        "NUTS",       "NUTS (Hamiltonian, uses the analytic gradient)"),
     ("nautilus",   "Nautilus",   "Nautilus (importance nested sampling, with evidence)"),
     ("pigeons",    "Pigeons",    "Pigeons (parallel tempering, variational — multimodal)"),
+    ("ess",        "ESS",        "ESS (ensemble slice sampling, gradient-free)"),
 ]
 
 """
@@ -3010,6 +3158,12 @@ const FIT_BUDGETS = Dict{String,NamedTuple}(
                      tip = "2^rounds scans — each extra round DOUBLES the run. The " *
                            "variational reference starts tuning at round 2, so more rounds " *
                            "also buy a better-fitted reference, not just more scans."),
+    # One sweep moves every walker once, and the ensemble is 2*nfree walkers, so a sweep costs
+    # ~5 objective calls per walker. Chen (2025) gives O(d) autocorrelation for this family, so
+    # a few thousand sweeps is the right order for the handful of parameters a model fit has.
+    "ess"        => (label = "sweeps", default = 3000, lo = 200, hi = 100_000, step = 200,
+                     tip = "sweeps kept after an equal burn-in. Each moves all 2*nfree " *
+                           "walkers once, at roughly 5 objective calls per walker."),
 )
 
 "The budget spec for one method, falling back to the NLopt one for anything unlisted."
@@ -3069,6 +3223,9 @@ function shell_fit_methods()
         # See `gradient_fit_kind` — this is not the same set as "has analytic shape
         # derivatives", and the difference is measurable.
         k == "gradient" && (m === nothing || gradient_fit_kind(m) === :none) && continue
+        # ESS is pure Julia and lives in the package, so it needs no optional import. It does
+        # need N = 2d walkers (Chen 2025, arXiv:2505.02987) — fine for a model fit's handful of
+        # parameters, which is exactly the regime it is offered for.
         push!(rows, "$(k)\t$(v)")
     end
     return join(rows, "\n")
@@ -3617,9 +3774,10 @@ function shell_fit(method, maxeval)
     csnap = m.companion === nothing ? nothing :
         ModelEntry(m.companion.name, m.companion.surface_type, copy(m.companion.params),
                    copy(m.companion.free), copy(m.companion.bounds), copy(m.companion.ties),
-                   m.companion.secondary, nothing, m.companion.place, m.companion.offset)
+                   m.companion.secondary, nothing, m.companion.place, m.companion.offset,
+                   m.companion.grid_path)
     snap = ModelEntry(m.name, m.surface_type, copy(m.params), copy(m.free), copy(m.bounds),
-                      copy(m.ties), m.secondary, csnap, m.place, m.offset)
+                      copy(m.ties), m.secondary, csnap, m.place, m.offset, m.grid_path)
     orbit_snap = deepcopy(sh.orbit)
     mjd = d === nothing ? Float64[] : copy(d.mjd)
     data = d.data
@@ -4265,6 +4423,47 @@ function _run_fit(meth::Symbol, obj, θ0, lb, ub, names, maxeval)
                Dict(n => ((un.q84[k] - un.q16[k]) / 2) for (k, n) in enumerate(names)),
                _posterior(un; diagnostics = Printf.@sprintf("%d samples", size(un.samples, 1))),
                0
+    end
+    if meth === :ess
+        # Gradient-free, affine-invariant, and a SAMPLER rather than a search: it returns the
+        # same (median, error, posterior) triple the nested samplers do, so the panel does not
+        # care which ran. The objective is a chi2 and already returns a large finite sentinel
+        # for a refused parameter set, so the log-posterior is -chi2/2 inside the box and -Inf
+        # outside it; a uniform prior on the box is what the schema's bounds already mean.
+        nfree = length(θ0)
+        logp = function (θ)
+            all(lb[i] <= θ[i] <= ub[i] for i in eachindex(θ)) || return -Inf
+            c = obj(θ)
+            isfinite(c) ? -0.5 * c : -Inf
+        end
+        # 2d walkers is the scaling requirement, not a preference. They start in a small ball
+        # about θ0, clamped inside the box so no walker begins at -Inf (the slice level would
+        # then be -Inf and the walker could never move).
+        nw = max(4, 2 * nfree + (isodd(2 * nfree) ? 1 : 0))
+        span = [min(ub[i] - lb[i], max(abs(θ0[i]), 1.0)) for i in 1:nfree]
+        x0 = Matrix{Float64}(undef, nw, nfree)
+        for w in 1:nw, i in 1:nfree
+            x0[w, i] = clamp(θ0[i] + 0.02 * span[i] * randn(), lb[i] + 1e-9, ub[i] - 1e-9)
+        end
+        nsweep = clamp(maxeval, 200, 100_000)
+        ch, dg = ROTIR.ensemble_slice(logp, x0; nsweep = nsweep, burn = max(200, nsweep ÷ 2),
+                                      thin = max(1, nsweep ÷ 2000), verb = false)
+        F = ROTIR.flatten_chain(ch)
+        med = [median(@view F[:, i]) for i in 1:nfree]
+        q16 = [quantile(@view(F[:, i]), 0.16) for i in 1:nfree]
+        q84 = [quantile(@view(F[:, i]), 0.84) for i in 1:nfree]
+        R = maximum(ROTIR.rhat(ch)); tau = ROTIR.iat(ch)
+        # R-hat and tau are REPORTED, not hidden: a sampler that has not converged gives a
+        # median and an error bar that look exactly like a converged one, and this is the only
+        # place the user can see the difference. tau is a lower bound when it approaches
+        # nsweep/50 — see `iat`'s docstring.
+        diag = Printf.@sprintf("%d samples, %d walkers; R-hat %.4f%s, tau %.0f sweeps%s",
+                               size(F, 1), nw, R, R > 1.01 ? " (NOT converged)" : "",
+                               tau, tau > nsweep/50 ? " (lower bound)" : "")
+        return med, obj(med),
+               Dict(n => ((q84[k] - q16[k]) / 2) for (k, n) in enumerate(names)),
+               _posterior((samples = F, q16 = q16, q84 = q84); diagnostics = diag),
+               dg.n_eval
     end
     alg = meth === :bobyqa ? :LN_BOBYQA : :LN_NELDERMEAD
     opt = NLopt.Opt(alg, length(θ0))

@@ -158,13 +158,43 @@ treesize(dir) = sum(islink(p) ? 0 : filesize(p)
                     for (r, _, fs) in walkdir(dir) for p in (joinpath(r, f) for f in fs);
                     init = 0)
 
-function stage(rel...)
+"""
+    stage(rel...; fatal = false) -> Int
+
+Copy one shipped resource into `share/rotir`, at the SAME path it has in the repository, and
+say how big it was.
+
+`fatal = true` means a bundle without it cannot run, so the build stops here rather than
+producing one. That distinction is not cosmetic: `src/gui/qml` is handed to `loadqml`, which
+has no fallback, so a bundle missing it dies before the window appears — and until this flag
+existed the build printed one `@warn` among hundreds of lines of PackageCompiler output and
+then exited 0, leaving a 3 GB directory whose only symptom was a crash log on the user's
+machine. The silent ones are silent on purpose (`resource` returns `nothing` and the feature
+is simply not offered), and they stay warnings.
+"""
+function stage(rel...; fatal::Bool = false)
     src = joinpath(ROOT, rel...)
-    ispath(src) || (@warn "resource missing, not staged" src; return 0)
+    if !ispath(src)
+        fatal && error("""
+                       required resource missing, refusing to build a bundle that cannot run:
+                           $src
+                       """)
+        @warn "resource missing, not staged" src
+        return 0
+    end
     dst = joinpath(SHARE, rel...)
     mkpath(dirname(dst))
     cp(src, dst; force = true)
-    return treesize(dst)
+    staged = treesize(dst)
+    # AND THAT IT ARRIVED. `cp` of a directory is not atomic and `force = true` removes the
+    # destination first, so a failure part way leaves a directory that exists and is empty —
+    # which `resource` then happily returns, and the feature is missing at run time with the
+    # build having said nothing. An empty tree where the source had bytes is the check.
+    if staged == 0 && treesize(src) > 0
+        msg = "staged nothing from a non-empty source"
+        fatal ? error("$msg: $src -> $dst") : @warn msg src dst
+    end
+    return staged
 end
 
 # QMLMakie's own QML module ("Makie", supplying MakieArea) is registered by its `__init__` with
@@ -227,7 +257,14 @@ end
 staged = 0
 staged += stage_qmlmakie()
 staged += stage_x11_locale()
-staged += stage("src", "gui", "qml")       # FATAL if missing: loadqml has no fallback
+# THIS LIST AND THE `resource(...)` CALL SITES HAVE TO AGREE, and nothing about the build can
+# notice when they stop. A resource is read through `ROTIR.resource("demos", "orbits")` in
+# src/, staged by a matching `stage("demos", "orbits")` here, and the two are in different
+# files with no shared declaration — so a new call site simply is not bundled, and the only
+# symptom is a feature that is quietly absent in the application and present in every
+# checkout the developer tests on. `test/gui/runtests.jl` diffs the two lists; keep them
+# together when adding either.
+staged += stage("src", "gui", "qml"; fatal = true)   # loadqml has no fallback
 staged += stage("demos", "data")           # the picker's "ROTIR data" place, and gui()'s default dir
 staged += stage("demos", "orbits")         # the beta Lyrae and Spica presets orbit_dir() seeds
 staged += stage("app", "assets")           # the icon, for the desktop entry and the installer

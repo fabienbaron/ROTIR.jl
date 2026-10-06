@@ -42,6 +42,15 @@ function __init__()
                      shell_surface_types, shell_add_model, shell_models, shell_select_model,
                      shell_params, shell_set_param, shell_set_param_state,
                      shell_set_bound, shell_set_tie, shell_validate_model,
+                     # REGISTERED, not merely defined. A `shell_*` function that QML calls
+                     # and this list omits is not a missing feature with a blank field: the
+                     # `Julia` singleton is a QQmlPropertyMap, so the call raises
+                     # "Property 'x' ... is not a function" and ABORTS the enclosing
+                     # handler — `refresh()` stopped at the derived readout and never
+                     # reached `shell_epochs()` below it. `shell_derived_summary` shipped
+                     # unregistered for exactly that reason; the test suite now diffs this
+                     # list against every `Julia.*` in the .qml files.
+                     shell_derived_summary,
                      shell_fit_methods, shell_fit, shell_last_fit,
                      shell_free_count,
                      shell_colormaps, shell_set_colormap, shell_reset_zoom,

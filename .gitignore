@@ -72,3 +72,7 @@ build/
 
 # Working notes, deliberately untracked
 TODO.md
+
+# third-party reference code, downloaded for study, not part of ROTIR
+# (harmonix 0.1.0, MIT, https://pypi.org/project/harmonix)
+harmonix_ref/

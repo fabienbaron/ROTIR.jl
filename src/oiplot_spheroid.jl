@@ -994,6 +994,116 @@ function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vm
 end
 
 """
+    mollplot_temperature_healpix_multi(tmaps; titles, kwargs...)
+
+Several HEALPix maps side by side in ONE figure, sharing the projection, graticule, mask and
+(by default) the colour scale of [`mollplot_temperature_healpix`](@ref).
+
+This exists because the single-map function creates its own figure, so it cannot be composed into
+a comparison panel — and hand-rolling the projection for a comparison figure is exactly how you
+end up with ragged facet edges: nearest-neighbour over tessel CENTRES does not reproduce HEALPix
+boundaries. Both functions instead look each screen pixel up with `ang2pix_nest`, which makes the
+facet edges exact.
+
+`tmaps` is a vector of maps, all of the same length. Keywords follow the single-map function;
+those that differ:
+
+- `titles`      : one per panel (or `nothing`).
+- `vmin`/`vmax` : scalars share one scale across every panel (the default, and what makes panels
+                  comparable); pass a vector to give a panel its own limits.
+- `colormap`    : a single name for all panels, or one per panel — pass a diverging map for a
+                  residual panel alongside sequential ones.
+- `colorbar`    : `:each` (default) draws one under every panel, `:shared` draws a single one
+                  across the figure, `:none` draws none.
+- `panel_size`  : width/height in inches of ONE panel; the figure is sized from it.
+
+Returns the figure.
+"""
+function mollplot_temperature_healpix_multi(tmaps::AbstractVector; titles=nothing,
+                                      visible_pixels = [], vmin = -Inf, vmax = Inf,
+                                      colormap="gist_heat", figtitle="Mollweide",
+                                      mask_unobserved=true, bad_color="lightgray",
+                                      incl=90.0, lon_color="white", lat_color="black",
+                                      graticule::Bool=true, labels::Bool=true,
+                                      lon_spacing::Real=20, lat_spacing::Real=15,
+                                      grid_style="-", grid_alpha::Real=0.6,
+                                      colorbar::Symbol=:each, colorbar_label="Temperature (K)",
+                                      colorbar_ticks::Int=7, panel_size=(7.0, 4.6),
+                                      axis_lines::Bool=false, axis_color="black",
+                                      axis_style="-", axis_width::Real=1.0)
+  set_oiplot_defaults()
+  mod(90, lat_spacing) == 0 || error(
+      "mollplot_temperature_healpix_multi: `lat_spacing` must divide 90 (got $lat_spacing).")
+  n = length(tmaps)
+  n > 0 || error("mollplot_temperature_healpix_multi: no maps given")
+  all(length(t) == length(tmaps[1]) for t in tmaps) ||
+      error("mollplot_temperature_healpix_multi: every map must have the same length")
+  _per(x, i) = x isa AbstractVector ? x[i] : x
+
+  xsize = 2000; ysize = div(xsize, 2)
+  theta = collect(range(pi, stop=0.0, length=ysize))
+  phi   = collect(range(-pi, stop=pi, length=xsize))
+  longitude = collect(range(-179.999, stop=179.999, length=xsize))/180*pi
+  latitude  = collect(range(-89.999,  stop=89.999,  length=ysize))/180*pi
+  nside = npix2nside(length(tmaps[1]))
+  PHI   = [i for j in theta, i in phi]
+  THETA = [j for j in theta, i in phi]
+  grid_pix = reshape(ang2pix_nest(nside, vec(THETA), vec(PHI)), size(PHI))
+  vis_set = (mask_unobserved && visible_pixels != []) ? Set(visible_pixels) : nothing
+
+  fig = figure(figtitle, figsize=(panel_size[1]*n, panel_size[2]))
+  fig.clear()
+  moll = nothing
+  for i in 1:n
+    gm = Float64.(tmaps[i][grid_pix])
+    if vis_set !== nothing
+      for idx in eachindex(grid_pix)
+        grid_pix[idx] in vis_set || (gm[idx] = NaN)
+      end
+    end
+    lo = _per(vmin, i); hi = _per(vmax, i)
+    ref = vis_set === nothing ? tmaps[i] : tmaps[i][visible_pixels]
+    lo == -Inf && (lo = minimum(ref)); hi == Inf && (hi = maximum(ref))
+    ax = fig.add_subplot(1, n, i, projection="mollweide")
+    cmap_obj = matplotlib.colormaps[_per(colormap, i)]
+    cmap_obj.set_bad(color=bad_color)
+    moll = ax.pcolormesh(longitude, latitude, gm, vmin=lo, vmax=hi, rasterized=true, cmap=cmap_obj)
+    ax.set_longitude_grid(lon_spacing); ax.set_latitude_grid(lat_spacing)
+    ax.set_longitude_grid_ends(90)
+    ax.grid(graticule)
+    incl != 90.0 && ax.axhline(-incl * pi/180, c="black", ls="-.")
+    if axis_lines
+      ax.axhline(0.0, c=axis_color, ls=axis_style, lw=axis_width)
+      ax.axvline(0.0, c=axis_color, ls=axis_style, lw=axis_width)
+    end
+    ax.tick_params(axis="x", labelsize=9, colors=lon_color)
+    ax.tick_params(axis="y", labelsize=9, colors=lat_color)
+    ax.xaxis.grid(graticule, color=lon_color, alpha=grid_alpha, linestyle=grid_style)
+    ax.yaxis.grid(graticule, color=lat_color, alpha=grid_alpha, linestyle=grid_style)
+    if !labels
+      ax.set_xticklabels(PythonPlot.pylist([])); ax.set_yticklabels(PythonPlot.pylist([]))
+    end
+    titles !== nothing && ax.set_title(String(titles[i]), fontsize=10, pad=10)
+    if colorbar === :each
+      ticks = collect(range(lo, stop=hi, length=max(2, colorbar_ticks)))
+      cb = PythonPlot.colorbar(moll, ax=ax, orientation="horizontal", shrink=.8, pad=0.06,
+                               ticks=ticks)
+      cb.ax.xaxis.set_label_text(String(_per(colorbar_label, i)))
+      cb.ax.tick_params(labelsize=8)
+      cb.solids.set_edgecolor("face")
+    end
+  end
+  if colorbar === :shared
+    cb = PythonPlot.colorbar(moll, ax=fig.get_axes(), orientation="horizontal", shrink=.4,
+                             pad=0.06)
+    cb.ax.xaxis.set_label_text(String(colorbar_label isa AbstractVector ? colorbar_label[1] :
+                                      colorbar_label))
+    cb.solids.set_edgecolor("face")
+  end
+  return fig
+end
+
+"""
     mollplot_temperature_longlat(tmap, ntheta, nphi; kwargs...)
 
 Mollweide plot of a lat/long mesh, through PythonPlot. Takes the SAME display keywords as

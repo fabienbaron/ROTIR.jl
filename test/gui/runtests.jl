@@ -380,6 +380,189 @@ end
     @test parse(Int, cols(rows(G.shell_models())[1])[2]) == last(SURFACE_TYPE_ORDER)
 end
 
+# Every `Julia.foo` the QML calls is REGISTERED, not merely defined.
+#
+# THE BUG THIS IS FOR, and it shipped. `shell_derived_summary` existed, was documented, was
+# covered by a test below — and was missing from the `QML.@qmlfunction` list in
+# src/gui/window.jl. The `Julia` singleton QML sees is a QQmlPropertyMap, so an unregistered
+# name is not a missing function but a missing PROPERTY:
+#
+#     ModelTab.qml:279: TypeError: Property 'shell_derived_summary' of object
+#     QQmlPropertyMap(0x2442bd50) is not a function
+#
+# and a TypeError ABORTS the enclosing handler. `refresh()` therefore stopped at the derived
+# readout and never reached the lines after it, so the panel lost the mass/radii/logg line and
+# the epoch count together, for every refresh, in every session.
+#
+# Nothing else can catch it. The headless suite calls the Julia functions directly, so they all
+# pass; qmllint cannot see a registration list; and the click test only notices if a control it
+# clicks stops working. The list and the call sites are two files that have to agree, which is
+# exactly what a test is for.
+@testset "every Julia.* in the QML is registered" begin
+    qmldir = ROTIR.resource("src", "gui", "qml")
+    @test qmldir !== nothing
+    called = Set{Symbol}()
+    for f in readdir(qmldir; join = true)
+        endswith(f, ".qml") || continue
+        for mm in eachmatch(r"\bJulia\.([A-Za-z_][A-Za-z0-9_]*)", read(f, String))
+            push!(called, Symbol(mm[1]))
+        end
+    end
+    @test length(called) > 50                 # the scan found the call sites at all
+
+    # The registration list, read out of the source. `@qmlfunction` is a macro taking bare
+    # names, so there is no runtime list to query — QML.jl hands them to Qt and keeps nothing
+    # we can ask. Parsing the one `QML.@qmlfunction(...)` call is what is left, and it is
+    # pinned by the length assertion below: a reformatting that broke the parse would show up
+    # as an empty list rather than as a silent pass.
+    wsrc = read(joinpath(dirname(dirname(qmldir)), "gui", "window.jl"), String)
+    i = findfirst("QML.@qmlfunction(", wsrc)
+    @test i !== nothing
+    depth = 0; j = last(i)
+    while true                                 # to the matching close paren
+        c = wsrc[j]
+        c == '(' && (depth += 1)
+        c == ')' && (depth -= 1; depth == 0 && break)
+        j = nextind(wsrc, j)
+    end
+    # Comments inside the list name functions too (`shell_derived_summary` is discussed in
+    # one), so they go before the names are taken or the test would pass on prose alone.
+    body = replace(wsrc[first(i):j], r"#[^\n]*" => "")
+    registered = Set(Symbol(mm.match) for mm in eachmatch(r"[A-Za-z_][A-Za-z0-9_]*", body))
+    @test length(registered) > 50
+
+    missing_reg = sort!(collect(setdiff(called, registered)))
+    @test isempty(missing_reg)
+    # ...and each one is actually callable, which is the other half of the contract: a name in
+    # the list that no longer exists is a load-time UndefVarError in `__init__`.
+    @test all(n -> isdefined(G, n), called)
+end
+
+# The INTENSITY-PROVIDER form, which replaces the limb-darkening coefficients at ldtype = 0.
+#
+# `ldtype = 0` is the one state in which `ld1`-`ld4` are meaningless rather than merely unused:
+# there is no law, so the μ dependence has to come from an `IntensityProvider` instead. The
+# four coefficient rows therefore GO AWAY — not greyed, as they are under a law that reads only
+# some of them — and the provider's own fields take their place, from `INTENSITY_PARAMS` and
+# through the same row delegate, so no parameter name appears in any .qml for this either.
+@testset "the intensity source replaces the LD coefficients at ldtype = 0" begin
+    sh = fresh_shell()
+    G.shell_add_model(2)
+    m = G.current_model(sh.session)
+    ldc(t) = filter(x -> cols(x)[1] in ("ld1", "ld2", "ld3", "ld4"), rows(t))
+    ipar(t) = filter(x -> cols(x)[9] == "intensity", rows(t))
+    irow(n) = only(filter(x -> cols(x)[1] == String(n), rows(G.shell_params())))
+
+    # UNDER A LAW: the coefficients are there and the provider is not. Three of the four are
+    # greyed under the power law, which is the behaviour that must NOT change — the point of
+    # showing them is to say which ones the law in force reads.
+    @test length(ldc(G.shell_params())) == 4
+    @test isempty(ipar(G.shell_params()))
+    @test count(x -> cols(x)[13] == "1", ldc(G.shell_params())) == 3
+
+    # AT ldtype = 0: the coefficients are gone and all nine provider fields are there.
+    @test G.shell_set_param("ldtype", "0") == ""
+    @test isempty(ldc(G.shell_params()))
+    @test length(ipar(G.shell_params())) == length(INTENSITY_PARAMS)
+    # Default is Planck, which reads nothing — so the selector is live and the rest greyed.
+    @test cols(irow(:intensity_source))[4] == "1"
+    @test cols(irow(:intensity_source))[13] == "0"
+    @test all(x -> cols(x)[13] == "1",
+              filter(x -> cols(x)[1] != "intensity_source", ipar(G.shell_params())))
+    # The selector is a `choice` row, so the form draws it with the same combo `ldtype` uses,
+    # and every backend the package can build is offered.
+    @test cols(irow(:intensity_source))[10] == "choice"
+    @test length(split(cols(irow(:intensity_source))[11], "|")) == length(INTENSITY_SOURCES)
+
+    # NOTHING LEAKS INTO `star_params`. This is the property that lets the provider settings
+    # live in `m.params` at all: `star_params` is built by iterating the SURFACE schema, so a
+    # key it does not declare cannot reach the geometry code — and `validate_star_params`
+    # therefore keeps its single job as the build gate.
+    @test !hasproperty(G.star_params(m), :intensity_source)
+    @test isempty(validate_star_params(G.star_params(m)))
+
+    # Choosing a backend un-greys exactly the fields it reads, and nothing else.
+    @test G.shell_set_param("intensity_source", "3") == ""
+    for ps in INTENSITY_PARAMS
+        want = ps.name === :intensity_source || ps.name in intensity_params_used(3)
+        @test (cols(irow(ps.name))[13] == "0") == want
+    end
+
+    # THE PATH IS TEXT, through the same setter as every number. `shell_set_param` refuses
+    # non-numeric text everywhere else, which is right — a half-typed number must not zero the
+    # field — so the `:path` kind is what tells it this one is different.
+    grid = joinpath(DATA, "spica_H_kurucz.fits")
+    @test isfile(grid)
+    @test cols(irow(:grid_path))[10] == "path"
+    @test G.shell_set_param("grid_path", "file://" * grid * "  ") == ""
+    @test m.grid_path == grid                 # the scheme and the whitespace both stripped
+    @test cols(irow(:grid_path))[4] == grid
+
+    # NONE OF IT IS A COORDINATE. A grid's Teff axis is a property of the FILE, so freeing it
+    # would be a direction the χ² is not flat along but undefined along. The form hides the
+    # state selector for these kinds; this is the same rule in Julia, which is where it holds
+    # whatever draws the row.
+    for n in ("intensity_source", "grid_path", "grid_teff_min", "grid_nodes")
+        @test occursin("not a coordinate", G.shell_set_param_state(n, "free"))
+        @test occursin("not a coordinate", G.shell_set_param_state(n, "tied"))
+        @test cols(irow(Symbol(n)))[5] == "fixed"
+    end
+    @test G.shell_free_count() == "0"
+
+    # WHAT THE PANEL SAYS IS WRONG WITH IT. Not folded into `validate_star_params`: that is
+    # the build gate, and a wrong file path must not stop the surface being drawn.
+    @test occursin("no such file", (G.shell_set_param("grid_path", "/no/such/grid.fits");
+                                    G.shell_validate_model()))
+    @test G.shell_set_param("grid_path", grid) == ""
+    @test !occursin("no such file", G.shell_validate_model())
+    @test occursin("reversed", (G.shell_set_param("grid_lambda_max", "100");
+                                G.shell_validate_model()))
+    @test G.shell_set_param("grid_lambda_max", "1800") == ""
+    # Korg's own ceiling, said here rather than minutes into a synthesis run.
+    @test occursin("8000 K", (G.shell_set_param("intensity_source", "4");
+                              G.shell_set_param("grid_teff_max", "10000");
+                              G.shell_validate_model()))
+    # Planck reads none of it, so a leftover setting from another backend must not refuse it.
+    @test G.shell_set_param("intensity_source", "1") == ""
+    @test !occursin("8000 K", G.shell_validate_model())
+
+    # AND THE PROVIDER ITSELF BUILDS, from the form's own values. This is the function a demo
+    # script and the gradient path's `provider =` both go through, so the form is configuring
+    # something real rather than recording a preference.
+    @test G.shell_set_param("intensity_source", "2") == ""
+    @test isempty(validate_intensity_source(0, m.params, m.grid_path))
+    prov = ROTIR.build_intensity_provider(m.params, m.grid_path)
+    @test prov isa TabulatedProvider && owns_mu(prov)
+    @test ROTIR.build_intensity_provider(Dict(:intensity_source => 1.0)) isa PlanckProvider
+    # λ is NANOMETRES in the form and metres everywhere else in ROTIR; one conversion, in one
+    # place, and this is what pins it.
+    @test all(intensity_lambda_range(m.params) .≈ (1.5e-6, 1.8e-6))
+
+    # BACK UNDER A LAW: the coefficients return and the provider disappears, with no trace
+    # left in the validator — a provider under a parametric law would double-count limb
+    # darkening, which is what `check_provider_consistency` refuses outright.
+    @test G.shell_set_param("ldtype", "3") == ""
+    @test length(ldc(G.shell_params())) == 4
+    @test isempty(ipar(G.shell_params()))
+    @test isempty(validate_intensity_source(3, m.params, "/no/such/grid.fits"))
+
+    # THE COMPANION GETS THE SAME FORM AND ITS OWN GRID, because the rows are appended to the
+    # shared parameter table rather than published as a fourth one: one grid rarely spans two
+    # stars that differ by thousands of kelvin.
+    G.shell_set_binary("1", 0)
+    @test isempty(ipar(G.shell_params2()))
+    @test G.shell_set_param2("ldtype", "0") == ""
+    @test length(ipar(G.shell_params2())) == length(INTENSITY_PARAMS)
+    @test G.shell_set_param2("grid_path", grid) == ""
+    @test m.companion.grid_path == grid && m.grid_path == grid
+    @test G.shell_set_param2("intensity_source", "2") == ""
+    @test isempty(validate_intensity_source(0, m.companion.params, m.companion.grid_path))
+    # A problem on the SECONDARY says so, or a binary's two messages are indistinguishable.
+    G.shell_set_param2("grid_path", "")
+    @test occursin("secondary:", G.shell_validate_model())
+end
+
+
 @testset "editing parameters, states, bounds and ties" begin
     sh = fresh_shell()
     G.shell_add_model(2)
@@ -520,6 +703,64 @@ end
 
     # Outside the block the checkout answers again, so nothing leaked into global state.
     @test !startswith(something(ROTIR.resource("demos", "data"), ""), stage)
+
+    # ── and every shipped resource is actually BUNDLED ──────────────────────────────────
+    #
+    # `resource` relocating is only half of it. The other half is that `app/build.jl` has to
+    # have COPIED the thing into `share/rotir` in the first place, and that list is written by
+    # hand in a different file with no shared declaration — so a new `resource("demos", "x")`
+    # call site is simply absent from the application, silently, while every checkout the
+    # developer tests on still has it sitting at `pkgdir`. That is the exact shape of
+    # "packaged files are missing from the AppImage", and it is invisible to every other test
+    # here because they all run from a checkout.
+    #
+    # So: take the paths `src/` ASKS for, take the paths `app/build.jl` STAGES, and require
+    # the first to be covered by the second. Covered rather than equal — `resource("demos",
+    # "data", "x.oifits")` is served by staging the directory, and `makie-cache` and
+    # `qml-modules` are staged from outside the repository by their own functions.
+    @testset "every resource() call site is staged into the bundle" begin
+        root = pkgdir(ROTIR)
+        asked = Set{Vector{String}}()
+        # `src/` AND `app/src/`: the application's own entry point reads two more resources
+        # (the font atlas and QMLMakie's QML module), and they are staged by functions of
+        # their own rather than by a `stage(...)` line — which is exactly the kind of
+        # exception that has to be written down somewhere a test reads.
+        dirs = (joinpath(root, "src"), joinpath(root, "app", "src"))
+        for (dir, _, files) in Iterators.flatten(walkdir.(dirs)), f in files
+            endswith(f, ".jl") || continue
+            txt = read(joinpath(dir, f), String)
+            # `ROTIR.resource("a", "b")` / `resource("a", "b")`, string literals only — a
+            # computed path cannot be checked and there are none.
+            for mm in eachmatch(r"(?:ROTIR\.)?resource\(((?:\s*\"[^\"]*\"\s*,?)+)\)", txt)
+                parts = [String(x[1]) for x in eachmatch(r"\"([^\"]*)\"", mm[1])]
+                isempty(parts) || push!(asked, parts)
+            end
+        end
+        # The four the application cannot do without are in there, or the scan is broken.
+        @test ["src", "gui", "qml", "Main.qml"] in asked
+        @test ["demos", "data"] in asked
+        @test ["demos", "orbits"] in asked
+        @test ["qml-modules"] in asked
+        @test length(asked) >= 5
+
+        bsrc = read(joinpath(root, "app", "build.jl"), String)
+        staged_paths = Vector{String}[]
+        for mm in eachmatch(r"\bstage\(((?:\s*\"[^\"]*\"\s*,?)+)", bsrc)
+            push!(staged_paths, [String(x[1]) for x in eachmatch(r"\"([^\"]*)\"", mm[1])])
+        end
+        # Built rather than copied, so they have no `stage(...)` line: `stage_qmlmakie` takes
+        # QMLMakie's own `qml/` directory and the Makie block writes the font atlas.
+        for extra in (["qml-modules"], ["makie-cache"])
+            push!(staged_paths, extra)
+        end
+        @test length(staged_paths) >= 6
+
+        covered(parts) = any(sp -> length(sp) <= length(parts) && parts[1:length(sp)] == sp,
+                             staged_paths)
+        unbundled = sort!([join(p, "/") for p in asked if !covered(p)])
+        @test isempty(unbundled)
+    end
+
 end
 
 @testset "reconstruction" begin

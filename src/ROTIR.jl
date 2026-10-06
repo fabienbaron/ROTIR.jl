@@ -40,6 +40,7 @@ include("reflection.jl");
 include("oichi2_spheroid.jl");
 include("oichi2_binary.jl");
 include("fused_polyft.jl");
+include("fused_polyft_jvp.jl");      # forward mode (JVP) for the same kernel — see its header
 include("shape_gradient.jl");
 # Absolute mass, radius and surface gravity. AFTER shape_gradient.jl for the Roche shape
 # factor `f_rapid_rot_and_deriv`, and BEFORE the maps so `logg` is available to whatever
@@ -76,6 +77,9 @@ include("rasterize.jl");
 include("polyft_nfft.jl");
 include("type3_nufft.jl");
 include("oiplot_spheroid_core.jl");  # mesh geometry shared by both plotting back-ends
+include("surface_priors.jl");         # isotropic GP prior and the bounded-temperature link
+include("mcmc_diagnostics.jl");       # R-hat and integrated autocorrelation for ensemble chains
+include("ensemble_slice.jl");         # gradient-free ensemble slice sampling (zeus algorithm)
 include("animation.jl");             # pure: frame maps, value ranges, ffmpeg driver
 
 # ── Plotting: declared here, given methods by an extension ───────────────────
@@ -250,6 +254,12 @@ export ParamSpec, SurfaceSpec, SURFACE_TYPES, SURFACE_TYPE_ORDER,
        surface_spec, surface_params, default_star_params, validate_star_params,
        ld_coefficients_used, advise_star_params
 
+# The intensity-provider form, a SIBLING of the surface schema rather than part of it: none of
+# it is a `star_params` field, which is why `validate_star_params` says nothing about it and
+# `validate_intensity_source` exists (src/surface_schema.jl).
+export INTENSITY_PARAMS, INTENSITY_SOURCES, intensity_spec, intensity_params_used,
+       intensity_lambda_range, validate_intensity_source
+
 # A surface map as a file, with the tessellation and the parameters that reproduce its χ²
 # (src/surface_map_io.jl).
 export save_surface_map, load_surface_map
@@ -355,9 +365,14 @@ export binary_chi2_fg, binary_crit_allepochs_fg, binary_reconstruct_oi, split_bi
 
 # Soft visibility
 export sigmoid, dsigmoid, soft_visibility
+export upsample_healpix_xmap, downsample_healpix_xmap
+export gp_covariance, gp_sqrt, box_link, box_unlink
+export rhat, iat, flatten_chain
+export ess_step, ensemble_slice
 
 # Fused two-pass polyft (matrix-free forward/adjoint)
 export compute_polyflux_and_cvis!, compute_adjoint_cvis!, compute_adjoint_vertices!
+export compute_jvp_cvis!
 export precompute_k2_inv_im, fused_spheroid_chi2_fg, fused_cvis, POLYFT_BACKEND
 export fused_cvis_parts
 export turbo_available, polyft_backend, with_polyft_backend

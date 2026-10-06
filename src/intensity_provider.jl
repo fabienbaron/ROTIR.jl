@@ -491,3 +491,70 @@ function build_korg_grid end
 [`build_korg_grid`](@ref) wrapped as a provider. Requires `using Korg`.
 """
 function korg_provider end
+
+# ===========================================================================
+# One provider from a form's worth of settings
+# ===========================================================================
+# The four backends above are constructed in four different ways — a bare struct, a FITS read,
+# an ATLAS9 parse, a synthesis run — and a front-end that offers the CHOICE needs one function
+# that turns the choice plus its settings into a provider. The settings themselves, their
+# labels, units, defaults and which backend reads which, are declared once in
+# `INTENSITY_PARAMS` (src/surface_schema.jl); this is the consumer of that declaration.
+#
+# It belongs here rather than in the GUI because nothing about it is a GUI concern: a demo
+# script that wants "the H-band Kurucz grid for this pack" asks for it the same way, and a
+# second copy of the mapping inside the extension would be free to drift from the schema.
+
+"""
+    build_intensity_provider(cfg, path) -> IntensityProvider
+
+The provider named by `cfg[:intensity_source]`, built from the settings the backend reads.
+
+`cfg` is a `name => value` mapping of the numeric fields of `INTENSITY_PARAMS` (a `Dict` or a
+NamedTuple) and `path` the text-valued `grid_path`. Use
+[`validate_intensity_source`](@ref) first: this raises on a bad configuration rather than
+returning a provider that is wrong in a way only a fit residual would show.
+
+**Cost is not uniform and the caller has to know it.** 1 is free, 2 is a FITS read, 3 parses a
+67 MB pack, and 4 runs `grid_nodes²` syntheses — seconds to minutes. Nothing is cached here;
+save a built grid with [`save_intensity_grid`](@ref) and come back through source 2.
+"""
+function build_intensity_provider(cfg, path::AbstractString = "")
+    src = round(Int, float(_cfg(cfg, :intensity_source, 1.0)))
+    λlo, λhi = intensity_lambda_range(cfg)
+    src == 1 && return PlanckProvider()
+    if src == 2
+        isfile(path) || throw(ArgumentError("build_intensity_provider: no such grid file: $path"))
+        return TabulatedProvider(load_intensity_grid(path); name = basename(path))
+    end
+    if src == 3
+        isfile(path) || throw(ArgumentError("build_intensity_provider: no such Kurucz pack: $path"))
+        g = read_kurucz_intensity(path; λrange = (λlo, λhi),
+                                  Teff = (float(_cfg(cfg, :grid_teff_min, 3500.0)),
+                                          float(_cfg(cfg, :grid_teff_max, 10000.0))),
+                                  logg = (float(_cfg(cfg, :grid_logg_min, 2.0)),
+                                          float(_cfg(cfg, :grid_logg_max, 4.5))))
+        return TabulatedProvider(g; name = "kurucz:" * basename(path))
+    end
+    src == 4 || throw(ArgumentError("build_intensity_provider: unknown intensity_source $src"))
+    # THE WEAK DEPENDENCY, reported as a missing package rather than as a MethodError on a
+    # stub. `build_korg_grid` is declared with no methods (see above), so without `using Korg`
+    # the call fails with "no method matching build_korg_grid(; …)" — which reads as a wrong
+    # call rather than as a package that is not loaded.
+    isempty(methods(build_korg_grid)) &&
+        throw(ArgumentError("Korg synthesis needs `using Korg`: it is a weak dependency, " *
+                            "so ROTIR carries only the stub until it is loaded"))
+    n = round(Int, float(_cfg(cfg, :grid_nodes, 6.0)))
+    g = build_korg_grid(; Teff = (float(_cfg(cfg, :grid_teff_min, 3500.0)),
+                                  float(_cfg(cfg, :grid_teff_max, 7500.0)), n),
+                          logg = (float(_cfg(cfg, :grid_logg_min, 2.0)),
+                                  float(_cfg(cfg, :grid_logg_max, 4.5)), n),
+                          # Korg takes Angstrom; `intensity_lambda_range` gave metres.
+                          λ = (λlo * 1e10, λhi * 1e10))
+    return TabulatedProvider(g; name = "korg")
+end
+
+# A `Dict`, a NamedTuple or anything else `get`/`getproperty` reaches — the GUI holds its
+# settings in a `Dict{Symbol,Float64}` and a script would pass a NamedTuple.
+_cfg(cfg::AbstractDict, k::Symbol, d) = get(cfg, k, d)
+_cfg(cfg, k::Symbol, d) = hasproperty(cfg, k) ? getproperty(cfg, k) : d

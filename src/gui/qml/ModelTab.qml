@@ -380,16 +380,53 @@ Pane {
                             // by up to three rows every time the law is changed, and the point
                             // is to SHOW which coefficients this law uses.
                             opacity: pinert ? 0.45 : 1
-                            ToolTip.text: pinert ? "not used by the current LD law" : pdoc
+                            // THE REASON A ROW IS INERT COMES FROM JULIA, in `pdoc`. It used
+                            // to be the literal "not used by the current LD law" here, which
+                            // was the only reason there was — and then stopped being true: an
+                            // intensity-provider setting the chosen backend does not read is
+                            // greyed for a completely different reason, and a frozen
+                            // orientation for a third. The side that decides which rows are
+                            // inert is the side that can say why.
+                            ToolTip.text: pdoc
                             ToolTip.visible: ma.containsMouse
                             MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true }
                         }
 
-                        // A choice field (`ldtype`) renders as a combo, everything else as a
-                        // number. The schema says which; QML does not decide.
+                        // A choice field (`ldtype`, `gravity_law`, `intensity_source`)
+                        // renders as a combo, a path field as a wide text box, everything
+                        // else as a number. The schema says which; QML does not decide.
                         Loader {
-                            Layout.preferredWidth: dp(120)
-                            sourceComponent: pkind === "choice" ? choiceField : numberField
+                            // dp(120) IS THE NUMBER COLUMN, and a combo does not fit in it.
+                            // The widest entry the schema offers is "Espinosa Lara-Rieutord"
+                            // (gravity_law), which is ~160 px at this font: the box clipped it
+                            // to "Espinosa Lara" and the law in force was unreadable. So a
+                            // choice row takes dp(120) as a FLOOR and grows to its own
+                            // `implicitWidth`, which `choiceField` computes from the longest
+                            // label it was given — see there for why that is measured rather
+                            // than hardcoded.
+                            //
+                            // WIDENING ONLY THIS ROW IS SAFE. The row budget noted on the
+                            // label above (168+120+74+58+58+spacing = 494 against a dp(520)
+                            // pane with the horizontal scrollbar off) is for a row showing its
+                            // state combo and bounds. A choice row shows neither — the state
+                            // selector is hidden for a discrete field and the bounds only
+                            // appear on a FREE one — so 168 + width + spacing is all of it,
+                            // and there is room to spare.
+                            //
+                            // THE LOADER'S OWN `implicitWidth`, not `item.implicitWidth`: a
+                            // Loader already reports the loaded item's implicit size as its
+                            // own, and `item` is typed QObject, so reading a property off it
+                            // is invisible to qmllint (`missing-property`) and unchecked.
+                            Layout.preferredWidth: pkind === "choice"
+                                ? Math.max(dp(120), implicitWidth) : dp(120)
+                            // A PATH TAKES THE REST OF THE ROW. Nothing follows it — the state
+                            // selector, the tie box and the two bounds are all hidden on a
+                            // row a fit cannot move — so the width is free, and a file path is
+                            // the one value in this form that is genuinely long.
+                            Layout.fillWidth: pkind === "path"
+                            sourceComponent: pkind === "choice" ? choiceField
+                                           : pkind === "path"   ? pathField
+                                                                : numberField
                         }
 
                         Component {
@@ -420,11 +457,79 @@ Pane {
                             }
                         }
                         Component {
+                            id: pathField
+                            TextField {
+                                text: pvalue
+                                font.pointSize: root.fontPt - 1
+                                selectByMouse: true
+                                enabled: !pinert && !root.jobRunning
+                                placeholderText: "path to a grid file"
+                                // The START of the path, for the same reason the number field
+                                // does it: a TextField leaves its cursor at the end of newly
+                                // assigned text, and the tail of a long path is the filename
+                                // — which is the part you can guess. The directory is not.
+                                onTextChanged: if (!activeFocus) cursorPosition = 0
+                                ToolTip.text: pdoc
+                                ToolTip.visible: hovered
+                                onEditingFinished: {
+                                    var msg = root.setParam(prow.rowComp, prow.rowName, text)
+                                    if (msg.length > 0) root.statusChanged(msg)
+                                    root.refresh(); root.redraw()
+                                }
+                            }
+                        }
+                        Component {
                             id: choiceField
                             ComboBox {
+                                id: choiceBox
                                 model: pchoices.length > 0 ? pchoices.split("|") : []
                                 font.pointSize: root.fontPt
                                 enabled: !root.jobRunning
+                                // SIZED TO THE LONGEST LABEL, not to a pixel constant: the
+                                // entries come from the schema (`ParamSpec.choices`), so a
+                                // number tuned to today's longest string is wrong the day
+                                // someone adds a longer one — which is how
+                                // "Espinosa Lara-Rieutord" came to be shown as
+                                // "Espinosa Lara".
+                                //
+                                // `FontMetrics.advanceWidth` is a FUNCTION of its argument, so
+                                // this measures every label without storing any state. The
+                                // alternative, a `TextMetrics` whose `text` the binding
+                                // assigns in a loop, both writes and reads the same object and
+                                // is a binding cycle.
+                                //
+                                // The font is taken from the box itself rather than from
+                                // `root.fontPt`: Main.qml loads the UI face through a
+                                // FontLoader, and measuring in the application's default
+                                // family would under-measure in whatever is actually drawn.
+                                FontMetrics { id: choiceMetrics; font: choiceBox.font }
+                                //
+                                // `pchoices` IS READ DEFENSIVELY, because this is a LAYOUT
+                                // binding and those are re-evaluated when a ListView takes a
+                                // delegate out of service — at which point the row's model
+                                // context is gone and every role reads `undefined`. That is
+                                // the same hazard `prow.rowName` is captured for above, but
+                                // the symptom here is worse than a bad value: a TypeError
+                                // inside a width binding is a row that fails to lay out, and
+                                // Qt reported exactly that as
+                                //   ModelTab.qml: TypeError: Cannot read property 'length'
+                                //   of undefined
+                                // on every teardown. An undefined list gives the minimum
+                                // width, and the Loader's own dp(120) floor makes that the
+                                // column width it would have had anyway.
+                                implicitWidth: {
+                                    var ch = pchoices
+                                    var opts = (ch && ch.length > 0) ? ch.split("|") : []
+                                    var w = 0
+                                    for (var i = 0; i < opts.length; ++i)
+                                        w = Math.max(w, choiceMetrics.advanceWidth(
+                                            opts[i].split("=").slice(1).join("=")))
+                                    // The arrow and the box's own padding: `implicitWidth` of
+                                    // the indicator, never its `width`, which the style may
+                                    // derive from the box and would close the loop.
+                                    return w + leftPadding + rightPadding +
+                                           (indicator ? indicator.implicitWidth : dp(18)) + dp(6)
+                                }
                                 currentIndex: {
                                     var opts = pchoices.split("|")
                                     for (var i = 0; i < opts.length; ++i)
@@ -452,7 +557,14 @@ Pane {
                         // laws that do not exist. Nothing follows it on that row, so hiding it
                         // costs no alignment. `shell_set_param_state` refuses it as well.
                         ComboBox {
-                            visible: pkind !== "choice"
+                            // ONLY ON A ROW A FIT CAN MOVE. `pkind` is what says so, and
+                            // `choice` is no longer the only kind that cannot: a `setting`
+                            // (where the intensity comes from, which window of a grid to read)
+                            // and a `path` are configuration, not coordinates — a grid's Teff
+                            // axis is a property of the FILE, so there is no sense in which an
+                            // optimiser could walk it. `_set_state!` refuses all three.
+                            visible: pkind !== "choice" && pkind !== "setting" &&
+                                     pkind !== "path"
                             // A coefficient the law does not read cannot be freed: it would be
                             // a direction the χ² is flat along. Julia refuses it too. And not
                             // mid-fit: the free set is what the running fit is moving.
@@ -817,7 +929,27 @@ Pane {
                         id: compTypeBox
                         visible: root.isBinary
                         Layout.fillWidth: true
-                        Layout.preferredWidth: dp(150)
+                        // A FLOOR FROM THE CONTENT, for the same reason as the schema choice
+                        // field above: these labels come from `shell_surface_types`, so
+                        // dp(150) was a constant that happened to clear "Triaxial ellipsoid"
+                        // and would clip the next type anyone adds. `typeModel.count` is in
+                        // the expression so that it re-evaluates when the rows arrive — they
+                        // are appended after this item is built.
+                        //
+                        // (`typeBox`, `backendBox` and `methodBox` need nothing here: they
+                        // are `fillWidth` with no cap, so the widest entry is what they take
+                        // when there is room. `typeBox`'s own dp(130) floor is deliberately
+                        // left alone — it is tuned against the click test's coordinates, see
+                        // the note on it.)
+                        Layout.preferredWidth: {
+                            var w = dp(150)
+                            for (var i = 0; i < typeModel.count; ++i)
+                                w = Math.max(w, compTypeMetrics.advanceWidth(
+                                    typeModel.get(i).label) + leftPadding + rightPadding +
+                                    (indicator ? indicator.implicitWidth : dp(18)) + dp(6))
+                            return w
+                        }
+                        FontMetrics { id: compTypeMetrics; font: compTypeBox.font }
                         // The current value is pushed by `refresh()`, NOT bound here. A
                         // binding on `Julia.shell_companion_surface_type()` evaluates once and
                         // never again: QML has no way to know when a plain function call's

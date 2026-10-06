@@ -56,6 +56,28 @@ end
         @test m.nfail[] == 0
     end
 
+    # HEALPix resolution changes, the pixel-space surface prior and its bounded-temperature link,
+    # the ensemble-chain diagnostics, and the gradient-free slice sampler. Every assertion is
+    # against an analytic identity, a target with known moments, or a process with a known
+    # autocorrelation time — never against a value this code produced. Several are regressions for
+    # mistakes that returned plausible output rather than an error: a chain flattened sweep-major
+    # makes any autocorrelation estimator report tau = 1, and a fixed red/blue split returned a
+    # 40 %-under-dispersed chain while reporting R-hat = 1.000.
+    @testset "surface tools" begin
+        m = run_script("test_surface_tools.jl")
+        @test m.nfail[] == 0
+    end
+
+    # Forward mode for the exact polygon FT (src/fused_polyft_jvp.jl). The strongest of its three
+    # checks is the adjoint identity <J v, w> = <v, J' w> against the existing, independently
+    # finite-difference-checked VJP: it ties the two directions together, so a sign or index slip
+    # in either one fails here. Variational inference needs both directions, so this is load
+    # bearing for every MGVI/GeoVI result.
+    @testset "polygon FT forward mode" begin
+        m = run_script("test_polyft_jvp.jl")
+        @test m.nfail[] == 0
+    end
+
     # I(Teff, logg, mu, lambda): the interpolant, its four exact partials, the rrule, and
     # the guard that refuses to count limb darkening twice. Zygote and FiniteDifferences
     # sections self-skip, so this runs under `--project=.` too (32 of 37 checks).
