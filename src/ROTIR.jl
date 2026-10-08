@@ -80,6 +80,7 @@ include("oiplot_spheroid_core.jl");  # mesh geometry shared by both plotting bac
 include("surface_priors.jl");         # isotropic GP prior and the bounded-temperature link
 include("mcmc_diagnostics.jl");       # R-hat and integrated autocorrelation for ensemble chains
 include("ensemble_slice.jl");         # gradient-free ensemble slice sampling (zeus algorithm)
+include("sky_export.jl");             # sky images / cubes for OITOOLS (FITS) — see its header
 include("animation.jl");             # pure: frame maps, value ranges, ffmpeg driver
 
 # ── Plotting: declared here, given methods by an extension ───────────────────
@@ -257,7 +258,8 @@ export ParamSpec, SurfaceSpec, SURFACE_TYPES, SURFACE_TYPE_ORDER,
 # The intensity-provider form, a SIBLING of the surface schema rather than part of it: none of
 # it is a `star_params` field, which is why `validate_star_params` says nothing about it and
 # `validate_intensity_source` exists (src/surface_schema.jl).
-export INTENSITY_PARAMS, INTENSITY_SOURCES, intensity_spec, intensity_params_used,
+export INTENSITY_PARAMS, INTENSITY_SOURCES, SHIPPED_INTENSITY_GRIDS, intensity_grid_path,
+       kurucz_pack_path, intensity_cache_dir, intensity_spec, intensity_params_used,
        intensity_lambda_range, validate_intensity_source
 
 # A surface map as a file, with the tessellation and the parameters that reproduce its χ²
@@ -290,7 +292,7 @@ export reflection_kernels, solve_radiosity, handle_reflection
 export intensity, planck_and_dT, band_of
 # Model-atmosphere intensity, I(Teff, logg, mu, lambda) — src/intensity_provider.jl.
 # `owns_mu` is the guard against counting limb darkening twice.
-export IntensityProvider, PlanckProvider, TabulatedProvider, RectGrid4
+export IntensityProvider, PlanckProvider, RayleighJeansProvider, TabulatedProvider, RectGrid4
 export provider_intensity, provider_intensity_and_derivs, provider_map
 export owns_mu, needs_logg, provider_support, check_provider_consistency
 export interp4_and_grad, analytic_test_grid
@@ -379,6 +381,8 @@ export turbo_available, polyft_backend, with_polyft_backend
 
 # Rasterization (polygon -> image via Sutherland-Hodgman clipping)
 export rasterize_polygon_image!, rasterize_polygon_image, rasterize_adjoint!
+# Sky images and cubes for OITOOLS (src/sky_export.jl).
+export sky_layout, sky_grid, render_sky_cube, write_sky_cube, read_sky_cube, check_sky_cube
 
 # NFFT (polygon -> Fourier grid via Gauss-Legendre quadrature + NFFT)
 export build_gauss_samples, polyft_nfft_forward, polyft_nfft_image, polyft_cvis_nufft, quadrature_for

@@ -888,8 +888,10 @@ Pane {
                         model: paramModel
                         spacing: dp(2)
                         // Grouped by section header. `pgroup` comes from the schema, so the order
-                        // of the sections is the order the schema lists the fields in — geometry,
-                        // then thermal, then limb darkening, then orientation, then orbit.
+                        // of the sections is the order the table lists the fields in — the
+                        // intensity source first (temperature → intensity applies to any map,
+                        // whatever the limb-darkening law), then geometry, thermal, limb
+                        // darkening, orientation and orbit.
                         section.property: "pgroup"
                         section.delegate: Label {
                             width: paramList.width

@@ -108,6 +108,25 @@ cb("matches intensity(:planck)", provider_intensity(pp,Tk,nothing,nothing,λ0) �
 # The identity dB/dlambda == dB/dT * (T/lambda), independent of both implementations.
 chk("dB/dlam == dB/dT * T/lam", relerr(dlp, dTp .* Tk ./ λ0); tol=1e-13)
 
+println("\n[4b] Rayleigh–Jeans: linear in T, and the long-wavelength limit of Planck")
+rj = RayleighJeansProvider()
+Irj,dTr,dgr,dmr,dlr = provider_intensity_and_derivs(rj,Tk,nothing,nothing,λ0)
+cb("I = λT/c2", Irj ≈ λ0 .* Tk ./ ROTIR._PLANCK_C2)
+cb("dI/dT = λ/c2 and dI/dλ = T/c2", all(dTr .≈ λ0/ROTIR._PLANCK_C2) && dlr ≈ Tk ./ ROTIR._PLANCK_C2)
+cb("dI/dlogg, dI/dmu exactly zero", all(iszero,dgr) && all(iszero,dmr))
+cb("agrees with Planck where c2/λT ≪ 1", isapprox(provider_intensity(pp,Tk,nothing,nothing,1e-2),
+                                                  provider_intensity(rj,Tk,nothing,nothing,1e-2); rtol=1e-3))
+cb("owns no μ", !owns_mu(rj))
+cb("built from the form", ROTIR.build_intensity_provider(Dict(:intensity_source => 5.0)) isa RayleighJeansProvider)
+
+println("\n[4c] the shipped grids are found by name, not by path")
+cb("every shipped grid resolves", all(isfile(intensity_grid_path(Dict(:grid_choice => Float64(k))))
+                                      for (k, _) in SHIPPED_INTENSITY_GRIDS))
+cb("a shipped grid reads no path", intensity_params_used(2, Dict(:grid_choice => 1.0)) == (:grid_choice,))
+cb("a custom grid does", intensity_params_used(2, Dict(:grid_choice => 0.0)) == (:grid_choice, :grid_path))
+cb("analytic sources read nothing", intensity_params_used(1) == () && intensity_params_used(5) == ())
+cb("shipped grid builds", ROTIR.build_intensity_provider(Dict(:intensity_source => 2.0, :grid_choice => 2.0)) isa TabulatedProvider)
+
 println("\n[5] guards and consistency")
 cb("mu=0 node refused", try RectGrid4(Ta,ga,[0.0;ma],la,zeros(9,7,12,6)); false catch; true end)
 cb("unsorted axis refused", try RectGrid4(reverse(Ta),ga,ma,la,gml.values); false catch; true end)

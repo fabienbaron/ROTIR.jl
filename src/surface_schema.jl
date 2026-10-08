@@ -590,23 +590,50 @@ The provider form, as [`ParamSpec`](@ref)s, in the order it is shown. A sibling 
 COORDINATE: a fit cannot free a grid's Teff window, so the form must not offer free/fixed/tied
 on these rows and `_set_state!` refuses it.
 """
+# THE GRIDS THAT SHIP WITH ROTIR, offered by name rather than asked for by path. Each is a
+# `save_intensity_grid` FITS file under the package's `demos/data`, found through `resource` so
+# the bundled app and a dev checkout resolve it the same way. Code 0 is the escape hatch: a
+# grid the user built themselves, which is the one case where a path has to be typed.
+const SHIPPED_INTENSITY_GRIDS = [
+    # (file, short label for the combo — which sizes itself to its widest entry — and the
+    #  ranges, which go in the row's tooltip instead)
+    1 => ("spica_H_kurucz.fits",   "Kurucz H (hot)",  "Kurucz ATLAS9, H band: Teff 17–30 kK, log g 3.0–4.5"),
+    2 => ("betcas_H_korg.fits",    "Korg H",          "Korg/MARCS, H band: Teff 5.4–7.6 kK, log g 2.9–4.1"),
+    3 => ("betcas_Br11_korg.fits", "Korg Br-11",      "Korg/MARCS, Br-11 window: Teff 5.4–7.6 kK, log g 2.9–4.1"),
+]
+
 const INTENSITY_PARAMS = [
-    ParamSpec(:intensity_source, "Intensity from", "", 1.0, 1.0, 4.0, :intensity,
-              "Which backend supplies I(Teff, logg, mu, lambda) now that no " *
-              "limb-darkening law is applied. Planck carries NO mu dependence, so it is " *
-              "the uniform-brightness disc ldtype = 0 has always given; the other three " *
-              "own the limb darkening themselves, which is the point of switching the law " *
-              "off (a fitted ld1 otherwise absorbs the error in whichever " *
-              "gravity-darkening law was assumed).";
+    ParamSpec(:intensity_source, "Intensity from", "", 5.0, 1.0, 5.0, :intensity,
+              "How a temperature becomes the intensity the interferometer sees, applied to " *
+              "whatever temperature map the surface carries. The default, Rayleigh–Jeans, is " *
+              "intensity linear in the map — what the panel's χ², fits and reconstructions " *
+              "have always computed. Planck and Rayleigh–Jeans " *
+              "(I ∝ T) are analytic and carry no μ dependence, so the limb-darkening law " *
+              "supplies it. ROTIR grid: a model-atmosphere grid that ships with ROTIR. " *
+              "Kurucz pack: the ATLAS9 intensity pack, downloaded once (67.5 MB) and kept. " *
+              "Korg: MARCS synthesis, Teff ≤ 8000 K, needs `using Korg`. The three " *
+              "atmosphere sources carry their own μ dependence and are meant for ldtype = 0.";
               kind = :choice,
-              choices = [1 => "Planck (no μ dependence)",
-                         2 => "Tabulated grid (FITS)",
-                         3 => "Kurucz ATLAS9 pack",
-                         4 => "Korg synthesis (MARCS)"]),
+              # SHORT LABELS: the combo sizes itself to its widest entry. The detail is here,
+              # in the tooltip — Planck and Rayleigh–Jeans (I ∝ T) carry no μ dependence;
+              # "ROTIR grid" is a grid that ships with the package; "Kurucz pack" is the
+              # ATLAS9 intensity pack, downloaded once (67.5 MB) and kept; "Korg" synthesizes
+              # MARCS spectra (Teff ≤ 8000 K, needs `using Korg`).
+              choices = [5 => "Rayleigh–Jeans",
+                         1 => "Planck",
+                         2 => "ROTIR grid",
+                         3 => "Kurucz pack",
+                         4 => "Korg (MARCS)"]),
+    ParamSpec(:grid_choice, "Grid", "", 1.0, 0.0, 3.0, :intensity,
+              "Which of the model-atmosphere grids that ship with ROTIR to read, or a custom " *
+              "FITS grid written by save_intensity_grid. " *
+              join(("$(v[2]): $(v[3])." for (k, v) in SHIPPED_INTENSITY_GRIDS), " ");
+              kind = :choice,
+              choices = vcat([k => v[2] for (k, v) in SHIPPED_INTENSITY_GRIDS],
+                             [0 => "Custom file…"])),
     ParamSpec(:grid_path, "Grid file", "", 0.0, -Inf, Inf, :intensity,
-              "The FITS grid written by save_intensity_grid, or the Kurucz ATLAS9 " *
-              "intensity pack (ip00k2.pck19 and friends). The grids that ship with ROTIR " *
-              "are in the 'ROTIR data' place of the file picker.";
+              "A FITS grid written by save_intensity_grid. Only asked for when the grid is " *
+              "'Custom FITS file…'; the shipped grids are found without one.";
               kind = :path),
     ParamSpec(:grid_lambda_min, "λ from", "nm", 1500.0, 1.0, 1e7, :intensity,
               "Lower edge of the wavelength window to read or synthesize. Required by the " *
@@ -637,8 +664,8 @@ const INTENSITY_PARAMS = [
               kind = :setting),
 ]
 
-"The backend codes, in the order [`INTENSITY_PARAMS`](@ref) offers them."
-const INTENSITY_SOURCES = (1, 2, 3, 4)
+"The backend codes [`INTENSITY_PARAMS`](@ref) offers (display order is the choices list)."
+const INTENSITY_SOURCES = (1, 2, 3, 4, 5)
 
 """
     intensity_spec(name) -> ParamSpec or nothing
@@ -652,19 +679,45 @@ function intensity_spec(name::Symbol)
 end
 
 """
-    intensity_params_used(source) -> Tuple{Symbol,...}
+    intensity_params_used(source, cfg = nothing) -> Tuple{Symbol,...}
 
 Which provider fields the chosen backend actually reads — the exact counterpart of
-[`ld_coefficients_used`](@ref), and used the same way: a form greys out the rest, so the panel
-says which of the nine rows the backend in force is going to look at.
+[`ld_coefficients_used`](@ref). The form SHOWS exactly these (plus the selector), so an
+analytic conversion carries no grid settings at all.
+
+With `cfg`, the grid's own choice is honoured too: `grid_path` is read only for a custom grid
+(`grid_choice = 0`), never for one that ships with ROTIR.
 """
-intensity_params_used(source::Integer) =
-    Int(source) == 2 ? (:grid_path,) :
-    Int(source) == 3 ? (:grid_path, :grid_lambda_min, :grid_lambda_max,
-                        :grid_teff_min, :grid_teff_max, :grid_logg_min, :grid_logg_max) :
-    Int(source) == 4 ? (:grid_lambda_min, :grid_lambda_max,
-                        :grid_teff_min, :grid_teff_max, :grid_logg_min, :grid_logg_max,
-                        :grid_nodes) : ()
+function intensity_params_used(source::Integer, cfg = nothing)
+    src = Int(source)
+    windows = (:grid_lambda_min, :grid_lambda_max, :grid_teff_min, :grid_teff_max,
+               :grid_logg_min, :grid_logg_max)
+    if src == 2
+        custom = cfg === nothing || round(Int, float(_cfgget(cfg, :grid_choice, 1.0))) == 0
+        return custom ? (:grid_choice, :grid_path) : (:grid_choice,)
+    end
+    src == 3 && return windows
+    src == 4 && return (windows..., :grid_nodes)
+    return ()                                   # Planck, Rayleigh–Jeans: nothing to read
+end
+_cfgget(cfg::AbstractDict, k::Symbol, d) = get(cfg, k, d)
+_cfgget(cfg, k::Symbol, d) = hasproperty(cfg, k) ? getproperty(cfg, k) : d
+
+"""
+    intensity_grid_path(cfg, path = "") -> String
+
+The FITS file source 2 reads: a shipped grid resolved inside the package (`grid_choice ≥ 1`),
+or `path` for a custom one (`grid_choice = 0`). Empty when a shipped grid is missing from this
+installation.
+"""
+function intensity_grid_path(cfg, path::AbstractString = "")
+    k = round(Int, float(_cfgget(cfg, :grid_choice, 1.0)))
+    k == 0 && return String(strip(path))
+    i = findfirst(p -> p.first == k, SHIPPED_INTENSITY_GRIDS)
+    i === nothing && return ""
+    f = resource("demos", "data", first(SHIPPED_INTENSITY_GRIDS[i].second))
+    return f === nothing ? "" : f
+end
 
 """
     intensity_lambda_range(cfg) -> Tuple{Float64,Float64}
@@ -692,18 +745,26 @@ well would stop the panel drawing a surface over a wrong file path.
 """
 function validate_intensity_source(ldtype, cfg, path::AbstractString)
     msgs = String[]
-    Int(ldtype) == 0 || return msgs          # no law off, no provider in play
-    src = round(Int, float(get(cfg, :intensity_source, 1.0)))
+    # CHECKED UNDER EVERY LAW. The temperature → intensity conversion is a layer on top of any
+    # temperature map, not something that exists only once the limb-darkening law is off, and
+    # the form shows these rows for every `ldtype` — so a wrong path is a wrong path whatever
+    # the law. (`ldtype` stays in the signature: callers pass it, and it is the hook for any
+    # law-dependent rule.)
+    src = round(Int, float(get(cfg, :intensity_source, INTENSITY_PARAMS[1].default)))
     src in INTENSITY_SOURCES ||
         return ["intensity_source = $src is not one of " *
                 join(("$(k) ($(v))" for (k, v) in INTENSITY_PARAMS[1].choices), ", ")]
-    used = intensity_params_used(src)
+    used = intensity_params_used(src, cfg)
     label = something(findfirst(p -> p.first == src, INTENSITY_PARAMS[1].choices), 0)
     name = label == 0 ? string(src) : INTENSITY_PARAMS[1].choices[label].second
-    if :grid_path in used
-        p = strip(path)
-        isempty(p) && push!(msgs, "$(name) needs a grid file; none is set")
-        (!isempty(p) && !isfile(p)) && push!(msgs, "no such file: $(p)")
+    if src == 2
+        p = intensity_grid_path(cfg, path)
+        if :grid_path in used
+            isempty(p) && push!(msgs, "a custom grid needs a FITS file; none is set")
+            (!isempty(p) && !isfile(p)) && push!(msgs, "no such file: $(p)")
+        else
+            isfile(p) || push!(msgs, "the shipped grid is missing from this installation")
+        end
     end
     # The RANGES, as ranges. A reversed window is the mistake a two-box form invites, and it
     # surfaces far away: `read_kurucz_intensity` filters its axis to nothing and reports

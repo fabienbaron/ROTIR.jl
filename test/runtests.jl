@@ -78,6 +78,13 @@ end
         @test m.nfail[] == 0
     end
 
+    # Sky cubes for OITOOLS: fed to OITOOLS, the cube must reproduce ROTIR's own visibilities
+    # (complex, V², closure phases) on real uv coverage, and its layout must be the one OITOOLS
+    # uses rather than one of the seven transposes/reflections that give the same V².
+    @testset "sky export (OITOOLS cubes)" begin
+        run_script("test_sky_export.jl")
+    end
+
     # I(Teff, logg, mu, lambda): the interpolant, its four exact partials, the rrule, and
     # the guard that refuses to count limb darkening twice. Zygote and FiniteDifferences
     # sections self-skip, so this runs under `--project=.` too (32 of 37 checks).

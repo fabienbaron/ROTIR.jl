@@ -39,6 +39,11 @@ Pane {
     property string ctxModel: "—"
     property string ctxType: "—"
     property string ctxMesh: "—"
+    // The model's "Intensity from", as a reconstruction will apply it (see
+    // `_imaging_intensity`): the source code, a readable label, and why it would refuse.
+    property int intensityCode: 5
+    property string intensityLabel: ""
+    property string intensityErr: ""
     function dp(px) { return Math.round(px * uiScale) }
 
     signal statusChanged(string s)
@@ -95,6 +100,11 @@ Pane {
         if (ctx.length >= 5) {
             root.ctxDataset = ctx[0]; root.ctxEpochs = parseInt(ctx[1])
             root.ctxModel = ctx[2];   root.ctxType = ctx[3]; root.ctxMesh = ctx[4]
+        }
+        var ii = Julia.shell_imaging_intensity().split("\t")
+        if (ii.length >= 3) {
+            root.intensityCode = parseInt(ii[0]); root.intensityLabel = ii[1]
+            root.intensityErr = ii[2]
         }
         var rows = Julia.shell_images()
         imageModel.clear()
@@ -171,6 +181,45 @@ Pane {
                         color: "#7f8c98"
                         text: "mesh:  " + root.ctxMesh
                     }
+                }
+            }
+
+            // HOW THE MAP BECOMES INTENSITY, at the top of the run's settings: the model's own
+            // "Intensity from" (the same row that leads the Model form), restricted to the two
+            // sources a reconstruction can apply. Changing it here changes the model.
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: dp(6)
+                Label { text: "Intensity from"; font.bold: true; font.pointSize: root.fontPt }
+                ComboBox {
+                    id: imgIntensity
+                    // codes: Rayleigh–Jeans = 5, Planck = 1 (INTENSITY_PARAMS in
+                    // src/surface_schema.jl); a model-atmosphere source shows as no selection
+                    // and the note below says why it cannot be used here.
+                    property var codes: [5, 1]
+                    model: ["Rayleigh–Jeans", "Planck"]
+                    currentIndex: codes.indexOf(root.intensityCode)
+                    enabled: root.ctxModel !== "—"
+                    font.pointSize: root.fontPt
+                    ToolTip.text: "Rayleigh–Jeans: intensity linear in the map (the historical " +
+                                  "behaviour). Planck: the map is a temperature, converted at the " +
+                                  "data's mean wavelength. Shared with the Model tab."
+                    ToolTip.visible: hovered
+                    onActivated: {
+                        root.statusChanged(Julia.shell_set_param("intensity_source",
+                                                                 String(codes[currentIndex])))
+                        root.refresh()
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    font.pointSize: root.fontPt - 1
+                    color: root.intensityErr.length > 0 ? "#c0392b" : "#7f8c98"
+                    text: root.intensityErr.length > 0 ? root.intensityErr : root.intensityLabel
+                    ToolTip.text: text
+                    ToolTip.visible: maInt.containsMouse
+                    MouseArea { id: maInt; anchors.fill: parent; hoverEnabled: true }
                 }
             }
 

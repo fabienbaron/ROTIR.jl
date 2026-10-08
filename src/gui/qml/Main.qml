@@ -740,6 +740,15 @@ ApplicationWindow {
         }
     }
 
+    SkyExport {
+        id: skyExport
+        width: Math.min(win.width * 0.8, dp(720))
+        anchors.centerIn: Overlay.overlay
+        fontPt: pt(10)
+        uiScale: win.uiScale
+        onStatusChanged: function (s) { win.status = s }
+    }
+
     FilePicker {
         id: picker
         width: Math.min(win.width * 0.8, dp(940))
@@ -885,6 +894,17 @@ ApplicationWindow {
                     picker.saveMode = false
                     picker.openAt(initialFolder)
                 }
+            }
+            // SKY IMAGES, for OITOOLS: the model or a reconstruction as an (nx, nx, channels,
+            // epochs) cube in OITOOLS's own layout, checked against ROTIR's visibilities.
+            Button {
+                text: "Export sky FITS…"
+                font.pointSize: pt(10)
+                enabled: !win.jobRunning
+                ToolTip.text: "the model or a reconstruction as sky images at the data's epochs " +
+                              "and channels, for computing visibilities in OITOOLS"
+                ToolTip.visible: hovered
+                onClicked: skyExport.openDialog()
             }
             Item { Layout.fillWidth: true }
             BusyIndicator {

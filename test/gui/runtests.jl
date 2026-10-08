@@ -226,14 +226,18 @@ end
         @test m.surface_type == code
         @test isempty(G.shell_validate_model())      # defaults must build
         pr = rows(G.shell_params())
-        @test length(pr) == length(surface_params(code))
+        # The surface's own fields, led by the intensity-provider rows on any surface that has a
+        # limb-darkening law (temperature → intensity applies whatever the law).
+        hasld = any(ps -> ps.name === :ldtype, surface_params(code))
+        @test length(pr) == length(surface_params(code)) + (hasld ? 1 : 0)   # Rayleigh–Jeans: the selector alone
         # THIRTEEN columns: the twelve the form draws, plus `inert` — whether the row is a
         # limb-darkening coefficient the current law does not read. The panel greys those and
         # `shell_set_param_state` refuses to free them.
         @test all(length(cols(x)) == 13 for x in pr)
         @test all(cols(x)[13] in ("0", "1") for x in pr)
-        # Only limb-darkening coefficients are ever inert.
-        @test all(cols(x)[1] in ("ld1", "ld2", "ld3", "ld4")
+        # Only limb-darkening coefficients, and provider settings the chosen backend does not
+        # read, are ever inert.
+        @test all(cols(x)[1] in ("ld1", "ld2", "ld3", "ld4") || cols(x)[9] == "intensity"
                   for x in pr if cols(x)[13] == "1")
         # The `ldtype` row is a choice field carrying its options.
         ld = findfirst(x -> cols(x)[1] == "ldtype", pr)
@@ -438,41 +442,47 @@ end
     @test all(n -> isdefined(G, n), called)
 end
 
-# The INTENSITY-PROVIDER form, which replaces the limb-darkening coefficients at ldtype = 0.
+# The INTENSITY-PROVIDER form. It LEADS the parameter table under EVERY law — temperature →
+# intensity is a layer on top of any temperature map, independent of the μ law — and at
+# ldtype = 0 the limb-darkening coefficients additionally go away.
 #
 # `ldtype = 0` is the one state in which `ld1`-`ld4` are meaningless rather than merely unused:
 # there is no law, so the μ dependence has to come from an `IntensityProvider` instead. The
 # four coefficient rows therefore GO AWAY — not greyed, as they are under a law that reads only
 # some of them — and the provider's own fields take their place, from `INTENSITY_PARAMS` and
 # through the same row delegate, so no parameter name appears in any .qml for this either.
-@testset "the intensity source replaces the LD coefficients at ldtype = 0" begin
+@testset "the intensity source leads the form; the LD coefficients go at ldtype = 0" begin
     sh = fresh_shell()
     G.shell_add_model(2)
     m = G.current_model(sh.session)
     ldc(t) = filter(x -> cols(x)[1] in ("ld1", "ld2", "ld3", "ld4"), rows(t))
     ipar(t) = filter(x -> cols(x)[9] == "intensity", rows(t))
+    inames() = [cols(x)[1] for x in ipar(G.shell_params())]
     irow(n) = only(filter(x -> cols(x)[1] == String(n), rows(G.shell_params())))
+    shown(src) = ["intensity_source"; String.(collect(intensity_params_used(src, m.params)))]
 
-    # UNDER A LAW: the coefficients are there and the provider is not. Three of the four are
-    # greyed under the power law, which is the behaviour that must NOT change — the point of
-    # showing them is to say which ones the law in force reads.
+    # UNDER A LAW: the coefficients are there AND so is the provider, at the top of the form.
+    # Three of the four coefficients are greyed under the power law, which is the behaviour
+    # that must NOT change — the point of showing them is to say which ones the law reads.
     @test length(ldc(G.shell_params())) == 4
-    @test isempty(ipar(G.shell_params()))
+    @test cols(first(rows(G.shell_params())))[1] == "intensity_source"
     @test count(x -> cols(x)[13] == "1", ldc(G.shell_params())) == 3
+    # Default is Rayleigh–Jeans, which reads nothing: the selector ALONE, no grid settings.
+    @test inames() == ["intensity_source"]
+    @test cols(irow(:intensity_source))[4] == "5"           # Rayleigh–Jeans by default
 
-    # AT ldtype = 0: the coefficients are gone and all nine provider fields are there.
+    # AT ldtype = 0: the coefficients are gone, the provider stays.
     @test G.shell_set_param("ldtype", "0") == ""
     @test isempty(ldc(G.shell_params()))
-    @test length(ipar(G.shell_params())) == length(INTENSITY_PARAMS)
-    # Default is Planck, which reads nothing — so the selector is live and the rest greyed.
-    @test cols(irow(:intensity_source))[4] == "1"
-    @test cols(irow(:intensity_source))[13] == "0"
-    @test all(x -> cols(x)[13] == "1",
-              filter(x -> cols(x)[1] != "intensity_source", ipar(G.shell_params())))
+    @test inames() == ["intensity_source"]
     # The selector is a `choice` row, so the form draws it with the same combo `ldtype` uses,
-    # and every backend the package can build is offered.
+    # and every backend the package can build is offered — Rayleigh–Jeans included.
     @test cols(irow(:intensity_source))[10] == "choice"
     @test length(split(cols(irow(:intensity_source))[11], "|")) == length(INTENSITY_SOURCES)
+    @test occursin("Rayleigh", cols(irow(:intensity_source))[11])
+    # Planck is analytic like Rayleigh–Jeans: nothing else to show.
+    @test G.shell_set_param("intensity_source", "1") == ""
+    @test inames() == ["intensity_source"]
 
     # NOTHING LEAKS INTO `star_params`. This is the property that lets the provider settings
     # live in `m.params` at all: `star_params` is built by iterating the SURFACE schema, so a
@@ -481,12 +491,28 @@ end
     @test !hasproperty(G.star_params(m), :intensity_source)
     @test isempty(validate_star_params(G.star_params(m)))
 
-    # Choosing a backend un-greys exactly the fields it reads, and nothing else.
-    @test G.shell_set_param("intensity_source", "3") == ""
-    for ps in INTENSITY_PARAMS
-        want = ps.name === :intensity_source || ps.name in intensity_params_used(3)
-        @test (cols(irow(ps.name))[13] == "0") == want
+    # EACH BACKEND SHOWS EXACTLY THE FIELDS IT READS, in schema order, none greyed. The Kurucz
+    # pack asks for windows but NO path: ROTIR keeps the pack itself.
+    for src in (3, 4)
+        @test G.shell_set_param("intensity_source", string(src)) == ""
+        @test inames() == shown(src)
+        @test all(cols(x)[13] == "0" for x in ipar(G.shell_params()))
     end
+    @test !("grid_path" in (G.shell_set_param("intensity_source", "3"); inames()))
+
+    # THE SHIPPED GRIDS ARE CHOSEN BY NAME. Source 2 shows the grid choice and no path...
+    @test G.shell_set_param("intensity_source", "2") == ""
+    @test inames() == ["intensity_source", "grid_choice"]
+    @test cols(irow(:grid_choice))[10] == "choice"
+    @test length(split(cols(irow(:grid_choice))[11], "|")) == length(SHIPPED_INTENSITY_GRIDS) + 1
+    # The default shipped grid is found: nothing about the provider is reported. (At ldtype = 0
+    # the panel still says the law is off, which is advice about the law, not the grid.)
+    @test !occursin("grid", G.shell_validate_model()) && !occursin("missing", G.shell_validate_model())
+    prov = ROTIR.build_intensity_provider(m.params, m.grid_path)
+    @test prov isa TabulatedProvider && owns_mu(prov)
+    # ...and a path appears only for a custom grid.
+    @test G.shell_set_param("grid_choice", "0") == ""
+    @test inames() == ["intensity_source", "grid_choice", "grid_path"]
 
     # THE PATH IS TEXT, through the same setter as every number. `shell_set_param` refuses
     # non-numeric text everywhere else, which is right — a half-typed number must not zero the
@@ -502,10 +528,9 @@ end
     # would be a direction the χ² is not flat along but undefined along. The form hides the
     # state selector for these kinds; this is the same rule in Julia, which is where it holds
     # whatever draws the row.
-    for n in ("intensity_source", "grid_path", "grid_teff_min", "grid_nodes")
+    for n in ("intensity_source", "grid_choice", "grid_path", "grid_teff_min", "grid_nodes")
         @test occursin("not a coordinate", G.shell_set_param_state(n, "free"))
         @test occursin("not a coordinate", G.shell_set_param_state(n, "tied"))
-        @test cols(irow(Symbol(n)))[5] == "fixed"
     end
     @test G.shell_free_count() == "0"
 
@@ -515,7 +540,8 @@ end
                                     G.shell_validate_model()))
     @test G.shell_set_param("grid_path", grid) == ""
     @test !occursin("no such file", G.shell_validate_model())
-    @test occursin("reversed", (G.shell_set_param("grid_lambda_max", "100");
+    @test occursin("reversed", (G.shell_set_param("intensity_source", "3");
+                                G.shell_set_param("grid_lambda_max", "100");
                                 G.shell_validate_model()))
     @test G.shell_set_param("grid_lambda_max", "1800") == ""
     # Korg's own ceiling, said here rather than minutes into a synthesis run.
@@ -526,36 +552,34 @@ end
     @test G.shell_set_param("intensity_source", "1") == ""
     @test !occursin("8000 K", G.shell_validate_model())
 
-    # AND THE PROVIDER ITSELF BUILDS, from the form's own values. This is the function a demo
-    # script and the gradient path's `provider =` both go through, so the form is configuring
-    # something real rather than recording a preference.
+    # The custom grid builds from the form's own values, through the function a demo script
+    # and the gradient path's `provider =` both use.
     @test G.shell_set_param("intensity_source", "2") == ""
     @test isempty(validate_intensity_source(0, m.params, m.grid_path))
-    prov = ROTIR.build_intensity_provider(m.params, m.grid_path)
-    @test prov isa TabulatedProvider && owns_mu(prov)
+    @test ROTIR.build_intensity_provider(m.params, m.grid_path) isa TabulatedProvider
     @test ROTIR.build_intensity_provider(Dict(:intensity_source => 1.0)) isa PlanckProvider
     # λ is NANOMETRES in the form and metres everywhere else in ROTIR; one conversion, in one
     # place, and this is what pins it.
     @test all(intensity_lambda_range(m.params) .≈ (1.5e-6, 1.8e-6))
 
-    # BACK UNDER A LAW: the coefficients return and the provider disappears, with no trace
-    # left in the validator — a provider under a parametric law would double-count limb
-    # darkening, which is what `check_provider_consistency` refuses outright.
+    # BACK UNDER A LAW: the coefficients return and the provider STAYS, still leading the form,
+    # and its configuration is still checked — a wrong path is wrong whatever the law.
     @test G.shell_set_param("ldtype", "3") == ""
     @test length(ldc(G.shell_params())) == 4
-    @test isempty(ipar(G.shell_params()))
-    @test isempty(validate_intensity_source(3, m.params, "/no/such/grid.fits"))
+    @test cols(first(rows(G.shell_params())))[1] == "intensity_source"
+    @test any(occursin("no such file", msg)
+              for msg in validate_intensity_source(3, m.params, "/no/such/grid.fits"))
 
     # THE COMPANION GETS THE SAME FORM AND ITS OWN GRID, because the rows are appended to the
     # shared parameter table rather than published as a fourth one: one grid rarely spans two
     # stars that differ by thousands of kelvin.
     G.shell_set_binary("1", 0)
-    @test isempty(ipar(G.shell_params2()))
+    @test [cols(x)[1] for x in ipar(G.shell_params2())] == ["intensity_source"]
     @test G.shell_set_param2("ldtype", "0") == ""
-    @test length(ipar(G.shell_params2())) == length(INTENSITY_PARAMS)
+    @test G.shell_set_param2("intensity_source", "2") == ""
+    @test G.shell_set_param2("grid_choice", "0") == ""
     @test G.shell_set_param2("grid_path", grid) == ""
     @test m.companion.grid_path == grid && m.grid_path == grid
-    @test G.shell_set_param2("intensity_source", "2") == ""
     @test isempty(validate_intensity_source(0, m.companion.params, m.companion.grid_path))
     # A problem on the SECONDARY says so, or a binary's two messages are indistinguishable.
     G.shell_set_param2("grid_path", "")
@@ -793,6 +817,92 @@ end
     @test length(e.x) == 12 * (2^3)^2
     @test isfinite(e.chi2) && e.ndata > 0
     @test occursin("χ²", sh.status)
+
+    # THE MODEL'S "Intensity from" IS WHAT A RECONSTRUCTION USES. Rayleigh–Jeans is the
+    # default and is the historical linear behaviour; Planck converts at the data's mean
+    # wavelength; a model atmosphere is refused before any worker starts.
+    let f = split(G.shell_imaging_intensity(), "\t")
+        @test f[1] == "5" && occursin("Rayleigh", f[2]) && isempty(f[3])
+    end
+    @test G.shell_set_param("intensity_source", "1") == ""
+    let f = split(G.shell_imaging_intensity(), "\t")
+        @test f[1] == "1" && occursin("Planck", f[2]) && occursin("µm", f[2]) && isempty(f[3])
+    end
+    @test G.shell_reconstruct(3, "sobel2:10.0:0", 10) == ""
+    drain!()
+    e2 = sh.session.images[end]
+    # The χ² recorded is the one of the PLANCK model: rescoring with :planck reproduces it.
+    st = create_star_multiepochs(tessellation_healpix(3), G.star_params(G.current_model(sh.session)),
+                                 G.current_dataset(sh.session).tepochs)
+    setup_oi!(G.current_dataset(sh.session).data, st)
+    bP = chi2_breakdown(e2.x, st, G.current_dataset(sh.session).data;
+                        intensity_model = :planck, band = G._data_band(sh))
+    @test bP.total ≈ e2.chi2 rtol = 1e-6
+    @test G.shell_set_param("intensity_source", "2") == ""
+    let msg = G.shell_reconstruct(3, "sobel2:10.0:0", 5)
+        @test occursin("Rayleigh–Jeans or Planck", msg)
+    end
+    @test sh.job === nothing
+    @test !isempty(split(G.shell_imaging_intensity(), "\t")[3])
+end
+
+@testset "sky export" begin
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    @test occursin("no model", G.shell_sky_export("source=model"))
+    G.shell_add_model(2)
+    G.shell_set_param("rpole", "1.37131")
+    kv = Dict(first(split(l, "\t")) => (c = split(l, "\t"); length(c) > 1 ? c[2] : "")
+              for l in split(G.shell_sky_export_defaults(), "\n"))
+    @test kv["sources"] == "model" && isempty(kv["error"])
+    @test parse(Float64, kv["pixsize"]) > 0 && iseven(parse(Int, kv["nx"]))
+    @test occursin("Rayleigh", kv["intensity"])
+    path = joinpath(mktempdir(), "sky.fits")
+    spec = join(["path=$(path)", "source=model", "epochs=data:1", "channels=mean",
+                 "pixsize=$(kv["pixsize"])", "nx=$(kv["nx"])", "rendering=bandlimited",
+                 "normalize=plane", "check=1"], "\n")
+    @test G.shell_sky_export(spec) == ""
+    drain!()
+    @test isfile(path)
+    r = read_sky_cube(path)
+    @test size(r.cube) == (parse(Int, kv["nx"]), parse(Int, kv["nx"]), 1, 1)
+    # The worker's self-check reached the console, and the image adds no χ² worth the name.
+    log = G.shell_console()
+    @test occursin("OITOOLS vs ROTIR", log)
+    m = match(r"χ² added ([0-9.eE+-]+)", log)
+    @test m !== nothing && parse(Float64, m.captures[1]) < 1e-3
+    # CHANNELS, NOT DISTINCT WAVELENGTHS. MIRC-X channel wavelengths drift by ~1e-4 between
+    # nights; the export must still see six channels, with their bandwidths.
+    let d = G.current_dataset(sh.session)
+        dz = (; data = [readoifits(joinpath(pkgdir(ROTIR), "demos", "zetAnd", f); verbose = false)[1]
+                        for f in sort(filter(f -> endswith(f, ".oifits"),
+                                             readdir(joinpath(pkgdir(ROTIR), "demos", "zetAnd"))))[1:2]])
+        λc, bw = G._data_channels(dz)
+        @test length(λc) == 6 && all(>(0), bw)
+        @test length(unique(vcat((vec(x.uv_lam) for x in dz.data)...))) > 6   # the drift is real
+    end
+    # A BINARY is drawn whole: both components in one image, the companion at its offset.
+    G.shell_set_binary("1", 0)
+    kvb = Dict(first(split(l, "\t")) => (c = split(l, "\t"); length(c) > 1 ? c[2] : "")
+               for l in split(G.shell_sky_export_defaults(), "\n"))
+    @test isempty(kvb["error"]) && occursin("MB per plane", kvb["reason"])
+    pathb = joinpath(mktempdir(), "skyb.fits")
+    specb = replace(spec, path => pathb, "nx=$(kv["nx"])" => "nx=$(kvb["nx"])",
+                    "pixsize=$(kv["pixsize"])" => "pixsize=$(kvb["pixsize"])")
+    @test G.shell_sky_export(specb) == ""
+    drain!()
+    @test isfile(pathb)
+    ROTIR.FITSIO.FITS(pathb) do f
+        @test ROTIR.FITSIO.read_header(f[1])["NCOMP"] == 2
+        @test haskey(Dict(n => 1 for n in ROTIR.FITSIO.colnames(f["EPOCHS"])), "OFF2_W")
+    end
+    logb = G.shell_console()
+    mb = collect(eachmatch(r"χ² added ([0-9.eE+-]+)", logb))
+    @test !isempty(mb) && parse(Float64, last(mb).captures[1]) < 1e-3
+    G.shell_set_binary("0", 0)
+    # An atmosphere source is refused, with the reason.
+    G.shell_set_param("intensity_source", "2")
+    @test occursin("sky export renders", G.shell_sky_export(spec))
 end
 
 @testset "fitting" begin
@@ -874,13 +984,14 @@ end
     end
 
     # THE ENGINE LIST DEPENDS ON THE MODEL, which is why the panel may not cache it. With no
-    # model at all `shell_fit_methods` can only offer the two derivative-free searches — and
+    # model at all `shell_fit_methods` can only offer the derivative-free methods (Nelder–Mead,
+    # BOBYQA and the ensemble slice sampler ESS) — and
     # the Model tab used to build its combo ONCE, on the first refresh, which happens when the
     # window opens and before any model exists. So VMLMB, NUTS and Pigeons were filtered out
     # and never came back, whatever model was added afterwards: unreachable from the GUI for
     # the whole session, with the combo showing the NLopt pair as if they were all there was.
     G.shell_clear_model()
-    @test Set(cols(r)[1] for r in rows(G.shell_fit_methods())) == Set(["neldermead", "bobyqa"])
+    @test Set(cols(r)[1] for r in rows(G.shell_fit_methods())) == Set(["neldermead", "bobyqa", "ess"])
     # Types 0 and 1 use the SHAPE gradient, which needs nothing beyond ROTIR; type 2 goes
     # through `fit_parametric` and so needs Zygote, which this harness does not load. Both
     # cases are asserted against `gradient_fit_kind`, which is the predicate the list uses, so

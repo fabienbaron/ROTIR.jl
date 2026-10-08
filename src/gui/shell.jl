@@ -584,8 +584,11 @@ must not be left floating in a fit.
 `ldtype = 0` IS THE EXCEPTION, and it is a different case rather than a harder version of the
 same one. There is no law at all then, so `ld1`–`ld4` are not coefficients the law happens not
 to read — they are coefficients of nothing, and the μ dependence comes from an intensity
-provider instead. Those four rows are therefore dropped and `INTENSITY_PARAMS` takes their
-place, under its own `group`. See `_params_table`.
+provider instead. Those four rows are therefore dropped.
+
+`INTENSITY_PARAMS` LEADS THE TABLE, under its own `group`, for every `ldtype`: converting a
+temperature to an emitted intensity is a layer on top of any temperature map, independent of
+whether a μ law is in force. See `_params_table`.
 """
 # The ORBIT group is dropped once there is a companion: it belongs to the PAIR, and a copy in
 # each component frame is two editable copies of one physical orbit that can disagree. See
@@ -645,12 +648,46 @@ function _params_table(m; orbit::Bool = true, frozen = Set{Symbol}())
     ldt = round(Int, get(m.params, :ldtype, 3.0))
     used = ld_coefficients_used(ldt)
     rows = String[]
-    # ONE row builder, so the surface fields and the provider fields below cannot disagree
+    # ONE row builder, so the provider fields and the surface fields cannot disagree
     # about the column order or the escaping.
     row(name, label, unit, value, state, lo, hi, tie, group, kind, ch, doc, inert) =
         push!(rows, join((name, label, unit, value, state, lo, hi, tie, group, kind, ch,
                           replace(doc, "\n" => " ", "\t" => " "),
                           inert ? "1" : "0"), "\t"))
+    # ── the intensity provider FIRST, for every law ─────────────────────────────────────
+    #
+    # TEMPERATURE → INTENSITY IS A LAYER ON TOP OF ANY TEMPERATURE MAP, not a property of the
+    # limb-darkening choice: whatever the surface's temperatures are, something has to say what
+    # brightness each one emits at the observing wavelength, and that question is the same
+    # whether or not a μ law is in force. So the provider rows lead the form and are shown under
+    # every `ldtype`, rather than appearing at the bottom only when the law is switched off.
+    #
+    # APPENDED TO THE SAME TABLE rather than published as a table of its own. The three
+    # existing tables (`shell_params`, `shell_position_params`, `shell_binary_orbit_params`)
+    # each cost a ListModel, an append loop and a `pcomp` branch in all four setters; these
+    # rows are per-component exactly as the surface fields are, so they travel with them and
+    # the companion's form gets them for nothing. `pgroup` is what sections them under their
+    # own heading, which is the mechanism the form already uses for geometry and thermal.
+    if any(ps -> ps.name === :ldtype, specs)
+        isrc = round(Int, get(m.params, :intensity_source, INTENSITY_PARAMS[1].default))
+        iused = intensity_params_used(isrc, m.params)
+        for ps in INTENSITY_PARAMS
+            # ONLY WHAT THE SOURCE READS, plus the selector. Unlike a limb-darkening
+            # coefficient — which still belongs to the model under a law that ignores it — a
+            # grid's Teff window means nothing at all to Planck or Rayleigh–Jeans, so greying
+            # it would be showing a setting of something that is not there. The rows come and
+            # go with the source, and with the grid choice (a path only for a custom grid).
+            (ps.name === :intensity_source || ps.name in iused) || continue
+            v = ps.kind === :path ? m.grid_path :
+                _fmt_param(get(m.params, ps.name, ps.default))
+            ch = join(("$(k)=$(vv)" for (k, vv) in ps.choices), "|")
+            # No state, no tie and no bounds columns worth having: none of these is a
+            # coordinate a fit can move (`:choice`, `:path` and `:setting` all say so), and
+            # `_set_state!` refuses one if the form ever offers it.
+            row(ps.name, ps.label, ps.unit, v, "fixed",
+                _fmt_param(ps.lo), _fmt_param(ps.hi), "", ps.group, ps.kind, ch, ps.doc, false)
+        end
+    end
     for ps in specs
         (orbit || ps.group !== :orbit) || continue
         # LD COEFFICIENTS DISAPPEAR AT ldtype = 0, rather than being greyed like the ones a
@@ -659,7 +696,7 @@ function _params_table(m; orbit::Bool = true, frozen = Set{Symbol}())
         # which ones the law in force uses, and switching the law brings them back with their
         # values. At ldtype = 0 there is no law at all, so there is nothing left for a
         # coefficient to be a coefficient OF: the μ dependence comes from the intensity
-        # provider, whose own fields take their place below. `ld_coefficients_used(0) === ()`
+        # provider, whose own fields lead the form. `ld_coefficients_used(0) === ()`
         # is the test, which is why it is spelled as `isempty(used)` and not as `ldt == 0`.
         (ps.name in (:ld1, :ld2, :ld3, :ld4) && isempty(used)) && continue
         v  = get(m.params, ps.name, ps.default)
@@ -681,36 +718,6 @@ function _params_table(m; orbit::Bool = true, frozen = Set{Symbol}())
               inert ? "not used by the current limb-darkening law. " * ps.doc : ps.doc
         row(ps.name, ps.label, ps.unit, _fmt_param(v), state, _fmt_param(lo), _fmt_param(hi),
             tie, ps.group, ps.kind, ch, doc, inert)
-    end
-    # ── and the intensity provider, in place of the coefficients ────────────────────────
-    #
-    # APPENDED TO THE SAME TABLE rather than published as a table of its own. The three
-    # existing tables (`shell_params`, `shell_position_params`, `shell_binary_orbit_params`)
-    # each cost a ListModel, an append loop and a `pcomp` branch in all four setters; these
-    # rows are per-component exactly as the surface fields are, so they travel with them and
-    # the companion's form gets them for nothing. `pgroup` is what sections them under their
-    # own heading, which is the mechanism the form already uses for geometry and thermal.
-    #
-    # Shown only at ldtype = 0: a provider UNDER a parametric law counts limb darkening twice,
-    # which is what `check_provider_consistency` refuses outright.
-    if ldt == 0 && any(ps -> ps.name === :ldtype, specs)
-        isrc = round(Int, get(m.params, :intensity_source, INTENSITY_PARAMS[1].default))
-        iused = intensity_params_used(isrc)
-        for ps in INTENSITY_PARAMS
-            # The selector itself is never inert; the rest are greyed unless the chosen
-            # backend reads them — the same rule, and the same visible signal, as a
-            # limb-darkening coefficient the law does not read.
-            inert = ps.name !== :intensity_source && !(ps.name in iused)
-            v = ps.kind === :path ? m.grid_path :
-                _fmt_param(get(m.params, ps.name, ps.default))
-            ch = join(("$(k)=$(vv)" for (k, vv) in ps.choices), "|")
-            # No state, no tie and no bounds columns worth having: none of these is a
-            # coordinate a fit can move (`:choice`, `:path` and `:setting` all say so), and
-            # `_set_state!` refuses one if the form ever offers it.
-            doc = inert ? "not read by the intensity source in force. " * ps.doc : ps.doc
-            row(ps.name, ps.label, ps.unit, v, "fixed",
-                _fmt_param(ps.lo), _fmt_param(ps.hi), "", ps.group, ps.kind, ch, doc, inert)
-        end
     end
     return join(rows, "\n")
 end
@@ -1509,7 +1516,12 @@ function _note_intensity_source(sh::ShellState, src)
     j = findfirst(c -> c.first == i, INTENSITY_PARAMS[1].choices)
     name = j === nothing ? "$(i)" : INTENSITY_PARAMS[1].choices[j].second
     console!(sh, "intensity source: $(name)")
-    i == 1 && return nothing
+    i in (1, 5) && return nothing                 # analytic: nothing to fetch or synthesize
+    if i == 3
+        pack = ROTIR.kurucz_pack_path()
+        console!(sh, isfile(pack) ? "  Kurucz pack: $(pack)" :
+                     "  the Kurucz pack (67.5 MB) is downloaded once, on first use, to $(pack)")
+    end
     console!(sh, "  note: this is recorded and checked here, and `build_intensity_provider` " *
                  "builds it for a script or for the gradient path's `provider =`; the " *
                  "panel's own surface build and χ² still go through `compute_ldmap`, which " *
@@ -4720,6 +4732,54 @@ function build_regularizers(specs, n::Integer, star, x0, star_params; subset = n
 end
 
 """
+    _imaging_intensity(sh, m) -> (; model, band, label, err)
+
+How the Imaging tab turns the map into intensity: the model's own "Intensity from", which is
+what the Model form shows at its top. A reconstruction honours it rather than carrying a
+second, private conversion that could disagree with the form.
+
+`image_reconstruct_oi` takes an `intensity_model` symbol, so the analytic sources map onto it
+directly — Rayleigh–Jeans is `:linear` (intensity linear in the map, the historical
+behaviour) and Planck is `:planck` at the data's mean wavelength. The model-atmosphere sources
+are refused with `err` set: they carry their own μ dependence through an `IntensityProvider`,
+which the reconstruction criterion does not take.
+"""
+function _imaging_intensity(sh::ShellState, m)
+    src = round(Int, get(m.params, :intensity_source, INTENSITY_PARAMS[1].default))
+    j = findfirst(c -> c.first == src, INTENSITY_PARAMS[1].choices)
+    name = j === nothing ? string(src) : INTENSITY_PARAMS[1].choices[j].second
+    src == 5 && return (; model = :linear, band = nothing, label = name, err = "")
+    if src == 1
+        b = _data_band(sh)
+        b > 0 || return (; model = :planck, band = nothing, label = name,
+                         err = "Planck needs a wavelength: load a dataset first")
+        return (; model = :planck, band = b,
+                label = Printf.@sprintf("%s at λ = %.4f µm (mean of the data)", name, b * 1e6),
+                err = "")
+    end
+    return (; model = :linear, band = nothing, label = name,
+            err = "the Imaging tab reconstructs with Rayleigh–Jeans or Planck; '$(name)' is " *
+                  "a model atmosphere carrying its own μ dependence, which " *
+                  "image_reconstruct_oi does not take — choose one of the two above")
+end
+
+"""
+    shell_imaging_intensity() -> String
+
+`code\tlabel\terror` for the Imaging tab's "Intensity from" row: the model's source, how a
+reconstruction will apply it, and why it would refuse (empty when it will not). `""` without a
+model.
+"""
+function shell_imaging_intensity()
+    sh = _sh()
+    m = current_model(sh.session)
+    m === nothing && return ""
+    src = round(Int, get(m.params, :intensity_source, INTENSITY_PARAMS[1].default))
+    ii = _imaging_intensity(sh, m)
+    return "$(src)\t$(ii.label)\t$(ii.err)"
+end
+
+"""
     shell_reconstruct(nside_exp, regspec, maxiter) -> String
 
 Start a surface reconstruction on a worker.
@@ -4742,6 +4802,9 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
     m.companion === nothing ||
         return "the Imaging tab reconstructs one component: untick secondary on the Model " *
                "tab, or use binary_reconstruct_oi from the REPL, which images both"
+    ii = _imaging_intensity(sh, m)
+    isempty(ii.err) || return ii.err
+    imodel, iband = ii.model, ii.band
     specs = parse_regularizers(String(regspec))
     # Level 2 (192 tessels) is coarse for science but it is the level a fit converges on
     # in seconds, which is what makes it the right place to check a setup before committing
@@ -4752,7 +4815,9 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
     tepochs = copy(d.tepochs)
     data = d.data
     sec = m.secondary
-    console!(sh, "image_reconstruct_oi(...; nside=2^$n, maxiter=$it)"; kind = :cmd)
+    console!(sh, "image_reconstruct_oi(...; nside=2^$n, maxiter=$it, intensity: $(ii.label))"; kind = :cmd)
+    ikw = imodel === :linear ? "" :
+          Printf.@sprintf(", intensity_model = :%s, band = %.6e", imodel, iband)
     log!(sh.session,
          "tess  = tessellation_healpix($n)\n" *
          "stars = create_star_multiepochs(tess, $(m.name), tepochs)\n" *
@@ -4763,7 +4828,7 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
          "setup_oi!(data, stars)\n" *
          "x0    = parametric_temperature_map($(m.name), stars[1])\n" *
          _regularizer_source(specs, n) * "\n" *
-         "x = image_reconstruct_oi(x0, data, stars; regularizers = regs, maxiter = $it)";
+         "x = image_reconstruct_oi(x0, data, stars; regularizers = regs, maxiter = $it$(ikw))";
          note = "reconstruct on a HEALPix level-$n sphere", binding = "x")
     # The slot the worker reports into. Made HERE so the job closure can capture it, since the
     # `GuiJob` that holds it does not exist until `start_job!` returns.
@@ -4783,8 +4848,9 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
         # (x_start, DATA, stars) — that order, checked against src/oichi2_spheroid.jl:1032.
         x  = image_reconstruct_oi(x0, data, stars; regularizers = regs,
                                   maxiter = it, verbose = true,
+                                  intensity_model = imodel, band = iband,
                                   callback = cb, callback_every = 25)
-        return (; x, n, regs, stars, data)
+        return (; x, n, regs, stars, data, intensity_model = imodel, band = iband)
     end; progress = prog)
 end
 
@@ -4795,7 +4861,11 @@ Take up a finished worker's result. **GUI thread only** — this is where the GL
 """
 function job_succeeded!(sh::ShellState, kind::Symbol, result)
     if kind === :image
-        b = chi2_breakdown(result.x, result.stars, result.data)
+        # The SAME conversion the reconstruction used, or the χ² reported for the map is the χ²
+        # of a different model.
+        b = chi2_breakdown(result.x, result.stars, result.data;
+                           intensity_model = get(result, :intensity_model, :linear),
+                           band = get(result, :band, nothing))
         e = add_image!(sh.session, "map$(length(sh.session.images) + 1)", result.x,
                        result.n, b.total, b.ndata, result.regs,
                        something(current_dataset(sh.session), (; name = "")).name)
@@ -4826,6 +4896,18 @@ function job_succeeded!(sh::ShellState, kind::Symbol, result)
                                     r.chi2_split[3] / max(r.data.nt3phi, 1))
         console!(sh, sh.status)
         refresh_orbit!(sh)
+    elseif kind === :skyexport
+        r = result
+        sh.status = "wrote $(r.path)  ($(join(r.dims, "×")): nx, nx, channels, epochs)"
+        console!(sh, sh.status)
+        if r.chk !== nothing
+            w = r.chk.worst
+            console!(sh, Printf.@sprintf("  OITOOLS vs ROTIR on the data: χ² added %.2e, rel |ΔV| %.2e, max |ΔV²| %.2e, closure phase %.3f° rms",
+                                         w.chi2dist, w.rel_dV, w.max_dV2, w.rms_dT3phi_deg))
+            w.chi2dist < 0.01 ||
+                console!(sh, "  the image adds χ² — use band-limited rendering, a smaller " *
+                             "pixel or a larger field")
+        end
     elseif kind === :fit
         sh.lastfit = result.table
         sh.status = result.status
@@ -5393,6 +5475,227 @@ function unique_path(path::AbstractString)
         ispath(cand) || return cand
     end
     return p
+end
+
+# ── sky images for OITOOLS ───────────────────────────────────────────────────────────────
+#
+# The export dialog's two calls. Everything about WHAT a sky cube is — the layout OITOOLS uses,
+# band-limited vs area rendering, the normalisation, the self-check — lives in
+# src/sky_export.jl, where it is tested without a window; these only gather the session's
+# state into a call and report back.
+
+# What the dialog would export FROM: the model, or one of the Imaging tab's reconstructions.
+function _sky_source(sh::ShellState, which::AbstractString)
+    m = current_model(sh.session)
+    m === nothing && return nothing, "no model — the sky images need a geometry"
+    # A BINARY is drawn whole, both components in one image (src/sky_export.jl); only the
+    # MODEL can be one, since a reconstruction here is a single surface.
+    (m.companion !== nothing && which != "model") &&
+        return nothing, "a reconstruction is one component; export the binary model instead"
+    ii = _imaging_intensity(sh, m)
+    isempty(ii.err) || return nothing, replace(ii.err, "the Imaging tab reconstructs" => "sky export renders")
+    prm = star_params(m)
+    if which == "model"
+        nexp = sh.nside_exp[]
+        tess = tessellation_healpix(nexp; T = Float64)
+        d = current_dataset(sh.session)
+        star = create_star(tess, prm, d === nothing ? 0.0 : d.tepochs[1]; secondary = m.secondary)
+        x = Float64.(parametric_temperature_map(prm, star; secondary = m.secondary))
+        c = m.companion
+        comp2 = nothing
+        if c !== nothing
+            p2 = star_params(c)
+            msgs = validate_star_params(p2)
+            isempty(msgs) || return nothing, "secondary: " * first(msgs)
+            star2 = create_star(tess, p2, d === nothing ? 0.0 : d.tepochs[1]; secondary = true)
+            comp2 = (; params = p2, x = Float64.(parametric_temperature_map(p2, star2; secondary = true)),
+                     tess, secondary = true)
+        end
+        return (; x, tess, prm, ii, label = c === nothing ? "model ($(m.name))" :
+                                             "binary model ($(m.name) + secondary)",
+                secondary = m.secondary, comp2), ""
+    end
+    k = findfirst(e -> e.name == which, sh.session.images)
+    k === nothing && return nothing, "no reconstruction named $(which)"
+    e = sh.session.images[k]
+    return (; x = Float64.(e.x), tess = tessellation_healpix(e.nside_exp; T = Float64), prm, ii,
+            label = "reconstruction $(e.name)", secondary = m.secondary, comp2 = nothing), ""
+end
+
+# The components to draw at these MJDs: the primary at the origin and, for a binary, the
+# companion where the model puts it at each epoch (`companion_offsets`: a fixed offset or the
+# Orbit tab's orbit).
+function _sky_components(sh::ShellState, src, mjd)
+    comps = Any[(; params = src.prm, x = src.x, tess = src.tess, secondary = src.secondary)]
+    if src.comp2 !== nothing
+        offs = companion_offsets(sh, current_model(sh.session), collect(Float64, mjd))
+        push!(comps, merge(src.comp2, (; offsets = offs)))
+    end
+    return comps
+end
+
+"""
+    shell_sky_export_defaults() -> String
+
+What the export dialog pre-fills, one `key\tvalue` per line: the sources (`model` and every
+reconstruction, the current one first), the dataset's epochs (MJD) and channels (µm), the
+suggested pixel size (mas), image size and why, the intensity conversion, and `error` when
+nothing can be exported.
+"""
+function shell_sky_export_defaults()
+    sh = _sh()
+    m = current_model(sh.session)
+    d = current_dataset(sh.session)
+    out = String[]
+    put(k, v) = push!(out, "$(k)\t$(v)")
+    srcs = ["model"; [e.name for e in sh.session.images]]
+    im = current_image(sh.session)
+    im === nothing || (srcs = [im.name; filter(!=(im.name), srcs)])
+    put("sources", join(srcs, "|"))
+    src, err = _sky_source(sh, first(srcs))
+    put("error", err)
+    if d !== nothing
+        put("epochs", join((Printf.@sprintf("%.4f", t) for t in d.mjd), "|"))
+        λs, _ = _data_channels(d)
+        put("channels", join((Printf.@sprintf("%.5f", λ * 1e6) for λ in λs), "|"))
+    else
+        put("epochs", ""); put("channels", "")
+    end
+    if src !== nothing
+        tep = d === nothing ? [0.0] : d.tepochs
+        mj  = d === nothing ? [0.0] : d.mjd
+        g = sky_grid(_sky_components(sh, src, mj), tep; data = d === nothing ? nothing : d.data)
+        put("pixsize", Printf.@sprintf("%.5g", g.pixsize))
+        put("nx", string(g.nx))
+        put("reason", g.reason * Printf.@sprintf("; %.1f MB per plane", g.mb_per_plane))
+        put("intensity", src.ii.label)
+    end
+    return join(out, "\n")
+end
+
+"""
+    _data_channels(d) -> (λ, Δλ)
+
+The dataset's CHANNELS, in metres, with their bandwidths — one per spectral channel, not one per
+distinct wavelength value. An instrument's channel wavelengths drift from night to night (MIRC-X:
+channel 1 is 1.515382 µm on one night and 1.515206 µm on the next), so the raw distinct values
+are one per channel PER NIGHT. Values closer than a quarter of the channel width are the same
+channel; its plane is rendered at their mean and its `EFF_BAND` is their median bandwidth, which
+is the matching tolerance OITOOLS uses (half `EFF_BAND`).
+"""
+function _data_channels(d)
+    lam = Float64.(reduce(vcat, (vec(x.uv_lam) for x in d.data)))
+    dlam = Float64.(reduce(vcat, (vec(x.uv_dlam) for x in d.data)))
+    o = sortperm(lam); lam = lam[o]; dlam = dlam[o]
+    isempty(lam) && return Float64[], Float64[]
+    w = filter(>(0), dlam)
+    tol = isempty(w) ? 1e-3 * Statistics.median(lam) : 0.25 * Statistics.median(w)
+    groups = [[1]]
+    for i in 2:length(lam)
+        lam[i] - lam[groups[end][1]] > tol ? push!(groups, [i]) : push!(groups[end], i)
+    end
+    return [Statistics.mean(lam[g]) for g in groups],
+           [(b = filter(>(0), dlam[g]); isempty(b) ? 0.0 : Statistics.median(b)) for g in groups]
+end
+
+"""
+    shell_sky_export(spec) -> String
+
+Render and write a sky cube from the dialog's `key=value` lines:
+
+  * `path` — output FITS file (made unique, `.fits` added);
+  * `source` — `model` or a reconstruction's name;
+  * `epochs` — `data` (every epoch), `data:1,3` (those, 1-based), `mjd:59000.1,59001.2`, or
+    `phases:N` (N rotation phases from the first epoch);
+  * `channels` — `data`, `mean`, or `um:1.55,1.60` (micrometres);
+  * `pixsize` (mas), `nx`, `rendering` (`bandlimited`|`area`), `normalize` (`plane`|`relative`),
+    `check` (`1` to compare OITOOLS's visibilities from the cube with ROTIR's on the data).
+
+Runs on the worker; the result and the check are reported in the console.
+"""
+function shell_sky_export(spec)
+    sh = _sh()
+    kv = Dict{String,String}()
+    for line in split(String(spec), "\n")
+        i = findfirst('=', line); i === nothing && continue
+        kv[strip(line[1:i-1])] = strip(line[i+1:end])
+    end
+    src, err = _sky_source(sh, get(kv, "source", "model"))
+    src === nothing && return err
+    d = current_dataset(sh.session)
+    # EPOCHS: ROTIR epoch times (days from the dataset's first MJD, the session's convention)
+    # and the MJD recorded beside them; `dataidx` is which data epochs the check can use.
+    em = get(kv, "epochs", "data")
+    mjd0 = d === nothing ? 0.0 : minimum(d.mjd)
+    tep, mjd, dataidx = if startswith(em, "data")
+        d === nothing && return "no dataset: choose MJDs or rotation phases instead"
+        idx = em == "data" ? collect(eachindex(d.mjd)) :
+              [parse(Int, strip(t)) for t in split(em[6:end], ',') if !isempty(strip(t))]
+        all(in(eachindex(d.mjd)), idx) || return "epochs: indices must be 1..$(length(d.mjd))"
+        d.tepochs[idx], d.mjd[idx], idx
+    elseif startswith(em, "mjd:")
+        ms = [parse(Float64, strip(t)) for t in split(em[5:end], ',') if !isempty(strip(t))]
+        isempty(ms) && return "epochs: no MJD given"
+        ms .- mjd0, ms, Int[]
+    elseif startswith(em, "phases:")
+        n = parse(Int, strip(em[8:end])); n >= 1 || return "epochs: at least one phase"
+        P = Float64(get(src.prm, :rotation_period, 1.0))
+        t1 = d === nothing ? 0.0 : d.tepochs[1]
+        t = t1 .+ P .* (0:n-1) ./ n
+        collect(t), collect(t .+ mjd0), Int[]
+    else
+        return "epochs: unknown choice $(em)"
+    end
+    cm = get(kv, "channels", "mean")
+    bands = nothing
+    λs = if cm == "data"
+        d === nothing && return "no dataset: give the wavelengths"
+        λc, bands = _data_channels(d)
+        λc
+    elseif cm == "mean"
+        b = _data_band(sh); b > 0 || return "no dataset: give the wavelengths"
+        [b]
+    elseif startswith(cm, "um:")
+        [1e-6 * parse(Float64, strip(t)) for t in split(cm[4:end], ',') if !isempty(strip(t))]
+    else
+        return "channels: unknown choice $(cm)"
+    end
+    isempty(λs) && return "channels: none"
+    pix = tryparse(Float64, get(kv, "pixsize", "")); nx = tryparse(Int, get(kv, "nx", ""))
+    (pix === nothing || pix <= 0) && return "pixel size must be a positive number (mas)"
+    (nx === nothing || nx < 8) && return "image size must be an integer ≥ 8"
+    isodd(nx) && (nx += 1)
+    rendering = Symbol(get(kv, "rendering", "bandlimited"))
+    normalize = Symbol(get(kv, "normalize", "plane"))
+    check = get(kv, "check", "1") == "1" && !isempty(dataidx)
+    p = String(get(kv, "path", "rotir_sky.fits")); startswith(p, "file://") && (p = p[8:end])
+    endswith(lowercase(p), ".fits") || (p *= ".fits")
+    p = unique_path(p)
+    imodel = src.ii.model
+    comps = _sky_components(sh, src, mjd)
+    # The size is the caller's to choose, but say so before minutes of rendering: a wide binary
+    # at Nyquist/4 is thousands of pixels on a side.
+    mb = nx^2 * 4 * length(λs) * length(tep) / 2^20
+    mb > 4096 && return Printf.@sprintf("that cube would be %.1f GB — use fewer epochs/channels, a coarser pixel or a smaller field", mb / 1024)
+    console!(sh, Printf.@sprintf("sky export: %s, %d epoch(s) × %d channel(s), %d×%d px at %.4g mas, %s, %s",
+                                 src.label, length(tep), length(λs), nx, nx, pix, rendering,
+                                 src.ii.label); kind = :cmd)
+    log!(sh.session,
+         "cube, meta = render_sky_cube(components; tepochs = $(repr(tep)), " *
+         "wavelengths = $(repr(λs)), pixsize = $(pix), nx = $(nx), rendering = :$(rendering), " *
+         "intensity_model = :$(imodel), normalize = :$(normalize), mjd = $(repr(mjd)))\n" *
+         "write_sky_cube($(repr(p)), cube, meta)";
+         note = "sky images for OITOOLS", binding = "cube")
+    data = d === nothing ? nothing : d.data
+    return start_job!(sh, :skyexport, function (stop)
+        cube, meta = render_sky_cube(comps; tepochs = tep, wavelengths = λs,
+                                     pixsize = pix, nx = nx, rendering = rendering,
+                                     intensity_model = imodel, normalize = normalize, mjd = mjd,
+                                     bandwidths = bands)
+        write_sky_cube(p, cube, meta; comment = src.label)
+        chk = check ? check_sky_cube(cube, meta, comps, data[dataidx]) : nothing
+        return (; path = p, dims = size(cube), chk)
+    end)
 end
 
 # ── the surface map as a file ───────────────────────────────────────────────────────────

@@ -131,6 +131,38 @@ function provider_intensity_and_derivs(::PlanckProvider, Teff::AbstractVector{T}
     return I, dT, zeros(T, n), zeros(T, n), dλ
 end
 
+"""
+    RayleighJeansProvider()
+
+The Rayleigh–Jeans limit of [`PlanckProvider`](@ref): intensity **linear in temperature**,
+`I = λT/c₂`, which is what `1/(e^{c₂/λT} − 1)` tends to when `c₂/λT ≪ 1`. Same
+normalisation as the Planck provider, so the two can be compared directly and agree in that
+limit.
+
+This is the conversion an imaging code that fits "brightness" per patch is implicitly using —
+SURFING's maps are linear in patch brightness, with temperatures assigned afterwards — and it
+is what `intensity(T, :linear, …)` does up to a constant. Like Planck, `owns_mu` is false.
+"""
+struct RayleighJeansProvider <: IntensityProvider end
+
+function provider_intensity(::RayleighJeansProvider, Teff::AbstractVector{T},
+                            logg, μ, λ) where {T}
+    I = similar(Teff)
+    @inbounds for i in eachindex(Teff)
+        I[i] = T(_λ_at(λ, i)) * Teff[i] / T(_PLANCK_C2)
+    end
+    return I
+end
+
+function provider_intensity_and_derivs(p::RayleighJeansProvider, Teff::AbstractVector{T},
+                                       logg, μ, λ) where {T}
+    n = length(Teff)
+    I = provider_intensity(p, Teff, logg, μ, λ)
+    dT = T[T(_λ_at(λ, i)) / T(_PLANCK_C2) for i in 1:n]
+    dλ = T[Teff[i] / T(_PLANCK_C2) for i in 1:n]
+    return I, dT, zeros(T, n), zeros(T, n), dλ
+end
+
 # λ may be one scalar for the whole block or one value per tessel (the Doppler-shifted
 # case). Branching here keeps every backend's inner loop identical.
 @inline _λ_at(λ::Number, ::Integer) = λ
@@ -511,30 +543,38 @@ function korg_provider end
 The provider named by `cfg[:intensity_source]`, built from the settings the backend reads.
 
 `cfg` is a `name => value` mapping of the numeric fields of `INTENSITY_PARAMS` (a `Dict` or a
-NamedTuple) and `path` the text-valued `grid_path`. Use
+NamedTuple) and `path` the text-valued `grid_path`, read only for a custom grid
+(`grid_choice = 0`): a shipped grid is found inside the package and the Kurucz pack in a
+per-user cache. Use
 [`validate_intensity_source`](@ref) first: this raises on a bad configuration rather than
 returning a provider that is wrong in a way only a fit residual would show.
 
-**Cost is not uniform and the caller has to know it.** 1 is free, 2 is a FITS read, 3 parses a
-67 MB pack, and 4 runs `grid_nodes²` syntheses — seconds to minutes. Nothing is cached here;
+**Cost is not uniform and the caller has to know it.** 1 and 5 are free, 2 is a FITS read, 3
+parses a 67 MB pack (downloading it once, the first time), and 4 runs `grid_nodes²` syntheses —
+seconds to minutes. Nothing is cached here;
 save a built grid with [`save_intensity_grid`](@ref) and come back through source 2.
 """
 function build_intensity_provider(cfg, path::AbstractString = "")
-    src = round(Int, float(_cfg(cfg, :intensity_source, 1.0)))
+    src = round(Int, float(_cfg(cfg, :intensity_source, INTENSITY_PARAMS[1].default)))
     λlo, λhi = intensity_lambda_range(cfg)
     src == 1 && return PlanckProvider()
+    src == 5 && return RayleighJeansProvider()
     if src == 2
-        isfile(path) || throw(ArgumentError("build_intensity_provider: no such grid file: $path"))
-        return TabulatedProvider(load_intensity_grid(path); name = basename(path))
+        # A SHIPPED grid is found by name inside the package; only a custom one uses `path`.
+        f = intensity_grid_path(cfg, path)
+        isfile(f) || throw(ArgumentError("build_intensity_provider: no such grid file: $f"))
+        return TabulatedProvider(load_intensity_grid(f); name = basename(f))
     end
     if src == 3
-        isfile(path) || throw(ArgumentError("build_intensity_provider: no such Kurucz pack: $path"))
-        g = read_kurucz_intensity(path; λrange = (λlo, λhi),
+        # THE PACK IS FETCHED, NOT ASKED FOR: one file serves every star, so its location is
+        # ROTIR's business — see `kurucz_pack_path`.
+        pack = kurucz_pack_path(; download = true)
+        g = read_kurucz_intensity(pack; λrange = (λlo, λhi),
                                   Teff = (float(_cfg(cfg, :grid_teff_min, 3500.0)),
                                           float(_cfg(cfg, :grid_teff_max, 10000.0))),
                                   logg = (float(_cfg(cfg, :grid_logg_min, 2.0)),
                                           float(_cfg(cfg, :grid_logg_max, 4.5))))
-        return TabulatedProvider(g; name = "kurucz:" * basename(path))
+        return TabulatedProvider(g; name = "kurucz:" * basename(pack))
     end
     src == 4 || throw(ArgumentError("build_intensity_provider: unknown intensity_source $src"))
     # THE WEAK DEPENDENCY, reported as a missing package rather than as a MethodError on a
@@ -552,6 +592,41 @@ function build_intensity_provider(cfg, path::AbstractString = "")
                           # Korg takes Angstrom; `intensity_lambda_range` gave metres.
                           λ = (λlo * 1e10, λhi * 1e10))
     return TabulatedProvider(g; name = "korg")
+end
+
+# ===========================================================================
+# The Kurucz ATLAS9 pack: one file for every star, so ROTIR keeps it
+# ===========================================================================
+const KURUCZ_PACK_URL = "http://kurucz.harvard.edu/grids/gridp00/ip00k2.pck19"
+const KURUCZ_PACK_ENV = "ROTIR_KURUCZ_PACK"
+
+"Per-user cache for downloaded intensity data, under the first Julia depot."
+intensity_cache_dir() = joinpath(first(DEPOT_PATH), "scratchspaces", "ROTIR", "intensity")
+
+"""
+    kurucz_pack_path(; download = false) -> String
+
+Where the ATLAS9 intensity pack `ip00k2.pck19` (67.5 MB, Teff 3500–50000 K — the solar-
+metallicity pack that reaches the hot stars; see src/kurucz_intensity.jl) lives:
+`ENV["$(KURUCZ_PACK_ENV)"]` if set, otherwise `intensity_cache_dir()`. With `download = true` a
+missing pack is fetched once from $(KURUCZ_PACK_URL); without it the cache path is returned
+whether or not the file is there yet, so a caller can say where it WILL go.
+"""
+function kurucz_pack_path(; download::Bool = false)
+    forced = get(ENV, KURUCZ_PACK_ENV, "")
+    isempty(forced) || return abspath(expanduser(forced))
+    dest = joinpath(intensity_cache_dir(), "ip00k2.pck19")
+    (isfile(dest) || !download) && return dest
+    mkpath(dirname(dest))
+    tmp = dest * ".part"
+    @info "Downloading the Kurucz ATLAS9 intensity pack (67.5 MB) once" url = KURUCZ_PACK_URL dest
+    # Downloads is a stdlib that ROTIR does not otherwise depend on; reach it the way Base's own
+    # deprecated `download` does, by package id, rather than adding a dependency every
+    # environment that develops ROTIR would have to re-resolve for.
+    D = Base.require(Base.PkgId(Base.UUID("f43a241f-c20a-4ad4-852c-f6b1247861c6"), "Downloads"))
+    Base.invokelatest(D.download, KURUCZ_PACK_URL, tmp)
+    mv(tmp, dest; force = true)                 # atomic: a half-written pack is never "found"
+    return dest
 end
 
 # A `Dict`, a NamedTuple or anything else `get`/`getproperty` reaches — the GUI holds its
