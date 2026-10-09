@@ -163,6 +163,36 @@ end
             @test 0.5 < μpeak < 0.95
         end
 
+        # THE CHECKERBOARD. The least-squares gradient (Gx/Gy) sums SIGNED differences, so a
+        # pattern in which opposite neighbours agree has ∇x ≈ 0 — its smallest nonzero
+        # eigenvalues were ~1e-4 of the median and belonged to the highest frequencies. The
+        # penalty (`S.D`, squared differences) must charge that mode like any other.
+        let S2 = sobel_gradient_healpix(2; T = Float64)
+            KG = Matrix(S2.Gx' * S2.Gx + S2.Gy' * S2.Gy); KD = Matrix(S2.D' * S2.D)
+            eG = eigen(Symmetric(KG)); eD = eigen(Symmetric(KD))
+            @test count(<(1e-9 * maximum(eD.values)), eD.values) == 1     # only the constant
+            v = eG.vectors[:, 2]                                         # G's near-null mode
+            @test dot(v, KG * v) < 1e-2 * median(eG.values)              # the bug, pinned
+            @test dot(v, KD * v) > 0.5 * median(eD.values)               # the fix
+            @test eD.values[2] / median(eD.values) > 1e-2
+        end
+        # The penalty is still a GRADIENT energy: converges to the analytic integrals, and its
+        # Rayleigh quotient on Legendre modes tracks ℓ(ℓ+1) — monotone in frequency.
+        let Pl(l, z) = l == 1 ? z : l == 2 ? (3z^2 - 1)/2 : l == 3 ? (5z^3 - 3z)/2 :
+                       l == 4 ? (35z^4 - 30z^2 + 3)/8 : (63z^5 - 70z^3 + 15z)/8
+            ez = Float64[]
+            for n in (2, 3, 4)
+                Sn = sobel_gradient_healpix(n; T = Float64)
+                u, _ = ROTIR.pix2vec_nest(2^n, collect(1:Sn.npix); T = Float64)
+                push!(ez, abs(Sn.area * sum(abs2, Sn.D * u[:, 3]) - 8π/3) / (8π/3))
+                if n == 4
+                    rq = [sum(abs2, Sn.D * Pl.(l, u[:, 3])) / sum(abs2, Pl.(l, u[:, 3])) / (l*(l+1)) for l in 1:5]
+                    @test all(r -> 0.9 < r < 1.15, rq)
+                end
+            end
+            @test ez[3] < ez[1] && ez[3] < 0.02
+        end
+
         # dispatch wiring, and a typo must still raise
         let xf = copy(x0), g2 = zeros(length(x0))
             xf[od.idx] .= x
@@ -264,6 +294,36 @@ end
         @test isapprox(s2[2], s2[1]; rtol = 0.05)      # converged to a few %
         @test t2[2] < 0.6 * t2[1]                       # tv2 has no such limit
 
+        # THE CHECKERBOARD. The least-squares gradient (Gx/Gy) sums SIGNED differences, so a
+        # pattern in which opposite neighbours agree has ∇x ≈ 0 — its smallest nonzero
+        # eigenvalues were ~1e-4 of the median and belonged to the highest frequencies. The
+        # penalty (`S.D`, squared differences) must charge that mode like any other.
+        let S2 = sobel_gradient_healpix(2; T = Float64)
+            KG = Matrix(S2.Gx' * S2.Gx + S2.Gy' * S2.Gy); KD = Matrix(S2.D' * S2.D)
+            eG = eigen(Symmetric(KG)); eD = eigen(Symmetric(KD))
+            @test count(<(1e-9 * maximum(eD.values)), eD.values) == 1     # only the constant
+            v = eG.vectors[:, 2]                                         # G's near-null mode
+            @test dot(v, KG * v) < 1e-2 * median(eG.values)              # the bug, pinned
+            @test dot(v, KD * v) > 0.5 * median(eD.values)               # the fix
+            @test eD.values[2] / median(eD.values) > 1e-2
+        end
+        # The penalty is still a GRADIENT energy: converges to the analytic integrals, and its
+        # Rayleigh quotient on Legendre modes tracks ℓ(ℓ+1) — monotone in frequency.
+        let Pl(l, z) = l == 1 ? z : l == 2 ? (3z^2 - 1)/2 : l == 3 ? (5z^3 - 3z)/2 :
+                       l == 4 ? (35z^4 - 30z^2 + 3)/8 : (63z^5 - 70z^3 + 15z)/8
+            ez = Float64[]
+            for n in (2, 3, 4)
+                Sn = sobel_gradient_healpix(n; T = Float64)
+                u, _ = ROTIR.pix2vec_nest(2^n, collect(1:Sn.npix); T = Float64)
+                push!(ez, abs(Sn.area * sum(abs2, Sn.D * u[:, 3]) - 8π/3) / (8π/3))
+                if n == 4
+                    rq = [sum(abs2, Sn.D * Pl.(l, u[:, 3])) / sum(abs2, Pl.(l, u[:, 3])) / (l*(l+1)) for l in 1:5]
+                    @test all(r -> 0.9 < r < 1.15, rq)
+                end
+            end
+            @test ez[3] < ez[1] && ez[3] < 0.02
+        end
+
         # dispatch wiring, and a typo must still raise
         let x = 4000.0 .+ 400.0 .* randn(rng, S.npix), g = zeros(S.npix)
             f = ROTIR.spheroid_regularization(x, g;
@@ -272,6 +332,60 @@ end
             @test_throws ErrorException ROTIR.spheroid_regularization(
                 x, g; regularizers = Any[["sobell", 1.0, S, 1:S.npix]])
         end
+    end
+
+    # COTANGENT LAPLACE–BELTRAMI: the P1 finite-element Dirichlet energy on the triangulation
+    # of the tessel centres. Unlike the Sobel fit it is consistent, so the checks are tight:
+    # O(h²) convergence to the exact energies, isotropy, and the ℓ(ℓ+1) spectrum.
+    @testset "laplace-beltrami" begin
+        Pl(l, z) = l == 1 ? z : l == 2 ? (3z^2 - 1)/2 : l == 3 ? (5z^3 - 3z)/2 :
+                   l == 4 ? (35z^4 - 30z^2 + 3)/8 : (63z^5 - 70z^3 + 15z)/8
+        ez = Float64[]; ey = Float64[]
+        for n in (2, 3, 4)
+            L = laplace_beltrami_healpix(n; T = Float64)
+            # 3·npix − 6 edges of a closed triangulation, less the cocircular diagonals.
+            @test 2 * L.npix < L.nedges <= 3 * L.npix - 6
+            u, _ = ROTIR.pix2vec_nest(2^n, collect(1:L.npix); T = Float64)
+            z = u[:, 3]; y = (3 .* z.^2 .- 1) ./ 2
+            push!(ez, abs(sum(abs2, L.D * z) - 8π/3) / (8π/3))
+            push!(ey, abs(sum(abs2, L.D * y) - 6*4π/5) / (6*4π/5))
+            @test maximum(abs, L.D * ones(L.npix)) < 1e-12
+            # Isotropy: z and x are the same function up to a rotation.
+            @test sum(abs2, L.D * z) ≈ sum(abs2, L.D * u[:, 1]) rtol = 2e-3
+            if n == 4
+                rq = [sum(abs2, L.D * Pl.(l, z)) / (L.area * sum(abs2, Pl.(l, z))) / (l*(l+1)) for l in 1:5]
+                @test all(r -> 0.99 < r < 1.005, rq)
+            end
+        end
+        # Measured 1.6 %, 0.4 %, 0.1 %: second order, so each level must cut it ~4x.
+        @test ez[3] < 0.002 && ez[2] / ez[3] > 3 && ez[1] / ez[2] > 3
+        @test ey[3] < 0.005 && ey[2] / ey[3] > 3
+        # Null space: the constant only; the Sobel fit's checkerboard is charged.
+        L2 = laplace_beltrami_healpix(2; T = Float64); K = Matrix(L2.D' * L2.D)
+        e = eigen(Symmetric(K))
+        @test count(<(1e-9 * maximum(e.values)), e.values) == 1
+        S2 = sobel_gradient_healpix(2; T = Float64)
+        v = eigen(Symmetric(Matrix(S2.Gx' * S2.Gx + S2.Gy' * S2.Gy))).vectors[:, 2]
+        @test dot(v, K * v) > 0.5 * median(e.values)
+        # The regularizer: FD gradient, scale invariance, resolution stability, dispatch.
+        L3 = laplace_beltrami_healpix(3; T = Float64)
+        rng = MersenneTwister(11)
+        x = 4000.0 .+ 400.0 .* randn(rng, L3.npix); g = similar(x)
+        f = spheroid_laplace_beltrami_fg(x, g, L3)
+        gfd = grad(FDM, y -> spheroid_laplace_beltrami_fg(y, similar(y), L3), x)[1]
+        @test isfinite(f) && f > 0
+        @test g ≈ gfd rtol = 1e-6 atol = 1e-10
+        @test spheroid_laplace_beltrami_fg(1000 .* x, similar(x), L3) ≈ f rtol = 1e-10
+        s = Float64[]
+        for n in (3, 4)
+            Ln = laplace_beltrami_healpix(n; T = Float64)
+            u, _ = ROTIR.pix2vec_nest(2^n, collect(1:Ln.npix); T = Float64)
+            xs = 1.0 .+ 0.3 .* (3 .* u[:,3].^2 .- 1) ./ 2 .+ 0.2 .* u[:,1] .* u[:,2]
+            push!(s, spheroid_laplace_beltrami_fg(xs, similar(xs), Ln))
+        end
+        @test isapprox(s[2], s[1]; rtol = 0.03)
+        @test ROTIR.spheroid_regularization(x, zeros(L3.npix);
+                  regularizers = Any[["laplace_beltrami", 1.0, L3, 1:L3.npix]]) ≈ f rtol = 1e-12
     end
 
     # A single-patch annulus has no defined variance; it must contribute zero rather than

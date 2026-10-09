@@ -997,6 +997,27 @@ scale: it can suppress tessel-scale noise without also crushing genuine structur
 `area = 4π/npix` is the exact per-tessel solid angle (HEALPix is equal-area), so
 `area·Σᵢ|∇x|ᵢ²` is a consistent discretisation of `∫|∇x|²dΩ` and is therefore independent of
 `nside` for a smooth map.
+
+# `D`: what the regularizers penalise
+
+`Gx`/`Gy` are an edge DETECTOR, and as a penalty they are incomplete in the way every central
+difference is: the least-squares gradient sums SIGNED differences, so a pattern in which roughly
+opposite neighbours share a value — the checkerboard — has `∇x ≈ 0` at every tessel. On a square
+grid the real Sobel kernel `[-1 0 1] ⊗ [1 2 1]` has the same blind spot at the Nyquist frequency.
+Measured here at nside 8: the smallest nonzero eigenvalues of `GxᵀGx + GyᵀGy` were ~1e-4 of the
+median and belonged to the HIGHEST-frequency modes, which is what let a GMRF prior built from it
+put 1250–13250 K checkerboards on a 4400 K star.
+
+`D` squares each neighbour difference BEFORE summing. Its rows are `√(2wₖ/tr Mᵢ)·(x_jₖ − xᵢ)`,
+one per directed neighbour pair (`owner[r]` is the tessel row `r` belongs to), so that
+
+```
+‖D x‖² restricted to tessel i  =  (2/tr Mᵢ) Σₖ wₖ (x_jₖ − xᵢ)²  ≈  |∇x|ᵢ²
+```
+
+— the same neighbours and weights, equal to the gradient estimate for a smooth field (for a
+linear field the sum is `gᵀMᵢg = ½tr(Mᵢ)|g|²` on an isotropic neighbourhood), and zero ONLY for
+a constant map. `"sobel2"` is `area·‖Dx‖²/x̄²` and `"sobel"` the per-tessel `√` of it.
 """
 function sobel_gradient_healpix(n; T = Float32, power = 2)
     nside = 2^n
@@ -1004,6 +1025,9 @@ function sobel_gradient_healpix(n; T = Float32, power = 2)
     u, _  = pix2vec_nest(nside, collect(1:npix); T = Float64)
     neighbors = all_neighbors_nest(n)
     I = Int[]; J = Int[]; Vx = Float64[]; Vy = Float64[]
+    # The SQUARED-DIFFERENCE operator the regularizers use (see the docstring): one row per
+    # directed neighbour pair, `√(2wₖ/tr Mᵢ)·(x_jₖ − xᵢ)`, and which tessel owns the row.
+    DI = Int[]; DJ = Int[]; DV = Float64[]; owner = Int[]
     a = Float64[]; b = Float64[]; w = Float64[]; jj = Int[]
     for i in 1:npix
         ni = @view u[i, :]
@@ -1035,10 +1059,103 @@ function sobel_gradient_healpix(n; T = Float32, power = 2)
             sx += cx; sy += cy
         end
         push!(I, i); push!(J, i); push!(Vx, -sx); push!(Vy, -sy)
+        # |∇x|²ᵢ ≈ (2/tr Mᵢ) Σₖ wₖ (x_jₖ − xᵢ)²: for a linear field Σₖ wₖ (tₖ·g)² = gᵀMᵢg,
+        # which is ½tr(Mᵢ)|g|² when the neighbourhood is isotropic — so this agrees with
+        # |Gx x|² + |Gy x|² on smooth maps, but SQUARES EACH DIFFERENCE FIRST and therefore has
+        # no null space besides the constant.
+        c = 2 / (maa + mbb)
+        for k in eachindex(jj)
+            r = length(owner) + 1
+            sk = sqrt(c * w[k])
+            push!(DI, r); push!(DJ, jj[k]); push!(DV, sk)
+            push!(DI, r); push!(DJ, i);     push!(DV, -sk)
+            push!(owner, i)
+        end
     end
     Gx = sparse(I, J, Vx, npix, npix)
     Gy = sparse(I, J, Vy, npix, npix)
-    return (Gx = T.(Gx), Gy = T.(Gy), npix = npix, area = 4π/npix)
+    D  = sparse(DI, DJ, DV, length(owner), npix)
+    return (Gx = T.(Gx), Gy = T.(Gy), D = T.(D), owner = owner, npix = npix, area = 4π/npix)
+end
+
+
+"""
+    laplace_beltrami_healpix(n; T = Float32) -> (; D, npix, area, nedges)
+
+The **Dirichlet energy** ∫|∇x|² dΩ on the NESTED HEALPix sphere at `nside = 2ⁿ`, discretised
+as the cotangent Laplace–Beltrami operator: one row of the sparse `nedges × npix` matrix `D` per
+edge of the triangulation of the tessel centres,
+
+```
+(D x)_e = √wₑ · (x_j − x_i),   wₑ = ½(cot αₑ + cot βₑ),   ‖D x‖² = Σₑ wₑ (x_j − x_i)²  ≈  ∫|∇x|² dΩ
+```
+
+with αₑ, βₑ the angles opposite edge `e` in its two triangles. `‖D x‖²` is EXACTLY the
+Dirichlet energy of the piecewise-linear interpolant of `x` on that triangulation (the P1
+finite-element stiffness matrix), so it converges to ∫|∇x|²dΩ at O(h²) — measured on
+`z`: 1.6 %, 0.4 %, 0.1 % low at n = 2, 3, 4 — and isotropically, so a weight means the same
+thing at every resolution and in every direction.
+
+The triangulation is the dual of the pixelisation: every pixel CORNER is shared by four
+tessels (three at the eight base-pixel vertices), and those centres form one quadrilateral (or
+triangle) face. Each quadrilateral is split along its Delaunay diagonal, which keeps every
+`wₑ ≥ 0` (diagonals of cocircular quads get `wₑ = 0` and are dropped). The result is a closed
+surface of exactly `2·npix − 4` triangles.
+
+Why not the simpler two-point finite-volume form `Σ (ℓₑ/dₑ)(x_j − x_i)²` over shared edges:
+it is consistent only when the line between two centres crosses their shared edge at right
+angles, and HEALPix pixels are rhombi, not squares. It converges, but to the wrong limit —
++7 % on ∫|∇z|² and +30 % on ℓ = 2, unchanged by refinement.
+
+Every difference enters squared, so the only null mode is the constant map — unlike the
+least-squares Sobel gradient (`Gx`/`Gy` of [`sobel_gradient_healpix`](@ref)), which cannot
+see a checkerboard. `area = 4π/npix` is carried for symmetry with `sobel_gradient_healpix`;
+the energy above already includes the geometry and needs no area factor.
+"""
+function laplace_beltrami_healpix(n; T = Float32)
+    tess = tessellation_healpix(n; T = Float64)
+    npix = tess.npix
+    c = [normalize(tess.unit_xyz[i, 5, :]) for i in 1:npix]
+    # Group tessels by shared corner; corners agree to ~1e-15, so rounding them is exact.
+    key(v) = Tuple(round.(Int, v .* 2.0^(n + 24)))
+    corners = Dict{NTuple{3,Int},Vector{Int}}()
+    for i in 1:npix, a in 1:4
+        push!(get!(corners, key(tess.unit_xyz[i, a, :]), Int[]), i)
+    end
+    apex(o, p, q) = (u = p - o; v = q - o; atan(norm(cross(u, v)), dot(u, v)))
+    cotan(o, p, q) = (u = p - o; v = q - o; dot(u, v) / norm(cross(u, v)))
+    W = Dict{Tuple{Int,Int},Float64}()
+    addtri!(i, j, k) = for (a, b, o) in ((i, j, k), (j, k, i), (k, i, j))
+        e = minmax(a, b); W[e] = get(W, e, 0.0) + cotan(c[o], c[a], c[b]) / 2
+    end
+    for (k, ps) in corners
+        ps = unique(ps)
+        # Order the face's tessels around the corner, in its tangent plane.
+        v = normalize(sum(c[p] for p in ps))
+        e1 = normalize(cross(v, abs(v[3]) < 0.9 ? [0.0, 0.0, 1.0] : [1.0, 0.0, 0.0])); e2 = cross(v, e1)
+        sort!(ps, by = p -> atan(dot(c[p], e2), dot(c[p], e1)))
+        if length(ps) == 3
+            addtri!(ps...)
+        elseif length(ps) == 4
+            a, b, d, e = ps
+            # Delaunay: the two angles facing the diagonal a–d must not exceed π.
+            if apex(c[b], c[a], c[d]) + apex(c[e], c[d], c[a]) <= π
+                addtri!(a, b, d); addtri!(a, d, e)
+            else
+                addtri!(b, d, e); addtri!(b, e, a)
+            end
+        else
+            error("laplace_beltrami_healpix: a corner shared by $(length(ps)) tessels")
+        end
+    end
+    wmax = maximum(values(W))
+    edges = [(e, w) for (e, w) in W if w > 1e-12 * wmax]   # cocircular diagonals: wₑ = 0
+    DI = Int[]; DJ = Int[]; DV = Float64[]
+    for (r, ((i, j), w)) in enumerate(edges)
+        push!(DI, r, r); push!(DJ, j, i); push!(DV, sqrt(w), -sqrt(w))
+    end
+    D = sparse(DI, DJ, DV, length(edges), npix)
+    return (D = T.(D), npix = npix, area = 4π / npix, nedges = length(edges))
 end
 
 

@@ -113,7 +113,9 @@ Pane {
         for (var i = 0; i < lines.length; ++i) {
             var f = lines[i].split("\t")
             if (f.length < 5) continue
-            imageModel.append({ iname: f[0], nexp: f[1], chi2r: f[2], nd: f[3], src: f[4] })
+            if (f.length < 7) continue
+            imageModel.append({ iname: f[0], nexp: f[1], ntess: f[2], chi2r: f[3], nd: f[4],
+                                src: f[5], cur: f[6] === "1" })
         }
     }
 
@@ -243,7 +245,11 @@ Pane {
                             onToggled: regModel.setProperty(index, "on", checked)
                         }
                         Label {
-                            Layout.preferredWidth: dp(80)
+                            // Wide enough for "laplace_beltrami", and capped + elided so a longer
+                            // name can never run into the weight field.
+                            Layout.preferredWidth: dp(136)
+                            Layout.maximumWidth: dp(136)
+                            elide: Text.ElideRight
                             text: rname
                             font.pointSize: root.fontPt
                             ToolTip.text: rdoc
@@ -409,19 +415,70 @@ Pane {
             Frame {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                ListView {
-                    id: imageList
+                padding: dp(4)
+                // COLUMNS THAT CANNOT OVERLAP. Each cell has a fixed width that is also its
+                // maximum, elides when its text does not fit, and numbers align right, so a
+                // large χ²ᵣ shortens instead of running into the dataset name — which is what
+                // the previous delegate did, with no header to say what the numbers were.
+                ColumnLayout {
                     anchors.fill: parent
-                    clip: true
-                    model: imageModel
-                    ScrollBar.vertical: ScrollBar {}
-                    delegate: RowLayout {
-                        width: imageList.width
-                        spacing: dp(6)
-                        Label { Layout.preferredWidth: dp(66); text: iname;  font.pointSize: root.fontPt }
-                        Label { Layout.preferredWidth: dp(44); text: "2^" + nexp; font.pointSize: root.fontPt - 1; color: "#7f8c98" }
-                        Label { Layout.preferredWidth: dp(80); text: "χ²ᵣ " + chi2r; font.pointSize: root.fontPt }
-                        Label { Layout.fillWidth: true; text: src; elide: Text.ElideMiddle; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
+                    spacing: dp(2)
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: dp(8)
+                        visible: imageModel.count > 0
+                        component Head: Label {
+                            font.pointSize: root.fontPt - 1
+                            font.bold: true
+                            color: "#7f8c98"
+                            elide: Text.ElideRight
+                        }
+                        Head { text: "map";      Layout.preferredWidth: dp(54); Layout.maximumWidth: dp(54) }
+                        Head { text: "level";    Layout.preferredWidth: dp(92); Layout.maximumWidth: dp(92) }
+                        Head { text: "χ²ᵣ";      Layout.preferredWidth: dp(58); Layout.maximumWidth: dp(58); horizontalAlignment: Text.AlignRight }
+                        Head { text: "N";        Layout.preferredWidth: dp(50); Layout.maximumWidth: dp(50); horizontalAlignment: Text.AlignRight }
+                        Head { text: "dataset";  Layout.fillWidth: true }
+                    }
+                    ListView {
+                        id: imageList
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: dp(1)
+                        model: imageModel
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Rectangle {
+                            width: imageList.width
+                            height: row.implicitHeight + dp(4)
+                            // The CURRENT map — the one "Save model map" and the sky export use —
+                            // is the highlighted row.
+                            color: cur ? "#e3edf7" : (index % 2 ? "#f6f6f6" : "transparent")
+                            ToolTip.text: iname + ": HEALPix level " + nexp + " (" + ntess +
+                                          " tessels), χ²ᵣ " + chi2r + " over " + nd +
+                                          " data, " + src + (cur ? " — current map" : "")
+                            ToolTip.visible: maRow.containsMouse
+                            MouseArea { id: maRow; anchors.fill: parent; hoverEnabled: true }
+                            RowLayout {
+                                id: row
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width
+                                spacing: dp(8)
+                                Label { text: iname; font.bold: cur; font.pointSize: root.fontPt
+                                        elide: Text.ElideRight
+                                        Layout.preferredWidth: dp(54); Layout.maximumWidth: dp(54) }
+                                Label { text: "n=" + nexp + " · " + ntess; color: "#7f8c98"
+                                        font.pointSize: root.fontPt - 1; elide: Text.ElideRight
+                                        Layout.preferredWidth: dp(92); Layout.maximumWidth: dp(92) }
+                                Label { text: chi2r; font.pointSize: root.fontPt
+                                        horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft
+                                        Layout.preferredWidth: dp(58); Layout.maximumWidth: dp(58) }
+                                Label { text: nd; color: "#7f8c98"; font.pointSize: root.fontPt - 1
+                                        horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft
+                                        Layout.preferredWidth: dp(50); Layout.maximumWidth: dp(50) }
+                                Label { text: src; color: "#7f8c98"; font.pointSize: root.fontPt - 1
+                                        elide: Text.ElideMiddle; Layout.fillWidth: true }
+                            }
+                        }
                     }
                 }
             }

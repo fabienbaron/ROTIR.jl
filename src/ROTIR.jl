@@ -242,7 +242,7 @@ export tessellation
 export tessellation_healpix, tessellation_latlong
 export nside2npix, npix2n
 export tv_neighbors_healpix, tv_neighbors_healpix_visible, tv_neighbors_longlat
-export sobel_gradient_healpix
+export sobel_gradient_healpix, laplace_beltrami_healpix, spheroid_laplace_beltrami_fg
 
 export upsample_map_stars, downsample_map_stars
 

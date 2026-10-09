@@ -1009,7 +1009,7 @@ same thing at another.
 With `S = Σᵢ|∇x|ᵢ²`, `m = mean(x)`, `n = length(x)` and `A = 4π/npix`,
 
 ```
-∂f/∂xⱼ = scale·A·[ 2(Gxᵀ(Gx x) + Gyᵀ(Gy x))ⱼ / m² − 2S/(n m³) ]
+∂f/∂xⱼ = scale·A·[ 2(Dᵀ(D x))ⱼ / m² − 2S/(n m³) ]          (S = ‖D x‖²)
 ```
 
 the second term being the global coupling that makes it blind to a pure rescaling.
@@ -1018,11 +1018,13 @@ function spheroid_sobel2_fg(x, g, S; scale = 1.0, verbose = false, ϵ = 1e-12)
     n = length(x)
     m = sum(x)/n
     abs(m) > ϵ || (g .= 0; return zero(m))
-    gx = S.Gx*x; gy = S.Gy*x
-    Q  = sum(abs2, gx) + sum(abs2, gy)
+    # Squared neighbour differences (`S.D`), NOT |Gx x|² + |Gy x|²: the least-squares gradient
+    # is blind to checkerboards, the squared differences are not. See `sobel_gradient_healpix`.
+    d  = S.D*x
+    Q  = sum(abs2, d)
     A  = S.area
     f  = scale * A * Q / m^2
-    g[:] = (2*scale*A/m^2) .* (S.Gx'*gx .+ S.Gy'*gy) .- (2*scale*A*Q/(n*m^3))
+    g[:] = (2*scale*A/m^2) .* (S.D'*d) .- (2*scale*A*Q/(n*m^3))
     verbose && println(" SOBEL2: ", f)
     return f
 end
@@ -1053,20 +1055,54 @@ mean-normalised map `1e-8` is well below any real gradient.
 With `rᵢ = √(|∇x|ᵢ² + ϵ)`, `m = mean(x)`, `n = length(x)` and `A = 4π/npix`,
 
 ```
-∂f/∂xⱼ = scale·A·[ (Gxᵀ(gx/r) + Gyᵀ(gy/r))ⱼ / m − (Σᵢrᵢ)/(n m²) ]
+∂f/∂xⱼ = scale·A·[ (Dᵀ(D x ./ r[owner]))ⱼ / m − (Σᵢrᵢ)/(n m²) ]
 ```
 """
 function spheroid_sobel_fg(x, g, S; scale = 1.0, verbose = false, ϵ = 1e-8)
     n = length(x)
     m = sum(x)/n
     abs(m) > ϵ || (g .= 0; return zero(m))
-    gx = S.Gx*x; gy = S.Gy*x
-    r  = sqrt.(gx.^2 .+ gy.^2 .+ ϵ)
+    # |∇x|²ᵢ from the squared neighbour differences each tessel owns (`S.D`, `S.owner`), then
+    # the √ per tessel: isotropic graph total variation, with no checkerboard null space.
+    d  = S.D*x
+    q  = zeros(eltype(d), n)
+    @inbounds for k in eachindex(d); q[S.owner[k]] += d[k]^2; end
+    r  = sqrt.(q .+ ϵ)
     R  = sum(r)
     A  = S.area
     f  = scale * A * R / m
-    g[:] = (scale*A/m) .* (S.Gx'*(gx./r) .+ S.Gy'*(gy./r)) .- (scale*A*R/(n*m^2))
+    g[:] = (scale*A/m) .* (S.D'*(d ./ r[S.owner])) .- (scale*A*R/(n*m^2))
     verbose && println(" SOBEL: ", f)
+    return f
+end
+
+"""
+    spheroid_laplace_beltrami_fg(x, g, S; scale=1.0, verbose=false, ϵ=1e-12) -> f
+
+The cotangent Laplace–Beltrami (Dirichlet) energy of [`laplace_beltrami_healpix`](@ref),
+mean-normalised like `"sobel2"`:
+
+```
+f = scale · Σₑ wₑ (x_j − x_i)² / mean(x)²  ≈  scale · ∫|∇x|²dΩ / x̄²
+```
+
+so a weight carries over between the two and across resolutions. Scale-invariant (as χ² is),
+and with no null space beyond the constant map.
+
+# Gradient
+
+With `Q = ‖D x‖²`, `m = mean(x)`, `n = length(x)`:
+`∂f/∂xⱼ = scale·[ 2(Dᵀ D x)ⱼ / m² − 2Q/(n m³) ]`.
+"""
+function spheroid_laplace_beltrami_fg(x, g, S; scale = 1.0, verbose = false, ϵ = 1e-12)
+    n = length(x)
+    m = sum(x)/n
+    abs(m) > ϵ || (g .= 0; return zero(m))
+    d = S.D*x
+    Q = sum(abs2, d)
+    f = scale * Q / m^2
+    g[:] = (2*scale/m^2) .* (S.D'*d) .- (2*scale*Q/(n*m^3))
+    verbose && println(" LAPLACE-BELTRAMI: ", f)
     return f
 end
 
@@ -1095,6 +1131,8 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
           reg_f += regularizers[ireg][2]*spheroid_sobel2_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
       elseif regularizers[ireg][1] == "sobel"
           reg_f += regularizers[ireg][2]*spheroid_sobel_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "laplace_beltrami"
+          reg_f += regularizers[ireg][2]*spheroid_laplace_beltrami_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
       else
           # An unrecognised name must RAISE. Falling through would contribute exactly
           # zero, so a typo would look like a regularizer that simply does nothing.

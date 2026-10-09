@@ -651,10 +651,10 @@ end
     sh = fresh_shell()
     # Every regulariser `spheroid_regularization` dispatches on is offered, and nothing else.
     kinds = rows(G.shell_regularizer_kinds())
-    @test length(kinds) == 10
+    @test length(kinds) == 11
     names = Set(cols(k)[1] for k in kinds)
     @test names == Set(["sobel","sobel2","tv","tv2","mem","mean","bias",
-                        "radflat","radialvar","orthold"])
+                        "radflat","radialvar","orthold","laplace_beltrami"])
     # SIX columns: `name weight extra_label extra_default short doc`. The row draws `short`
     # (the formula) and the tooltip carries `doc` (the advice) — one string could not do both
     # without eliding mid-sentence in the narrow rows, which are the three that also carry an
@@ -666,7 +666,7 @@ end
 
     spec = join(("$(cols(k)[1]):$(cols(k)[2]):$(cols(k)[4])" for k in kinds), ";")
     specs = G.parse_regularizers(spec)
-    @test length(specs) == 10
+    @test length(specs) == 11
     @test G.parse_regularizers("bogus:1:0") == []          # unknown names dropped
     @test G.parse_regularizers("sobel:notanumber:0") == []
 
@@ -678,7 +678,7 @@ end
     setup_oi!([sh.session.datasets[1].data[1]], [star])
     x0 = Float64.(parametric_temperature_map(p, star))
     regs = G.build_regularizers(specs, 3, star, x0, p)
-    @test length(regs) == 10
+    @test length(regs) == 11
     @test all(length(r) == 4 for r in regs)
     for r in regs
         g = zeros(length(x0))

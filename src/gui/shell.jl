@@ -4572,7 +4572,9 @@ const REGULARIZER_KINDS = [
     ("sobel",     1e1, "",      0.0, "∫|∇x| dΩ",
      "∫|∇x| dΩ — edge-preserving"),
     ("sobel2",    1e1, "",      0.0, "∫|∇x|² dΩ",
-     "∫|∇x|² dΩ — smooth, and the usual first choice"),
+     "∫|∇x|² dΩ from the 8-neighbour gradient fit — smooth"),
+    ("laplace_beltrami", 1e1, "", 0.0, "∫|∇x|² (LB)",
+     "∫|∇x|² dΩ, cotangent Laplace–Beltrami — smooth, same meaning at every resolution"),
     ("tv",        1e1, "",      0.0, "‖Lx‖",
      "‖Lx‖ — curvature in L1"),
     ("tv2",       1e1, "",      0.0, "‖Lx‖²",
@@ -4646,6 +4648,10 @@ function _regularizer_source(specs, n)
             push!(parts, "[\"$(s.name)\", $(s.weight), sobel, 1:length(x0)]")
             "sobel = sobel_gradient_healpix($n)" in pre ||
                 push!(pre, "sobel = sobel_gradient_healpix($n)")
+        elseif s.name == "laplace_beltrami"
+            push!(parts, "[\"laplace_beltrami\", $(s.weight), lb, 1:length(x0)]")
+            "lb = laplace_beltrami_healpix($n)" in pre ||
+                push!(pre, "lb = laplace_beltrami_healpix($n)")
         elseif s.name in ("tv", "tv2")
             push!(parts, "[\"$(s.name)\", $(s.weight), tvinfo, 1:length(x0)]")
             "tvinfo = tv_neighbors_healpix($n)" in pre ||
@@ -4697,6 +4703,8 @@ function build_regularizers(specs, n::Integer, star, x0, star_params; subset = n
         if s.name in ("sobel", "sobel2")
             sobel_op === nothing && (sobel_op = sobel_gradient_healpix(Int(n)))
             push!(out, Any[s.name, s.weight, sobel_op, allpix])
+        elseif s.name == "laplace_beltrami"
+            push!(out, Any[s.name, s.weight, laplace_beltrami_healpix(Int(n)), allpix])
         elseif s.name in ("tv", "tv2")
             tv_op === nothing && (tv_op = tv_neighbors_healpix(Int(n)))
             push!(out, Any[s.name, s.weight, tv_op, allpix])
@@ -5243,9 +5251,18 @@ function shell_imaging_context()
     return "$(ds)\t$(ne)\t$(mn)\t$(st)\tHEALPix n=$(n) ($(12 * (2^n)^2) tessels, $(sh.precision[]))"
 end
 
-shell_images() = join((Printf.@sprintf("%s\t%d\t%.4f\t%d\t%s", e.name, e.nside_exp,
-                                       e.ndata > 0 ? e.chi2 / e.ndata : NaN, e.ndata, e.source)
-                       for e in _sh().session.images), "\n")
+# One row per reconstruction for the Imaging tab's Maps table: name, HEALPix level, tessels,
+# χ²ᵣ to four significant figures (a fixed four DECIMALS made 1234.5678 wider than its column
+# and ran it into the dataset name), number of data, dataset, and 1 for the current map — the
+# one "Save model map" and the sky export use.
+function shell_images()
+    s = _sh().session
+    return join((Printf.@sprintf("%s\t%d\t%d\t%s\t%d\t%s\t%d", e.name, e.nside_exp,
+                                 12 * 4^e.nside_exp,
+                                 e.ndata > 0 ? Printf.@sprintf("%.4g", e.chi2 / e.ndata) : "—",
+                                 e.ndata, e.source, k == s.current_image ? 1 : 0)
+                 for (k, e) in enumerate(s.images)), "\n")
+end
 
 shell_last_fit() = _sh().lastfit
 
