@@ -71,6 +71,7 @@ is a vector specifying the type, weight, and any additional arguments:
 |------|--------|-----------|----------|
 | `"sobel"` | `["sobel", mu, sobel_info, pixel_range]` | `∫\|∇x\|dΩ` — isotropic L1, edge-preserving | `k²` |
 | `"sobel2"` | `["sobel2", mu, sobel_info, pixel_range]` | `∫\|∇x\|²dΩ` — smooth | `k²` |
+| `"laplace_beltrami"` | `["laplace_beltrami", mu, lb_info, pixel_range]` | `∫\|∇x\|²dΩ` — smooth, exact limit | `k²` |
 | `"tv2"` | `["tv2", mu, tv_info, pixel_range]` | `‖Lx‖²` — curvature | `k⁴` |
 | `"tv"` | `["tv", mu, tv_info, pixel_range]` | `‖Lx‖` — curvature | `k⁴` |
 | `"mem"` | `["mem", mu]` | per-pixel contrast (no spatial coupling) | — |
@@ -85,7 +86,19 @@ Radial regularizers for the single-epoch, non-rotating case (`"radflat"`, `"radi
 `"sobel"` / `"sobel2"` are built on `sobel_gradient_healpix`, a tangent-plane
 least-squares gradient — the sphere's analogue of the 2-D Sobel stencil, which is itself the
 inverse-distance²-weighted least-squares gradient on a 3×3 grid. They penalise the **first**
-derivative.
+derivative, through the operator's `D`: each neighbour difference is squared before it is
+summed, with the gradient fit's weights, so `‖Dx‖²` restricted to a tessel ≈ `|∇x|²` there,
+and only a constant map costs nothing.
+
+`"laplace_beltrami"` is built on `laplace_beltrami_healpix`: the cotangent (P1 finite-element)
+Laplace–Beltrami operator on the triangulation of the tessel centres, whose `‖Dx‖²` is exactly
+the Dirichlet energy `∫|∇x|²dΩ` of the piecewise-linear interpolant. It converges to the
+continuum at O(h²) and isotropically (on `∫|∇z|²`: 1.6 %, 0.4 %, 0.1 % low at n = 2, 3, 4),
+so a weight means the same thing at every resolution and in every direction. `"sobel2"` comes
+within a few per cent of the same limit. At a single resolution the two give the same map —
+on ζ And at 768 tessels their VarInf MAP maps correlate at r 0.999, each at its own
+roughness-matched weight — so `"laplace_beltrami"` is the one to prefer when a weight is
+carried **between** resolutions (coarse-to-fine, multires).
 
 `"tv"` / `"tv2"` are built on `tv_neighbors_healpix`, whose operator is the graph
 Laplacian (diagonal = neighbour count, `−1` off-diagonal), so both penalise the **second**
@@ -108,8 +121,10 @@ Two further differences matter when transferring a weight between targets or res
   converges as the mesh refines. `"tv2"` falls by ~×0.4 per `nside` doubling, so a weight
   tuned at one resolution does not transfer to another.
 
-Build the operator argument with `sobel_gradient_healpix(n)` for the Sobel forms, or
-`tv_neighbors_healpix(n)` / `tv_neighbors_longlat(ntheta, nphi)` for the Laplacian ones.
+Build the operator argument with `sobel_gradient_healpix(n)` for the Sobel forms,
+`laplace_beltrami_healpix(n)` for `"laplace_beltrami"`, or `tv_neighbors_healpix(n)` /
+`tv_neighbors_longlat(ntheta, nphi)` for the Laplacian ones. `"laplace_beltrami"` is
+normalised by `mean(x)²` like `"sobel2"`, and its energy already includes the solid angle.
 
 ### Measured comparison
 

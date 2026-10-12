@@ -216,17 +216,14 @@ behaviour.
 | `colorbar_ticks` | `7` | How many ticks it carries |
 
 !!! warning "`lat_spacing` must divide 90"
-    matplotlib's `GeoAxes.set_latitude_grid(d)` places parallels at `arange(-90+d, 90, d)` and
-    labels them with `ThetaFormatter(d)`, which rounds to multiples of `d`. At `d = 20` the
-    ticks land at ±10, ±30, ±50, ±70 — none of them multiples of 20 — and come out labelled
-    -80, -40, -20, 0, 0, 20, 40, 80: a duplicated zero and every label wrong by 10–20°.
-    Verified with a fiducial map (bands at latitude 0 and +60): the DATA is placed correctly, so
-    only the labels were wrong. 15 and 30 are safe; a value that does not divide 90 is refused
-    rather than mislabelled.
+    A value that does not divide 90 is refused. matplotlib's `GeoAxes.set_latitude_grid(d)`
+    places parallels at `arange(-90+d, 90, d)` and labels them with `ThetaFormatter(d)`, which
+    rounds to multiples of `d`; at `d = 20` the parallels at ±10, ±30, ±50, ±70 would be
+    labelled -80, -40, -20, 0, 0, 20, 40, 80. 15 and 30 are safe.
 
 !!! note "`colorbar_label` is not always kelvin"
-    It used to say `"Temperature (K)"` unconditionally, so a normalised surface brightness came
-    out labelled in kelvin. Set it to whatever the map actually is.
+    The default is `"Temperature (K)"`. For a map in other units — a normalised surface
+    brightness, say — set it to whatever the map actually is.
 
 **Matching a published figure.** The settings below reproduce the house style of healpy's
 `mollview`, which is what most published HEALPix stellar maps are drawn with — dotted graticule,

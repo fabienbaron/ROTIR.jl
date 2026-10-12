@@ -21,10 +21,30 @@ equatorial_velocity
 projected_veq
 ```
 
+## Temperature to intensity: choosing a source
+
+The "Intensity from" setting — see the guide's
+[From temperature to intensity](@ref) section.
+
+```@docs
+INTENSITY_PARAMS
+INTENSITY_SOURCES
+SHIPPED_INTENSITY_GRIDS
+ROTIR.build_intensity_provider
+validate_intensity_source
+intensity_params_used
+intensity_spec
+intensity_grid_path
+intensity_lambda_range
+kurucz_pack_path
+intensity_cache_dir
+```
+
 ## Intensity providers
 
 ```@docs
 IntensityProvider
+RayleighJeansProvider
 PlanckProvider
 TabulatedProvider
 RectGrid4
@@ -51,6 +71,7 @@ Kurucz readers need a downloaded intensity pack; nothing is bundled.
 
 ```@docs
 build_korg_grid
+korg_provider
 read_kurucz_models
 read_kurucz_intensity
 KuruczModel

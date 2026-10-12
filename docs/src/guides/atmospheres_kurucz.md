@@ -10,15 +10,15 @@ Korg's MARCS grid stops at 8000 K, which covers β Cas (7208 K) and nothing
 hotter. Kurucz's ATLAS9 **intensity packs** run to 50000 K at 17 emergent
 angles, which covers Spica, Vega, Regulus and β Lyr.
 
-Download one pack from `http://kurucz.harvard.edu/grids/gridp00/` — nothing is
-bundled:
-
-```bash
-curl -O http://kurucz.harvard.edu/grids/gridp00/ip00k2.pck19     # 67 MB
-```
+The pack is not bundled, but ROTIR fetches it: [`kurucz_pack_path`](@ref) with
+`download = true` downloads `ip00k2.pck19` (67.5 MB) once, from
+`http://kurucz.harvard.edu/grids/gridp00/`, into a per-user cache
+(`intensity_cache_dir()`, under the first Julia depot), and returns the cached path
+thereafter. Choosing "Kurucz pack" in the GUI does exactly this. Set the environment
+variable `ROTIR_KURUCZ_PACK` to use a copy you already have.
 
 ```julia
-grid = read_kurucz_intensity("ip00k2.pck19";
+grid = read_kurucz_intensity(kurucz_pack_path(; download = true);
                              λrange = (1.5e-6, 1.8e-6),
                              Teff = (18000.0, 28000.0), logg = (3.0, 4.5))
 prov = TabulatedProvider(grid; name = "Kurucz ATLAS9 H band")

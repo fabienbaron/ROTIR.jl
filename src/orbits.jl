@@ -220,7 +220,11 @@ end
 # compute_xyz_abs/rel return positions in the observer's frame:
 #   x = North (Dec increasing)
 #   y = East  (RA increasing)
-#   z = -toward_observer (positive = receding)
+#   z = line of sight, positive = receding (away from the observer)
+#
+# z = r·sin(ν+ω)·sin i, so dz/dt of the secondary relative to the primary is the relative
+# radial velocity of `binary_RV`, and the ascending node Ω is the one where the companion
+# recedes. At ν + ω = 270° the secondary is nearest the observer.
 #
 # To convert to ROTIR's projected frame:
 #   proj_west  = -y_orbit   (West = -East)
@@ -242,7 +246,7 @@ function compute_xyz_abs(L1, M1, N1, L2, M2, N2, nu, r_star)
     astro_z     = (N1.*r_star.*cos.(nu) .+  N2.*r_star.*sin.(nu));
     x = astro_north;
     y = astro_east;
-    z = -astro_z;
+    z = astro_z;
     return x, y, z
 end
 
@@ -253,7 +257,7 @@ function compute_xyz_rel(a, β, e, L1, M1, N1, L2, M2, N2, cos_E, sin_E)
     astro_z     = a*(N1*cos_E + β*N2*sin_E - e*N1);
     x = astro_north;
     y = astro_east;
-    z = -astro_z;
+    z = astro_z;
     return x, y, z
 end
 

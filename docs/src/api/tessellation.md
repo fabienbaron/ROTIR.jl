@@ -14,7 +14,8 @@
 | `tessellation_healpix(n; T=Float32)` | Create HEALPix tessellation with nside=2^n, npix=12*nside^2 |
 | `nside2npix(nside)` | Convert nside to number of pixels |
 | `npix2n(npix)` | Convert npix to resolution parameter n |
-| `sobel_gradient_healpix(n; T=Float32, power=2)` | Tangent-plane gradient operators `(Gx, Gy)` — spherical Sobel, for `"sobel"`/`"sobel2"` |
+| `sobel_gradient_healpix(n; T=Float32, power=2)` | Spherical Sobel: tangent-plane gradient `(Gx, Gy)` and the squared-difference operator `D` that `"sobel"`/`"sobel2"` penalise |
+| `laplace_beltrami_healpix(n; T=Float32)` | Cotangent Laplace–Beltrami operator `D` on the centres' triangulation, for `"laplace_beltrami"` |
 | `tv_neighbors_healpix(n; T=Float32)` | Graph-Laplacian difference matrix and Hessian, for `"tv"`/`"tv2"` |
 | `tv_neighbors_healpix_visible(n, stars; T=Float32)` | TV neighbors excluding always-invisible pixels |
 | `upsample_map_stars(tmap, stars, star_params, tepochs)` | Double resolution (each pixel splits into 4) |

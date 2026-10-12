@@ -79,8 +79,8 @@ function binary_frame(bparams, tepoch_jd)
     # anyway so this stays consistent with binary_orbit_abs if the derivation changes.
     ω = omega_at(bparams, tepoch_jd)
     L1, M1, N1, L2, M2, N2 = compute_coeff(Ω, i, ω)
-    e1 = collect(sky_of_orbit(L1, M1, -N1))   # compute_xyz_abs returns z = -astro_z
-    e2 = collect(sky_of_orbit(L2, M2, -N2))
+    e1 = collect(sky_of_orbit(L1, M1, N1))    # the same basis compute_xyz_abs projects on
+    e2 = collect(sky_of_orbit(L2, M2, N2))
     ẑ = cross(e1, e2); ẑ ./= norm(ẑ)
     ŷ = cross(ẑ, x̂)
 
@@ -497,9 +497,9 @@ distorted) outline via [`projected_limb_profile`](@ref).
 * `:soft` — the tessel *centre* is either in or out, smoothed by a sigmoid of width
   `softness` (a fraction of the limb radius, defaulting to the mesh scale
   `√(4π/npix)/2`). Cheaper to differentiate through (C∞ rather than C0), but its accuracy
-  is tied to the tessellation: at Spica's closest approach it gives 5.8 % of the
-  secondary's flux occulted at nside 3/2 against a converged 9.8 %, a 40 % error, because
-  the straddling band is a large fraction of a coarse mesh.
+  is tied to the tessellation: at Spica's closest approach it gives 2.08 % of the
+  primary's flux occulted at nside 3/2 against a converged 2.33 % (−11 %; `:exact` −6 %),
+  because the straddling band is a large fraction of a coarse mesh.
 
 **Fast path:** an O(1) bounding-circle test on the projected separation against the sum of
 the two maximum projected radii. When the disks are disjoint — the overwhelmingly common

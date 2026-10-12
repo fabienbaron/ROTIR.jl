@@ -45,6 +45,7 @@ makedocs(;
             "Binary Orbits"           => "guides/orbits.md",
             "Orbit Fitting"           => "guides/orbit_fitting.md",
             "Multi-resolution"        => "guides/multires.md",
+            "Sky images for OITOOLS"  => "guides/sky_export.md",
             "Plotting"                => "guides/plotting.md",
         ],
         "API Reference" => [

@@ -961,7 +961,7 @@ return neighbors,[],[],[],[], ∇, H
 end
 
 """
-    sobel_gradient_healpix(n; T=Float32, power=2) -> (Gx=, Gy=, npix=, area=)
+    sobel_gradient_healpix(n; T=Float32, power=2) -> (; Gx, Gy, D, owner, npix, area)
 
 Tangent-plane **first-derivative** operators on the NESTED HEALPix sphere at `nside = 2ⁿ`,
 as two sparse `npix × npix` matrices: `(Gx*x)[i]` and `(Gy*x)[i]` are the two components of
@@ -1000,15 +1000,10 @@ scale: it can suppress tessel-scale noise without also crushing genuine structur
 
 # `D`: what the regularizers penalise
 
-`Gx`/`Gy` are an edge DETECTOR, and as a penalty they are incomplete in the way every central
-difference is: the least-squares gradient sums SIGNED differences, so a pattern in which roughly
-opposite neighbours share a value — the checkerboard — has `∇x ≈ 0` at every tessel. On a square
-grid the real Sobel kernel `[-1 0 1] ⊗ [1 2 1]` has the same blind spot at the Nyquist frequency.
-Measured here at nside 8: the smallest nonzero eigenvalues of `GxᵀGx + GyᵀGy` were ~1e-4 of the
-median and belonged to the HIGHEST-frequency modes, which is what let a GMRF prior built from it
-put 1250–13250 K checkerboards on a 4400 K star.
+`Gx`/`Gy` sum signed differences, so a pattern in which opposite neighbours share a value (a
+checkerboard) has `∇x ≈ 0` at every tessel: they are an edge detector, not a penalty.
 
-`D` squares each neighbour difference BEFORE summing. Its rows are `√(2wₖ/tr Mᵢ)·(x_jₖ − xᵢ)`,
+`D` squares each neighbour difference before summing. Its rows are `√(2wₖ/tr Mᵢ)·(x_jₖ − xᵢ)`,
 one per directed neighbour pair (`owner[r]` is the tessel row `r` belongs to), so that
 
 ```
@@ -1102,14 +1097,7 @@ triangle) face. Each quadrilateral is split along its Delaunay diagonal, which k
 `wₑ ≥ 0` (diagonals of cocircular quads get `wₑ = 0` and are dropped). The result is a closed
 surface of exactly `2·npix − 4` triangles.
 
-Why not the simpler two-point finite-volume form `Σ (ℓₑ/dₑ)(x_j − x_i)²` over shared edges:
-it is consistent only when the line between two centres crosses their shared edge at right
-angles, and HEALPix pixels are rhombi, not squares. It converges, but to the wrong limit —
-+7 % on ∫|∇z|² and +30 % on ℓ = 2, unchanged by refinement.
-
-Every difference enters squared, so the only null mode is the constant map — unlike the
-least-squares Sobel gradient (`Gx`/`Gy` of [`sobel_gradient_healpix`](@ref)), which cannot
-see a checkerboard. `area = 4π/npix` is carried for symmetry with `sobel_gradient_healpix`;
+Every difference enters squared, so the only null mode is the constant map. `area = 4π/npix` is carried for symmetry with `sobel_gradient_healpix`;
 the energy above already includes the geometry and needs no area factor.
 """
 function laplace_beltrami_healpix(n; T = Float32)

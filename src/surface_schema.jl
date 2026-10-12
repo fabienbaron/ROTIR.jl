@@ -579,21 +579,17 @@ ld_coefficients_used(ldtype::Integer) =
 # 1650 nm, and `1.65e-6` in a text box is a value nobody can check at a glance. The one
 # conversion lives in [`intensity_lambda_range`](@ref) so there is exactly one place it happens.
 
-"""
-    INTENSITY_PARAMS
-
-The provider form, as [`ParamSpec`](@ref)s, in the order it is shown. A sibling of
-`surface_params`, not a part of it — see the comment above.
-
-`kind` is `:choice` for the backend selector, `:path` for the one text-valued field and
-`:setting` for the numbers. `:setting` rather than `:float` because none of them is a
-COORDINATE: a fit cannot free a grid's Teff window, so the form must not offer free/fixed/tied
-on these rows and `_set_state!` refuses it.
-"""
 # THE GRIDS THAT SHIP WITH ROTIR, offered by name rather than asked for by path. Each is a
 # `save_intensity_grid` FITS file under the package's `demos/data`, found through `resource` so
 # the bundled app and a dev checkout resolve it the same way. Code 0 is the escape hatch: a
 # grid the user built themselves, which is the one case where a path has to be typed.
+"""
+    SHIPPED_INTENSITY_GRIDS
+
+The model-atmosphere grids that ship with ROTIR, as `code => (file, label, ranges)`: the
+`grid_choice` codes of [`INTENSITY_PARAMS`](@ref). [`intensity_grid_path`](@ref) resolves a code
+to its file; code 0 is a custom grid read from `grid_path`.
+"""
 const SHIPPED_INTENSITY_GRIDS = [
     # (file, short label for the combo — which sizes itself to its widest entry — and the
     #  ranges, which go in the row's tooltip instead)
@@ -602,6 +598,18 @@ const SHIPPED_INTENSITY_GRIDS = [
     3 => ("betcas_Br11_korg.fits", "Korg Br-11",      "Korg/MARCS, Br-11 window: Teff 5.4–7.6 kK, log g 2.9–4.1"),
 ]
 
+
+"""
+    INTENSITY_PARAMS
+
+The provider form, as `ParamSpec`s, in the order it is shown. A sibling of
+`surface_params`, not a part of it — see the comment above.
+
+`kind` is `:choice` for the backend selector, `:path` for the one text-valued field and
+`:setting` for the numbers. `:setting` rather than `:float` because none of them is a
+COORDINATE: a fit cannot free a grid's Teff window, so the form must not offer free/fixed/tied
+on these rows and `_set_state!` refuses it.
+"""
 const INTENSITY_PARAMS = [
     ParamSpec(:intensity_source, "Intensity from", "", 5.0, 1.0, 5.0, :intensity,
               "How a temperature becomes the intensity the interferometer sees, applied to " *
@@ -682,7 +690,7 @@ end
     intensity_params_used(source, cfg = nothing) -> Tuple{Symbol,...}
 
 Which provider fields the chosen backend actually reads — the exact counterpart of
-[`ld_coefficients_used`](@ref). The form SHOWS exactly these (plus the selector), so an
+`ld_coefficients_used`. The form SHOWS exactly these (plus the selector), so an
 analytic conversion carries no grid settings at all.
 
 With `cfg`, the grid's own choice is honoured too: `grid_path` is read only for a custom grid

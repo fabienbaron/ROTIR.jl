@@ -123,3 +123,17 @@ Returns `(xs, ys, fs)` where:
 - `fs`: complex weights including the intensity, Jacobian, and Gauss weight
 
 Total samples: `(ngauss * nsub)^2 * Npix`.
+
+## Sky images for OITOOLS
+
+FITS cubes OITOOLS can compute visibilities from; see the
+[Exporting sky images for OITOOLS](@ref) guide.
+
+```@docs
+sky_layout
+sky_grid
+render_sky_cube
+write_sky_cube
+read_sky_cube
+check_sky_cube
+```

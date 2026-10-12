@@ -13,7 +13,61 @@ coefficient. On β Cas the correlation between the gravity-darkening exponent β
 and `ld1` runs from +0.67 to +0.99 depending on rotation rate; with the intensity
 predicted it disappears, because `ld1` is no longer there to absorb anything.
 
-## Where `log g` comes from: the mass is derived, not fitted
+## From temperature to intensity
+
+ROTIR's maps are **temperatures**; an interferometer sees **intensity**. The conversion
+between the two is one choice, made once per model and applied on top of whatever temperature
+map the surface carries — von Zeipel, ELR, a spotted map, a reconstruction — under every
+limb-darkening law. In the GUI it is the **Intensity from** row at the top of the Model form;
+in a script it is the `intensity_source` field of [`INTENSITY_PARAMS`](@ref):
+
+| code | source | intensity | μ dependence | reads |
+|---|---|---|---|---|
+| 5 | **Rayleigh–Jeans** (default) | ``I = \lambda T / c_2``, linear in ``T`` | from the LD law | nothing |
+| 1 | Planck | ``1/(e^{c_2/\lambda T} - 1)`` | from the LD law | nothing |
+| 2 | ROTIR grid | a model-atmosphere grid shipped with ROTIR, or a custom FITS grid | its own | `grid_choice` (+ `grid_path` if custom) |
+| 3 | Kurucz pack | the ATLAS9 intensity pack, downloaded once | its own | λ, Teff, log g windows |
+| 4 | Korg (MARCS) | synthesized, Teff ≤ 8000 K, needs `using Korg` | its own | windows + `grid_nodes` |
+
+**Rayleigh–Jeans is the default because it is what ROTIR has always computed**:
+`intensity_model = :linear`, intensity proportional to the map. It is also the conversion an
+imaging code that fits "brightness" per patch makes implicitly — SURFING fits linear patch
+brightness and assigns temperatures afterwards — so reproducing such a map needs it. Planck
+and Rayleigh–Jeans share a normalisation and agree when ``c_2/\lambda T \ll 1``; both drop
+the ``\lambda^{-5}`` (``\lambda^{-4}``) prefactor, which is exact as long as every component
+in a χ² shares one wavelength.
+
+The three atmosphere sources carry their own μ dependence and are meant for `ldtype = 0`;
+they also need a per-tessel ``\log g``, hence a distance `d` (next section).
+
+**Grids are found, not asked for.** The shipped grids are listed in
+[`SHIPPED_INTENSITY_GRIDS`](@ref) and chosen by `grid_choice` (code 0 is a custom file):
+
+| `grid_choice` | file | covers |
+|---|---|---|
+| 1 | `spica_H_kurucz.fits` | Kurucz ATLAS9, H band, Teff 17–30 kK, log g 3.0–4.5 |
+| 2 | `betcas_H_korg.fits` | Korg/MARCS, H band, Teff 5.4–7.6 kK, log g 2.9–4.1 |
+| 3 | `betcas_Br11_korg.fits` | Korg/MARCS, Br-11 window, Teff 5.4–7.6 kK, log g 2.9–4.1 |
+
+The Kurucz pack is one 67.5 MB file that serves every star, so ROTIR keeps it: see
+[`kurucz_pack_path`](@ref). The form shows only the rows the chosen source reads
+([`intensity_params_used`](@ref)) — an analytic source shows none.
+
+From a script, the same settings build the provider:
+
+```julia
+cfg = Dict(:intensity_source => 2.0, :grid_choice => 2.0)       # shipped Korg H-band grid
+isempty(validate_intensity_source(0, cfg, "")) || error("bad intensity configuration")
+prov = ROTIR.build_intensity_provider(cfg)
+```
+
+**Image reconstruction honours the same choice.** The Imaging tab reads the model's
+"Intensity from" rather than carrying its own: Rayleigh–Jeans reconstructs with
+`intensity_model = :linear`, Planck with `:planck` at the data's mean wavelength. The
+atmosphere sources are refused there, with the reason shown, because
+`image_reconstruct_oi`'s criterion takes an `intensity_model` symbol, not an
+`IntensityProvider`. The same conversion is what a sky-image export uses at each channel (see
+[Exporting sky images for OITOOLS](@ref)).
 
 ## Where `log g` comes from: the mass is derived, not fitted
 
@@ -97,6 +151,7 @@ requires a distance `d` on the star. See [`derive_mass`](@ref).
 |---|---|---|---|
 | Korg / MARCS | 2800–8000 K | synthesized at any μ | plane-parallel or spherical |
 | Kurucz ATLAS9 | 3500–50000 K | 17 fixed angles | plane-parallel |
+| Rayleigh–Jeans / Planck | any | no — the LD law supplies it | — |
 
 Build the grid over the range the **whole surface** spans, not the polar values:
 on β Cas the surface runs Teff 5888–7206 K and ``\log g`` 3.29–3.75, a 0.466 dex

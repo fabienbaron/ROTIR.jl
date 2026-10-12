@@ -69,10 +69,23 @@ For the gradient-based regularizers `"sobel"` and `"sobel2"`:
 sobel_info = sobel_gradient_healpix(n)
 ```
 
-This returns `(Gx, Gy, npix, area)`, two sparse matrices giving the tangent-plane components
-of ∇x at each tessel. It is the sphere's analogue of the 2-D Sobel stencil — which is itself
-the inverse-distance²-weighted least-squares gradient on a 3×3 grid — generalized to
-neighborhoods that are irregular and have no global axes.
+This returns `(; Gx, Gy, D, owner, npix, area)`. `Gx` and `Gy` are two sparse matrices giving
+the tangent-plane components of ∇x at each tessel. They are the sphere's analogue of the 2-D
+Sobel stencil — which is itself the inverse-distance²-weighted least-squares gradient on a 3×3
+grid — generalized to neighborhoods that are irregular and have no global axes. `D` is what
+the two regularizers actually penalise: the same neighbours and weights, each difference
+squared before summing, so its only null mode is the constant map.
+
+For `"laplace_beltrami"`:
+
+```julia
+lb_info = laplace_beltrami_healpix(n)
+```
+
+This returns `(; D, npix, area, nedges)`, one row per edge of the triangulation of the tessel
+centres (the dual of the pixelisation, each four-tessel corner split along its Delaunay
+diagonal), weighted by the cotangent formula. `‖D x‖²` converges to `∫|∇x|²dΩ` at second
+order, which makes it the most resolution-consistent of the smoothing operators.
 
 For the curvature-based `"tv"` and `"tv2"`:
 

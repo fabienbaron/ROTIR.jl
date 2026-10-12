@@ -18,8 +18,13 @@ observables (V², closure phases, triple amplitudes). It supports:
   convergence
 - **Joint shape + map optimization**: analytical gradients for shape parameters
   (radii, inclination, position angle) alongside the surface map
-- **Regularization**: total variation (L1, quadratic), maximum entropy, mean
-  constraint, and harmonic bias
+- **Regularization**: gradient smoothness (spherical Sobel, cotangent
+  Laplace–Beltrami), total variation (L1, quadratic), maximum entropy, mean
+  constraint, harmonic bias, and radial priors
+- **Temperature to intensity**: Rayleigh–Jeans, Planck, or model-atmosphere
+  grids (Kurucz ATLAS9, Korg/MARCS) that predict the limb darkening
+- **Sky images for OITOOLS**: models and reconstructions exported as FITS cubes
+  (channel × epoch, binaries included) that reproduce ROTIR's visibilities
 
 ROTIR uses [OITOOLS.jl](https://github.com/fabienbaron/OITOOLS.jl) for OIFITS
 I/O and data handling.

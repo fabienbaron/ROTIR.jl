@@ -96,9 +96,8 @@ reference periastron (`D = 1 − e`); PHOEBE 2's `requiv` is phase-independent. 
 shifts the absolute size slightly but not the modulation. Pass `D_ref = 1 - e` to
 `roche_omega_for_volume` for the WD convention.
 
-Note that the pre-existing `demos/spica_binary_roche.jl` predates this and uses the
-fixed-polar-radius convention (`fillout_factor_primary = -1`); the irradiation demos
-default to `volume_conserving = true`.
+`demos/spica_binary_roche.jl` uses the fixed-polar-radius convention
+(`fillout_factor_primary = -1`); the irradiation demos use `volume_conserving = true`.
 
 ## Mutual occultation
 
@@ -139,16 +138,17 @@ Two methods:
   Needs no convexity (it degrades gracefully for a near-fillout L1 cusp) and is C∞ rather
   than C0, so it is the one to use if you ever differentiate through occultation.
 
-Accuracy matters because centre-testing ties the answer to the tessellation. Occulted
-fraction of the secondary's flux at Spica's closest approach, converged value 9.80 %:
+Accuracy matters because centre-testing ties the answer to the tessellation. At Spica's
+closest approach (ν + ω ≈ 270°, the conjunction near periastron) the secondary is in front;
+occulted fraction of the primary's flux, Roche lobes, converged value 2.33 %:
 
 | nside₁/₂ | npix₂ | `:soft` | `:exact` |
 |---|---|---|---|
-| 2/1 | 48 | 6.14 (−37 %) | 8.20 (−16 %) |
-| 3/2 | 192 | 5.83 (**−41 %**) | 9.32 (**−5 %**) |
-| 4/3 | 768 | 10.13 (+3.3 %) | 9.68 (−1.2 %) |
-| 5/4 | 3072 | 9.88 (+0.9 %) | 9.77 (−0.3 %) |
-| 6/5 | 12288 | 9.83 | 9.79 |
+| 2/1 | 48 | 3.59 (**+54 %**) | 1.83 (−21 %) |
+| 3/2 | 192 | 2.08 (−11 %) | 2.18 (−6 %) |
+| 4/3 | 768 | 2.25 (−3.2 %) | 2.29 (−1.4 %) |
+| 5/4 | 3072 | 2.36 (+1.3 %) | 2.32 (−0.3 %) |
+| 6/5 | 12288 | 2.33 | 2.33 |
 
 `:exact` costs 1.15 ms against 0.22 ms at nside 4/3 — negligible next to a ~5 ms frame,
 and only on epochs that actually overlap. Only tessels that straddle the limb pay for the
@@ -161,8 +161,8 @@ case, returning `(nothing, nothing, 0)` with no allocation.
 For Spica this is not academic: with R₁ = 7.40 R☉, R₂ = 3.74 R☉ and a = 25.5 R☉ the
 minimum projected separation is 0.594 mas against R₁+R₂ = 0.673 mas — a grazing eclipse,
 independently consistent with the MOST photometry (Desmet et al. 2009, reported in
-Aufdenberg et al. 2015). At closest approach the near component hides **~10% of the far
-component's projected flux, ~1.7% of the system total** — an order of magnitude larger
+Aufdenberg et al. 2015). At closest approach the secondary hides **~2.3% of the primary's
+projected flux, ~1.9% of the system total** — an order of magnitude larger
 than the irradiation signature being looked for.
 
 ## Apsidal motion and period change
@@ -268,17 +268,14 @@ Three tests in `test/test_reflection.jl` lock this down:
   multiply by `D`) reproduces `RocheLobe.f90`'s `potential` exactly — this is what pins
   the `D`-dependence.
 
-### Related fixes in `roche_volume` / `roche_area`
+### How `roche_volume` / `roche_area` are computed
 
-Verified against a direct mesh sum and the exact sphere limit:
+Both integrate over the equipotential in (μ, φ), applying the μ- and φ-symmetry factors once.
+Both are verified against a direct mesh sum and the exact sphere limit.
 
-* both quadratures carried a **spurious factor of 2** (the μ- and φ-symmetry factors were
-  applied on top of an integrand that already included them), so volumes came out exactly
-  2× too large and `R_vol` 2^(1/3) ≈ 1.26× too large;
-* the Halley solve was seeded with the L1 radius, which lies *outside* an under-filled
-  lobe and let the iteration converge to a spurious root past the saddle — returning a
-  radius roughly twice too large near the companion. Now seeded from
-  `roche_polar_radius`, the minimum radius on the equipotential and hence always inside;
-* `roche_area` now includes the projection factor `1/cos γ` (with
-  `cos γ = |∂Ω/∂r| / |∇Ω|`) that the original omitted. `dA = r² dΩ / cos γ`, so dropping
-  it under-estimates the area of a distorted lobe.
+* The radius along each direction comes from a Halley solve seeded from
+  `roche_polar_radius`. That is the minimum radius on the equipotential, so it always lies
+  inside the lobe, and the iteration converges to the lobe surface rather than to a root past
+  the L1 saddle.
+* `roche_area` includes the projection factor: `dA = r² dΩ / cos γ`, with
+  `cos γ = |∂Ω/∂r| / |∇Ω|`.

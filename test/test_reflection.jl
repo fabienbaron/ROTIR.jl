@@ -75,6 +75,50 @@ const TEST_T = T0_ORB + 0.31 * P_ORB     # a generic, non-special phase
     @test D ≈ A_ORB * compute_separation(BP, TEST_T) atol = 1e-8
 end
 
+@testset "line of sight agrees with the radial velocities" begin
+    # z from binary_orbit_abs is positive RECEDING: dz/dt of the secondary must be a
+    # positive multiple of binary_RV's V2 − γ at every epoch, for any orientation.
+    for bp in (BP, merge(BP, (e = 0.6, ω = 30.0)), merge(BP, (i = 40.0,)))
+        ratios = Float64[]
+        for t in T0_ORB .+ range(0.1, 3.9, length = 13)
+            h = 1e-4
+            z2(t) = binary_orbit_abs(bp, t)[6]
+            dz = (z2(t + h) - z2(t - h)) / 2h
+            abs(dz) < 1e-3 && continue
+            _, v2 = binary_RV(bp, t; K1 = 1.0, K2 = 1.0, γ = 0.0)
+            push!(ratios, v2 / dz)
+        end
+        @test all(>(0), ratios)
+        @test maximum(ratios) / minimum(ratios) ≈ 1 atol = 1e-5
+    end
+
+    # So the star in FRONT at conjunction is the one the RVs put nearer. At ν + ω = 270°
+    # the secondary's relative z = r·sin(ν+ω)·sin i is most negative (nearest us), having
+    # just finished approaching (V2 < γ before, > γ after): it must occult the primary. At
+    # ν + ω = 90° the primary is in front. i = 100° so both conjunctions overlap on the sky.
+    bp = merge(BP, (i = 100.0,))
+    function t_at(u)                                   # time at which ν + ω = u (degrees)
+        ν = deg2rad(u - bp.ω)
+        E = 2atan(sqrt((1 - bp.e) / (1 + bp.e)) * tan(ν / 2))
+        return bp.T0 + (E - bp.e * sin(E)) * bp.P / 2pi
+    end
+    tes1 = tessellation_healpix(3); tes2 = tessellation_healpix(3)
+    for (u, front) in ((270.0, 2), (90.0, 1))
+        t = t_at(u)
+        _, v2a = binary_RV(bp, t - 0.05; K1 = 1.0, K2 = 1.0, γ = 0.0)
+        _, v2b = binary_RV(bp, t + 0.05; K1 = 1.0, K2 = 1.0, γ = 0.0)
+        # secondary approaching then receding at 270°, the reverse at 90°
+        @test front == 2 ? (v2a < 0 < v2b) : (v2a > 0 > v2b)
+        r = binary_orbit_abs(bp, t)
+        @test front == 2 ? r[6] < r[3] : r[3] < r[6]       # nearer = smaller z
+        _, _, rrel = binary_frame(bp, t)
+        @test front == 2 ? rrel[3] > 0 : rrel[3] < 0         # sky frame: +z toward observer
+        s1, s2 = create_binary_geometry(tes1, SP1, tes2, SP2, bp, t)
+        _, _, occulting = occultation_weights(s1, s2)
+        @test occulting == front
+    end
+end
+
 @testset "tidal bulge tracks the companion" begin
     # The Roche body-frame +x̂ (θ=π/2, φ=0) is the sub-companion direction for the primary.
     # After create_binary_star it must project onto the sky along the secondary's offset.
@@ -580,8 +624,9 @@ end
     c_no  = binary_cvis(t1, s1, t2, s2, ph; occultation = false)
     c_yes = binary_cvis(t1, s1, t2, s2, ph; occultation = true)
     @test maximum(abs.(c_no .- c_yes)) > 1e-6          # occultation is not a no-op
-    # Baseline-independent version of the same statement: at Spica's closest approach the
-    # near component hides ~10% of the far component's projected flux (~1.7% of the total).
+    # Baseline-independent version of the same statement: Spica's closest approach is the
+    # conjunction near periastron (ν + ω ≈ 270°), where the secondary passes in front and
+    # hides ~2.5% of the primary's projected flux (~2% of the total).
     # Asserting on flux rather than on a handful of arbitrary baselines keeps this from
     # depending on which (u,v) points happen to be sensitive.
     lost(star, tm, w) = begin
@@ -592,7 +637,8 @@ end
     end
     a1, b1 = lost(s1, t1, v1); a2, b2 = lost(s2, t2, v2)
     far_lost = which == 1 ? 1 - b2/a2 : 1 - b1/a1
-    @test 0.03 < far_lost < 0.30                        # far component partly hidden
+    @test which == 2                                    # the secondary is in front
+    @test 0.015 < far_lost < 0.04                       # far component partly hidden
     @test 0.003 < 1 - (b1+b2)/(a1+a2) < 0.06            # and the total flux drops
     # passing precomputed weights must match computing them inline
     c_pre = binary_cvis(t1, s1, t2, s2, ph; occultation = (v1, v2))
@@ -638,9 +684,9 @@ end
 
 @testset "occultation: exact area beats centre testing" begin
     # Centre-in-silhouette makes each tessel all-or-nothing, so its accuracy is tied to
-    # the mesh; exact area clipping is not. At Spica's closest approach the converged
-    # occulted fraction is ~9.8% of the secondary's flux — :soft is ~40% wrong at
-    # nside 3/2, :exact ~5%.
+    # the mesh; exact area clipping is not. At Spica's closest approach the secondary is in
+    # front and the converged occulted fraction is ~2.5% of the primary's flux — :soft is
+    # ~24% wrong at nside 3/2, :exact ~6%.
     ts = T0_ORB .+ collect(range(0, P_ORB, length = 200))
     t = ts[argmin(projected_separation.(Ref(BP), ts))]
     function occulted(n1, n2, meth)
@@ -658,11 +704,10 @@ end
         a1, b1 = f(s1, m1, w1); a2, b2 = f(s2, m2, w2)
         which == 1 ? 1 - b2/a2 : 1 - b1/a1
     end
-    # NB these are SPHERES, whose circular silhouette flatters the centre test; for the
-    # tidally distorted Roche lobes the gap is much wider (:soft is ~41% off at nside 3/2
-    # against ~5% for :exact — see docs/src/api/binary_geometry.md).
+    # These are SPHERES. For the Roche lobes see the table in
+    # docs/src/api/binary_geometry.md (:soft −11 % at nside 3/2 against −6 % for :exact).
     ref = occulted(5, 4, :exact)                       # converged reference
-    @test 0.08 < ref < 0.12
+    @test 0.02 < ref < 0.03
     e_coarse = abs(occulted(3, 2, :exact) - ref) / ref
     s_coarse = abs(occulted(3, 2, :soft)  - ref) / ref
     @test e_coarse < 0.10                              # exact stays close at coarse mesh

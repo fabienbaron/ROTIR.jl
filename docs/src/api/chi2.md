@@ -125,8 +125,18 @@ is too large to fit in memory.
 | `radflat_bins(star; nbins)` | Projected-radius binning both of the above need |
 
 Regularizers are passed as `["name", weight, aux, pixel_subset]`. Recognised names:
-`mem`, `tv`, `tv2`, `mean`, `bias`, `radflat`, `radialvar` — an unknown name raises rather
-than silently contributing zero.
+`sobel`, `sobel2`, `laplace_beltrami`, `mem`, `tv`, `tv2`, `mean`, `bias`, `radflat`,
+`radialvar`, `orthold` — an unknown name raises rather than silently contributing zero.
+
+The smoothing priors and the operators they take:
+
+```@docs
+sobel_gradient_healpix
+laplace_beltrami_healpix
+spheroid_sobel_fg
+spheroid_sobel2_fg
+spheroid_laplace_beltrami_fg
+```
 
 The two radial regularizers have their own page, including when they help and when they
 destroy real structure: [Radial Regularizers](radial_regularizers.md).
