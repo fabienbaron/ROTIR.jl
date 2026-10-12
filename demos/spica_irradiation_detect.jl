@@ -85,7 +85,9 @@ bands = [band_of(d) for d in data]
 #      the primary's first visibility null moves from 449 m (beyond CHARA's 331 m, so the
 #      curve never turns over) to 181 m (well inside). Only past the null do diameter, limb
 #      darkening and tidal elongation stop trading against one another — and that
-#      degeneracy, not sensitivity, is what limited the H-band result to 1.3 sigma.
+#      degeneracy, not sensitivity, is what limits the H band: refitting the radii,
+#      temperature and limb darkening absorbs 74% of the injected Δχ² (8.4σ -> 4.3σ),
+#      against 46% at 0.65 um (68σ -> 50σ).
 #
 # So the expected gain is much larger than the 1.28x thermal factor alone.
 const BAND = get(ENV, "BAND", "native")
@@ -149,7 +151,8 @@ if any(overlap)
     println("\n*** $(count(overlap))/$nepochs epochs have overlapping disks (Spica is a known")
     println("    grazing eclipser, Desmet+2009). Mutual occultation is $(OCC === false ? "OFF" : "ON ($(OCC))");")
     println("    with it off, the far component's hidden face would keep contributing flux —")
-    println("    ~10% of the secondary's light, ~1.7% of the total, at closest approach.\n")
+    println("    at closest approach the secondary is in front and hides ~2.3% of the primary's")
+    println("    light, ~1.9% of the total.\n")
 end
 
 # Intrinsic (gravity-darkened) maps, and the reflection kernels, per epoch.
