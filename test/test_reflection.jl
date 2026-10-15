@@ -255,6 +255,17 @@ end
     @test_throws DomainError kepler_E(1.0,  1.0)
     @test_throws DomainError kepler_E(1.0, -0.1)
 
+    # Near e → 1 rounding in f(E), amplified by 1/(1 − e cos E), sits above the absolute
+    # tolerance; the solver must stop at that floor instead of cycling by one ulp.
+    Mr = 0.0380132711084365
+    E, k = ROTIR._kepler_newton(Mr, 0.99)
+    @test k <= 15
+    @test abs(E - 0.99*sin(E) - Mr) < 1e-15
+    rng = MersenneTwister(7)
+    for e in (0.9, 0.99, 0.999, 0.9999)
+        @test maximum(last(ROTIR._kepler_newton(π*rand(rng), e)) for _ in 1:20_000) <= 20
+    end
+
     # elementwise over a vector, and agreeing with the scalar call
     Ms = [0.3, 2.0, 4.5, -1.0]
     @test compute_E_NR(Ms, 0.4) ≈ kepler_E.(Ms, 0.4)

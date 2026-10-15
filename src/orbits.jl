@@ -12,7 +12,10 @@ Converged to machine precision by a Newton iteration that is *provably* monotone
   `f(0) ≤ 0 ≤ f(π)`. Newton started from any point with `f ≥ 0` therefore decreases
   monotonically onto the root with no bracketing or damping.
 * The start `E₀ = min(π, M/(1−e))` satisfies `f(E₀) ≥ 0` because `sin E ≤ E` on `[0, π]`,
-  and is much tighter than π alone when `M` is small — typically 3–5 iterations.
+  and is much tighter than π alone when `M` is small — typically 3–6 iterations.
+* The iteration stops at the absolute tolerance or as soon as a step fails to shrink,
+  which is where rounding in `f(E)` takes over; near `e → 1` that floor lies above the
+  tolerance, and without the second test Newton would oscillate there by one ulp.
 
 # Differentiability
 
@@ -40,13 +43,26 @@ function kepler_E(M::Real, e::Real)
     ee == 0 && return Mw
     flip = Mw > T(π)
     Mr   = flip ? T(2π) - Mw : Mw            # now Mr ∈ [0, π]
-    E    = min(T(π), Mr / (1 - ee))          # f(E₀) ≥ 0, so Newton descends monotonically
-    for _ in 1:100
-        δ = (E - ee*sin(E) - Mr) / (1 - ee*cos(E))
-        E -= δ
-        abs(δ) <= 4*eps(T)*max(one(T), abs(E)) && break
-    end
+    E    = first(_kepler_newton(Mr, ee))
     return flip ? T(2π) - E : E
+end
+
+# Newton on `E − e·sin E = M` for `M ∈ [0, π]`, returning `(E, iterations)`. In exact
+# arithmetic the steps shrink monotonically onto the root; in floating point they stop
+# shrinking once `f(E)` is rounding noise, which `1/(1 − e·cos E)` amplifies past the
+# absolute tolerance when `e → 1`. A step no smaller than the last one therefore marks the
+# precision floor and ends the iteration.
+function _kepler_newton(Mr::T, ee::T) where {T<:AbstractFloat}
+    E = min(T(π), Mr / (1 - ee))             # f(E₀) ≥ 0, so Newton descends monotonically
+    δprev = T(Inf)
+    for k in 1:100
+        δ = (E - ee*sin(E) - Mr) / (1 - ee*cos(E))
+        abs(δ) >= abs(δprev) && return E, k
+        E -= δ
+        abs(δ) <= 4*eps(T)*max(one(T), abs(E)) && return E, k
+        δprev = δ
+    end
+    return E, 100
 end
 
 function ChainRulesCore.rrule(::typeof(kepler_E), M::Real, e::Real)
