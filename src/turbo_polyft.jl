@@ -31,7 +31,7 @@ THREE REWRITES are what LoopVectorization needs, and each changes nothing mathem
     vectorises over k, which is the contiguous axis. That inverts the threading — several
     threads now touch every `F[k]` — so each chunk of tessels gets its own accumulator and
     they are summed at the end. The chunks are formed explicitly: `Threads.threadid()` is NOT
-    an index into `1:nthreads()` on Julia 1.12, which has an interactive pool as well, and
+    an index into `1:nthreads()` on Julia ≥ 1.12, which has an interactive pool as well, and
     indexing a per-thread array by it is a `BoundsError` waiting for the scheduler.
 """
 function _cvis_turbo!(F::Vector{Complex{T}}, kx::Vector{T}, ky::Vector{T},

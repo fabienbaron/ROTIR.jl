@@ -99,7 +99,7 @@ goes straight to the GUI:
 
 ```
 rotirgui needs GLMakie.
-  These will be added to …/v1.12/Project.toml, and precompiled — a few minutes, once.
+  These will be added to …/v1.13/Project.toml, and precompiled — a few minutes, once.
 
   Optional. Each adds one fit method to the Model panel, and the panel reads
   that list when it opens — so a method not installed now is not offered for

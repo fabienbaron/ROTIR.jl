@@ -3,7 +3,7 @@ uuid = "1effc416-1cd3-435e-ba3b-8cf647137d25"
 keywords = ["astronomy", "interferometry", "imaging", "stellar surfaces"]
 license = "GPLv3"
 desc = "Regularized imaging of stellar surfaces from optical interferometry, Doppler imaging, and light curves"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Fabien Baron <fbaron@gsu.edu>"]
 
 
@@ -83,7 +83,7 @@ NLopt = "1"
 Nautilus = "0.1"
 # Unbounded: `[sources]` tracks main, so there is only ever one candidate and an upper bound
 # just breaks CI on each upstream bump. Pin a `rev` in `[sources]` if that is ever needed.
-OITOOLS = ">= 0.15"
+OITOOLS = ">= 0.17"
 Pigeons = "0.4"
 PrecompileTools = "1.2"
 PythonCall = "0.9"
@@ -92,7 +92,7 @@ QML = "0.13"
 QMLMakie = "0.3"
 RuntimeGeneratedFunctions = "0.5"
 Zygote = "0.7.11"
-julia = "1.12"
+julia = "1.13"
 
 [extras]
 FINUFFT = "d8beea63-0952-562e-9c6a-8e8ef7364055"

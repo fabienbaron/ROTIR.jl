@@ -23,10 +23,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Must match `julia = "1.12"` in Project.toml, for the same two reasons docs.yml
-        # gives: `[sources]` needs Pkg >= 1.11 and is SILENTLY ignored below it, and OITOOLS
-        # itself declares `julia = "1.12"`.
-        version: ['1.12']
+        # Must match `julia = "1.13"` in Project.toml, the project's development version.
+        # Never below 1.11: `[sources]` needs Pkg >= 1.11 and is SILENTLY ignored below it.
+        version: ['1.13']
         os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
