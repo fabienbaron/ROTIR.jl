@@ -46,11 +46,10 @@ function fresh_shell()
     s = G.Session()
     figs = [Makie.Figure() for _ in 1:10]
     sh = G.ShellState(; session = s,
-        sky    = G.build_sky_canvas(figs[1]),  star  = G.build_star_canvas(figs[2]),
-        moll   = G.build_moll_canvas(figs[3]), chi2  = G.build_chi2_canvas(figs[4]),
+        star   = G.build_star_canvas(figs[2]),
+        moll   = G.build_moll_canvas(figs[3]),
         imsky  = G.build_sky_canvas(figs[5]),  immoll = G.build_moll_canvas(figs[6]),
         msky   = G.build_sky_canvas(figs[7]),
-        obsmodel = Makie.Observable(Makie.Point2f[]),
         orbitcanvas = G.build_orbit_canvas(figs[8]),
         post   = G.build_post_canvas(figs[9]),
         imstar = G.build_star_canvas(figs[10]))

@@ -29,7 +29,16 @@ mutable struct DatasetEntry
     # Whether a single file was cut on timestamp gaps. Recorded because the exported script
     # has to reproduce the same epoch structure, and the two produce different ones.
     split::Bool
+    # `readoifits` options the epochs were read with (instrument, target, channel averaging…).
+    readopts::Dict{Symbol,Any}
+    # For a filtered dataset: the name of the unfiltered one it was cut from, and the Filter
+    # panel's settings that cut it. Both empty for a dataset as read.
+    source::String
+    filterspec::String
 end
+
+DatasetEntry(paths, name, data, mjd, tepochs, nv2, nt3, split) =
+    DatasetEntry(paths, name, data, mjd, tepochs, nv2, nt3, split, Dict{Symbol,Any}(), "", "")
 
 # `tepochs` is relative, and that is not cosmetic. `rotate_star` turns it into a rotation phase
 # as `2*pi*t/P`; handed a raw MJD of 55806 against a 54.8-day period that is a thousand
@@ -214,6 +223,30 @@ function split_epochs(data; gap::Real = 0.5)
 end
 
 """
+    read_epochs(paths; gap = 0.5, split = true, readopts...) -> (per_epoch_data, mean_mjds)
+
+The epochs of one dataset: a single file cut on gaps in its V² timestamps (`split_epochs`,
+or one epoch with `split = false`), several files one epoch each. `readopts` go to
+`readoifits` for every file.
+"""
+function read_epochs(ps::AbstractVector; gap::Real = 0.5, split::Bool = true, readopts...)
+    if length(ps) == 1
+        raw = OITOOLS.readoifits(ps[1]; readopts..., warn = false, verbose = false)[1, 1]
+        # `split = false` takes the file as ONE epoch. The gap rule is right for a file holding
+        # several campaigns, and wrong for one night that happens to have a long gap in it —
+        # a target lost to cloud and re-acquired two hours later is still one epoch of a star
+        # whose rotation period is days.
+        return split ? split_epochs(raw; gap = gap) :
+               (Any[raw], Float64[Statistics.mean(raw.v2_mjd)])
+    end
+    # ROTIR works one spectral bin at a time, so the first bin of every file.
+    per = isempty(readopts) ?
+        collect(Any, OITOOLS.readoifits_multiepochs(ps; warn = false, verbose = false)[1, :]) :
+        Any[OITOOLS.readoifits(f; readopts..., warn = false, verbose = false)[1, 1] for f in ps]
+    return per, Float64[d.mean_mjd for d in per]
+end
+
+"""
     load_dataset!(session, path; ...) -> DatasetEntry
     load_dataset!(session, paths::AbstractVector; ...) -> DatasetEntry
 
@@ -244,20 +277,7 @@ function load_dataset!(session::Session, paths::AbstractVector;
                        split::Bool = true)
     ps = String.(paths)
     isempty(ps) && throw(ArgumentError("no files given"))
-    if length(ps) == 1
-        raw = OITOOLS.readoifits(ps[1]; warn = false, verbose = false)[1, 1]
-        # `split = false` takes the file as ONE epoch. The gap rule is right for a file holding
-        # several campaigns, and wrong for one night that happens to have a long gap in it —
-        # a target lost to cloud and re-acquired two hours later is still one epoch of a star
-        # whose rotation period is days.
-        per, mjd = split ? split_epochs(raw; gap = gap) :
-                   (Any[raw], Float64[Statistics.mean(raw.v2_mjd)])
-    else
-        # nwav x nepochs; ROTIR works one spectral bin at a time, so row 1 and every column.
-        all = OITOOLS.readoifits_multiepochs(ps; warn = false, verbose = false)
-        per = collect(Any, all[1, :])
-        mjd = Float64[d.mean_mjd for d in per]
-    end
+    per, mjd = read_epochs(ps; gap = gap, split = split)
     if add && (cur = current_dataset(session)) !== nothing
         append!(cur.data, per); append!(cur.mjd, mjd)
         append!(cur.nv2, [d.nv2 for d in per]); append!(cur.nt3, [d.nt3phi for d in per])

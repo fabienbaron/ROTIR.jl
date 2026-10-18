@@ -371,6 +371,14 @@ Pane {
                 Item { Layout.fillWidth: true }
             }
 
+            ObsTicks {
+                Layout.fillWidth: true
+                tab: "image"
+                fontPt: root.fontPt
+                spacing: dp(6)
+                onStatusReported: (msg) => root.statusChanged(msg)
+            }
+
             RowLayout {
                 Layout.fillWidth: true
                 spacing: dp(6)
@@ -504,6 +512,7 @@ Pane {
                     fontPt: root.fontPt
                     uiScale: root.uiScale
                     showPosterior: false
+                    tab: "image"
                     // A reconstruction is fitted to every epoch at once, so there is no epoch
                     // to step through here.
                     showEpoch: false
@@ -536,5 +545,6 @@ Pane {
         if (root.viewIndex === 0)      imSkyArea.update()
         else if (root.viewIndex === 1) imMollArea.update()
         else                           imStarArea.update()
+        viewBar.loadRange()
     }
 }

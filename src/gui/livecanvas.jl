@@ -999,83 +999,6 @@ function _recenter_cam!(c::StarCanvas, radius)
 end
 
 """
-    Chi2Canvas
-
-Per-epoch χ², as a grouped bar chart: V², T3 amplitude and T3 phase side by side.
-
-Reduced rather than absolute, because the point of the panel is to see WHICH epoch the model
-fits badly, and epochs rarely have the same number of points.
-"""
-struct Chi2Canvas
-    figure::Any
-    axis::Any
-    message::Makie.Observable{String}
-    messageplot::Any
-    barplot::Any
-    unity::Any
-end
-
-function build_chi2_canvas(fig)
-    ax = Makie.Axis(fig[1, 1]; xlabel = "epoch", ylabel = "χ²ᵣ")
-    # Seeded with one zero-height bar rather than empty. `barplot!` with `dodge` computes
-    # `maximum(dodge)` to work out how many groups there are, and `maximum` of an empty vector
-    # throws — so an empty chart cannot be BUILT at all, which is fatal here: the plot has to
-    # exist before the window does.
-    xs, ys, gp = _chi2_placeholder()
-    bp = Makie.barplot!(ax, xs, ys; dodge = gp, color = gp,
-                        colormap = [Makie.RGBAf(0.80, 0.16, 0.16, 1),
-                                    Makie.RGBAf(0.16, 0.35, 0.80, 1),
-                                    Makie.RGBAf(0.13, 0.55, 0.24, 1)],
-                        colorrange = (1, 3))
-    # χ²ᵣ = 1 is the line the eye actually looks for, so it is drawn once and never touched.
-    un = Makie.hlines!(ax, [1.0]; color = (:black, 0.45), linestyle = :dash, linewidth = 1)
-    msg  = Makie.Observable("")
-    msgp = Makie.text!(ax, [Makie.Point2f(1, 0.5)]; text = msg, fontsize = 14,
-                       color = Makie.RGBAf(0.45, 0.5, 0.55, 1), align = (:center, :center))
-    c = Chi2Canvas(fig, ax, msg, msgp, bp, un)
-    idle!(c, "no dataset and no model")
-    return c
-end
-
-"""
-    show_chi2!(canvas, breakdowns)
-
-Push one [`chi2_breakdown`](@ref) per epoch. Non-finite reduced values — an epoch with no
-closure phases, say — are dropped rather than plotted as zero, which would read as a perfect fit
-to data that is not there.
-
-`Makie.update!` in ONE call, not three Observable assignments. `barplot!` resolves its compute
-graph after each input changes, so setting `x` and then `y` leaves an instant where they have
-different lengths, and the recipe raises `DimensionMismatch` from inside the graph — where
-QMLMakie swallows it and prints only "exception in render". The batched update makes the three
-arrive as a single transaction.
-"""
-function show_chi2!(c::Chi2Canvas, breakdowns)
-    style_live_axis!(c.axis)
-    xs = Float32[]; ys = Float32[]; gp = Int[]
-    for (i, b) in enumerate(breakdowns), (g, v) in enumerate((b.v2r, b.t3ampr, b.t3phir))
-        isfinite(v) || continue
-        push!(xs, Float32(i)); push!(ys, Float32(v)); push!(gp, g)
-    end
-    if isempty(ys)
-        # Same reason as at build time: an empty `dodge` makes the recipe throw on the next
-        # recompute. A single zero-height bar reads as "nothing to show" and costs one pixel.
-        px, py, pg = _chi2_placeholder()
-        Makie.update!(c.barplot, px[], py[]; dodge = pg[], color = pg[])
-        idle!(c, "no χ² yet — load a dataset and set a model")
-        return c
-    end
-    busy!(c)
-    Makie.update!(c.barplot, xs, ys; dodge = gp, color = gp)
-    Makie.ylims!(c.axis, 0, max(1.2, 1.1maximum(ys)))
-    Makie.xlims!(c.axis, 0.4, length(breakdowns) + 0.6)
-    return c
-end
-
-_chi2_placeholder() = (Makie.Observable(Float32[1]), Makie.Observable(Float32[0]),
-                       Makie.Observable(Int[1]))
-
-"""
     MollCanvas
 
 The whole-surface Mollweide view: one `mesh!` over the projected grid.
@@ -1293,7 +1216,6 @@ end
 # reference in the OITOOLS notes is about reclaiming the space, not about hiding the block).
 # `blockscene.visible` is what actually hides it. `Auto()` restores whatever the layout would
 # have chosen on its own.
-_colorbar_visible!(c::Chi2Canvas, ::Bool) = c            # no colorbar to collapse
 function _colorbar_visible!(c, on::Bool)
     if c isa MollCanvas
         Makie.rowsize!(c.figure.layout, 2, on ? Makie.Auto() : Makie.Fixed(0))
@@ -1366,7 +1288,6 @@ function _recolor!(c::SkyCanvas)
 end
 _recolor!(c::StarCanvas)  = c    # the mesh keeps numeric colours; the Observable is enough
 _recolor!(c::MollCanvas)  = c    # redrawn from `lastmap` by the caller when it matters
-_recolor!(c::Chi2Canvas)  = c    # categorical colours, not a ramp
 
 # ── the posterior ────────────────────────────────────────────────────────────────────────
 #

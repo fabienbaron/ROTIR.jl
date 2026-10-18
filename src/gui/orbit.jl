@@ -1244,9 +1244,12 @@ function orbit_dir()
             if shipped !== nothing
                 for f in readdir(shipped)
                     endswith(lowercase(f), ".toml") || continue
-                    # `force = false`: an orbit the user has edited under a shipped name is
-                    # theirs, and seeding must not overwrite it.
-                    cp(joinpath(shipped, f), joinpath(dir, f); force = false)
+                    # SKIPPED, not copied with `force = false`: an orbit the user has edited
+                    # under a shipped name is theirs, and `cp` without `force` does not skip an
+                    # existing file, it throws — which aborted the seeding before the marker
+                    # was written, so every launch retried, warned and fell back to `pwd()`.
+                    dest = joinpath(dir, f)
+                    ispath(dest) || cp(joinpath(shipped, f), dest)
                 end
             end
             # Written LAST, so a seeding that throws half way is retried rather than recorded

@@ -361,7 +361,8 @@ function chi2s2(x, star, data; verbose::Bool = true)
 end
 
 function spheroid_chi2_f(x, star, data; verbose::Bool = false,
-                         intensity_model::Symbol = :linear, band = nothing)
+                         intensity_model::Symbol = :linear, band = nothing,
+                         weights = (1, 1, 1))
   v2_model, t3amp_model, t3phi_model = observables(x, star, data;
                                                    intensity_model=intensity_model, band=band);
   chi2_v2 = sum(abs2, (v2_model - data.v2)./data.v2_err);
@@ -372,11 +373,15 @@ function spheroid_chi2_f(x, star, data; verbose::Bool = false,
     printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
     printstyled(@sprintf("T3P: %.4f\n", chi2_t3phi/data.nt3phi), color=:green)
   end
-  return chi2_v2 + chi2_t3amp + chi2_t3phi
+  return weights[1]*chi2_v2 + weights[2]*chi2_t3amp + weights[3]*chi2_t3phi
 end
 
+# `weights` scales `[V², T3amp, T3φ]` in the criterion AND its gradient, as in
+# `parametric_chi2`: a zero drops that observable from the reconstruction (e.g. V² and T3amp
+# only while the closure phases are not trusted). The verbose trace still prints all three.
 @views function spheroid_chi2_fg(x, g, star, data; verbose::Bool = true,
-                                 intensity_model::Symbol = :linear, band = nothing)
+                                 intensity_model::Symbol = :linear, band = nothing,
+                                 weights = (1, 1, 1))
   npix = star.npix;
   T = eltype(x);
   indx = star.index_quads_visible
@@ -399,7 +404,7 @@ end
   g_v2 = real(transpose(star.polyft[data.indx_v2,:])*(4*((v2_model-data.v2)./data.v2_err.^2).*conj(cvis_model[data.indx_v2])));
   g_t3amp = real(transpose(star.polyft[data.indx_t3_1,:]) *(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_1])./abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_2,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_2])./abs.(cvis_model[data.indx_t3_2]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_3]) ))+real(transpose(star.polyft[data.indx_t3_3,:])*(2*((t3amp_model-data.t3amp)./data.t3amp_err.^2).*conj(cvis_model[data.indx_t3_3])./abs.(cvis_model[data.indx_t3_3]).*abs.(cvis_model[data.indx_t3_1]).*abs.(cvis_model[data.indx_t3_2]) ));
   g_t3phi = T(360/pi)*imag(transpose(star.polyft[data.indx_t3_1,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_2].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_2,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_3].*conj(t3_model))+transpose(star.polyft[data.indx_t3_3,:])*(((mod360(t3phi_model-data.t3phi)./data.t3phi_err.^2)./abs2.(t3_model)).*cvis_model[data.indx_t3_1].*cvis_model[data.indx_t3_2].*conj(t3_model)));
-  gsum = g_v2 + g_t3amp + g_t3phi;
+  gsum = T(weights[1])*g_v2 + T(weights[2])*g_t3amp + T(weights[3])*g_t3phi;
   flux = poly_to_flux(x, star; intensity_model = intensity_model, band = band);
   # Gradient w.r.t. x: chain rule through soft visibility weights
   # gsum is ∂χ²/∂(xw), so ∂χ²/∂I = w .* ∂χ²/∂(xw) (after flux normalization)
@@ -418,14 +423,15 @@ end
     printstyled(@sprintf("T3P: %.4f ", chi2_t3phi/data.nt3phi), color=:green)
     printstyled(@sprintf("Flux: %.4f\n", flux), color=:normal)
   end
-  return chi2_v2 + chi2_t3amp + chi2_t3phi
+  return weights[1]*chi2_v2 + weights[2]*chi2_t3amp + weights[3]*chi2_t3phi
 end
 
-function spheroid_chi2_allepochs_f(x, stars, data; epochs_weights=[], verbose=false)
+function spheroid_chi2_allepochs_f(x, stars, data; epochs_weights=[], verbose=false,
+                                   weights = (1, 1, 1))
 nepochs = length(data)
 chi2_t = zeros(eltype(x), nepochs);
 Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
-  chi2_t[i] = spheroid_chi2_f(x, stars[i], data[i], verbose=verbose);
+  chi2_t[i] = spheroid_chi2_f(x, stars[i], data[i], verbose=verbose, weights=weights);
 end
 # The weights go on the per-epoch terms, BEFORE the sum. `f = f.*w` after summing — which is
 # what stood here — multiplies a scalar by a vector and returns a VECTOR from a function whose
@@ -459,7 +465,8 @@ end
 
 function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_weights=[],
                                     verbose=false, T=eltype(x),
-                                    intensity_model::Symbol = :linear, band = nothing)
+                                    intensity_model::Symbol = :linear, band = nothing,
+                                    weights = (1, 1, 1))
   #g[:] .= T(0);
   nepochs = length(data)
   chi2_t = zeros(T, nepochs);
@@ -467,7 +474,7 @@ function spheroid_crit_allepochs_fg(x, g, stars, data; regularizers=[], epochs_w
   singleepoch_g = [zeros(T, length(x)) for i=1:nepochs];
   Threads.@threads for i=1:nepochs # weighted sum -- should probably do the computation in parallel
     chi2_t[i] = spheroid_chi2_fg(x, singleepoch_g[i], stars[i], data[i], verbose=verbose,
-                                 intensity_model=intensity_model, band=band);
+                                 intensity_model=intensity_model, band=band, weights=weights);
   end
   # PER-EPOCH WEIGHTS, applied to the criterion AND to the gradient. This warned "not
   # implemented" and silently ignored the argument; the commented-out attempt beside it
@@ -1155,6 +1162,9 @@ using OptimPackNextGen
 
 Reconstruct a surface map by VMLMB.
 
+`weights = (w_V², w_T3amp, w_T3φ)` scales each observable's χ²; `(1, 1, 0)` reconstructs from
+V² and T3amp alone.
+
 `callback`, when given, is called as `callback(x, nevals, f)` every `callback_every`
 evaluations (and once on the first), which is what lets a caller show the map WHILE the engine
 runs instead of only when it stops. A twenty-minute reconstruction otherwise reports nothing
@@ -1175,13 +1185,15 @@ every 25 evaluations is not measurable, and a caller that wants every one can sa
 """
 function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf, maxiter = 100, regularizers =[],
                               intensity_model::Symbol = :linear, band = nothing,
+                              weights = (1, 1, 1),
                               callback = nothing, callback_every::Int = 25)
   x_sol = [];
   nevals = Ref(0)
   crit_imaging = function (x, g)
       f = spheroid_crit_allepochs_fg(x, g, stars, data, regularizers=regularizers,
                                      epochs_weights=epochs_weights, verbose = verbose,
-                                     intensity_model = intensity_model, band = band)
+                                     intensity_model = intensity_model, band = band,
+                                     weights = weights)
       nevals[] += 1
       if callback !== nothing && (nevals[] == 1 || nevals[] % max(1, callback_every) == 0)
           # A callback that throws must not take the reconstruction with it: it is a progress

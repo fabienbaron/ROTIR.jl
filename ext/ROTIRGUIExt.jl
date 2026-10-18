@@ -27,7 +27,7 @@ module ROTIRGUIExt
 
 using ROTIR
 import ROTIR: gui
-using Printf, Statistics, TOML
+using Printf, Statistics, TOML, Dates
 using NLopt
 using OptimPackNextGen
 using LinearAlgebra
@@ -80,6 +80,7 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "session.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "livecanvas.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "filepicker.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "shell.jl"))
+include(joinpath(pkgdir(ROTIR), "src", "gui", "filter.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "orbit.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "snapshot.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
@@ -125,7 +126,6 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
         _skyfig  = Makie.Figure(); _sky  = build_sky_canvas(_skyfig)
         _starfig = Makie.Figure(); _star = build_star_canvas(_starfig)
         _mollfig = Makie.Figure(); _moll = build_moll_canvas(_mollfig)
-        _chifig  = Makie.Figure(); _chi  = build_chi2_canvas(_chifig)
 
         if isfile(_pcfile)
             load_dataset!(_s, _pcfile)
@@ -133,9 +133,8 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
             # is the one that is easy to miss: it is in another file and only runs while the
             # extension precompiles, so the failure is a `MethodError` at build time listing
             # every argument type on one line.
-            _sh = ShellState(; session = _s, sky = _sky, star = _star, moll = _moll,
-                             chi2 = _chi, imsky = _sky, immoll = _moll, msky = _sky,
-                             obsmodel = Makie.Observable(Makie.Point2f[]),
+            _sh = ShellState(; session = _s, star = _star, moll = _moll,
+                             imsky = _sky, immoll = _moll, msky = _sky,
                              post = build_post_canvas(Makie.Figure()),
                              imstar = build_star_canvas(Makie.Figure()))
             SHELL[] = _sh
@@ -173,16 +172,18 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
             shell_clear_model()
             shell_add_model(2)
 
-            # The model prediction drawn over the data. `refresh_obs!` returns early here
-            # because there is no observable canvas (see above), so the ROTIR half — geometry
-            # at every epoch, `setup_oi!`, `observables` — is reached directly. Each view is
-            # its own specialisation and each was ~100 ms on first switch.
+            # The model prediction and the residuals the Explore tab compares the data with.
+            # `refresh_obs!` returns early here because there is no observable canvas (see
+            # above), so the ROTIR half — geometry at every epoch, `observables` — is reached
+            # directly. Each view is its own specialisation and each was ~100 ms on first switch.
             let _d1 = _s.datasets[1].data[1]
-                for _k in (:v2, :t3amp, :t3phi, :uv)
+                for _c in (:model, :residmodel), _k in (:v2, :t3amp, :t3phi, :uv)
+                    _sh.obscompare[] = _c
                     _sh.obskind[] = _k
-                    _model_points(_sh, _d1, 1)
+                    _obs_compare(_sh, _d1, 1)
                 end
                 _sh.obskind[] = :v2
+                _sh.obscompare[] = :model
             end
             # The callbacks a first click lands in.
             shell_epochs(); shell_datasets(); shell_params(); shell_surface_types()

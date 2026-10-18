@@ -148,7 +148,7 @@ ApplicationWindow {
     // from the screen". "Save defaults" stores THESE rather than the values in force, so a
     // scale worked out from this monitor's DPI is not pinned onto the next one.
     property real plotScaleUser: appearanceDefaults.plotScaleUser
-    // The data-point size in the Data tab's plot; 0 is "each plot's own". Lives in OITOOLS,
+    // The data-point size in the Explore tab's plot; 0 is "each plot's own". Lives in OITOOLS,
     // which owns that canvas, so it is filled from `shell_plot_scale` rather than assumed.
     property real markerSizeUser: appearanceDefaults.markerSizeUser
     // How far one wheel detent zooms a plot. A setting because it depends on the pointing
@@ -303,9 +303,16 @@ ApplicationWindow {
     property int saveH: 0
     function askSaveFigure(which, w, h) {
         win.saveWhich = which; win.saveW = w; win.saveH = h
-        picker.purpose = "image"
         picker.canAdd = false
         picker.saveMode = true
+        if (which === "oifits") {
+            // The Explore tab's export: an OIFITS file, next to the data.
+            picker.purpose = "oifits"
+            picker.suggestedName = "rotir_export.oifits"
+            picker.openAt(initialFolder)
+            return
+        }
+        picker.purpose = "image"
         picker.suggestedName = "rotir_" + which + ".png"
         picker.openAt(Julia.image_dir())
     }
@@ -566,7 +573,7 @@ ApplicationWindow {
                 }
 
                 // ── plot symbols ──────────────────────────────────────────────
-                // The Data tab's plot is OITOOLS' canvas, so this is forwarded there rather
+                // The Explore tab's plot is OITOOLS' canvas, so this is forwarded there rather
                 // than held here — see `marker_size_user` in shell.jl.
                 Label { text: "Plot symbols"; color: "#666" }
                 SpinBox {
@@ -761,6 +768,10 @@ ApplicationWindow {
                 win.refreshAll()
                 return
             }
+            if (mode === "savefig" && win.saveWhich === "oifits") {
+                win.status = Julia.shell_export_oifits(paths.split("\n")[0])
+                return
+            }
             if (mode === "savefig") {
                 var path = paths.split("\n")[0]
                 var msg = Julia.shell_save_figure(win.saveWhich, path, win.saveW, win.saveH)
@@ -928,7 +939,7 @@ ApplicationWindow {
             id: tabBar
             Layout.fillWidth: true
             currentIndex: initialTab
-            TabButton { text: "Data";    font.pointSize: pt(10) }
+            TabButton { text: "Explore"; font.pointSize: pt(10) }
             TabButton { text: "Model";   font.pointSize: pt(10) }
             TabButton { text: "Imaging"; font.pointSize: pt(10) }
             TabButton { text: "Orbit";   font.pointSize: pt(10) }

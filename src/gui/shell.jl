@@ -66,23 +66,27 @@ for a status the window computes.
 """
 Base.@kwdef mutable struct ShellState
     session::Session
-    sky::Any            = nothing   # SkyCanvas
     star::Any           = nothing   # StarCanvas
     moll::Any           = nothing   # MollCanvas
-    chi2::Any           = nothing   # Chi2Canvas
     # The Imaging tab's own pair. Separate figures, not a second view of the two above: a Makie
     # Figure belongs to one MakieArea at a time, and a reconstruction must not overwrite the
     # plot being read on another tab.
     imsky::Any          = nothing   # SkyCanvas
     immoll::Any         = nothing   # MollCanvas
     msky::Any           = nothing   # SkyCanvas — the Model tab's own, and its DEFAULT view
-    # The Data tab's observable plot: an OITOOLS `LiveCanvas`, reached through its GUI
+    # The Explore tab's observable plot: an OITOOLS `LiveCanvas`, reached through its GUI
     # extension rather than reimplemented. See `build_obs_canvas`.
     obs::Any            = nothing
-    obsmodel::Any       = nothing   # Observable{Vector{Point2f}} — the model prediction drawn over it
     obskind::Base.RefValue{Symbol} = Ref(:v2)
     obscolor::Base.RefValue{Symbol} = Ref(:baseline)
-    obsoverlay::Base.RefValue{Bool} = Ref(true)
+    # What the data are compared with: :data, :model, :image, :residmodel or :residimage.
+    obscompare::Base.RefValue{Symbol} = Ref(:model)
+    # One panel per baseline (triplet, station) against wavelength, as OITOOLS draws it.
+    obspanels::Base.RefValue{Bool} = Ref(false)
+    # The description of each point on the observable plot, index-aligned with what is drawn
+    # (`update_canvas!` returns it), and the last one a click identified.
+    obsinfo::Vector{String} = String[]
+    picktext::String = ""
     # What the surface views COLOUR BY: the temperature map itself, or the emergent intensity —
     # limb darkening multiplied in, and optionally a Planck conversion at the observing
     # wavelength. Two different physical quantities, and the one you want depends on whether
@@ -101,6 +105,16 @@ Base.@kwdef mutable struct ShellState
     gratlat::Base.RefValue{Float64} = Ref(30.0)
     gratlon::Base.RefValue{Float64} = Ref(30.0)
     gratcolor::Base.RefValue{String} = Ref("black")
+    # The colour range of every surface view: `nothing` autoscales each panel to its own map,
+    # a `(lo, hi)` pair pins them all to the same scale so two maps can be compared by eye.
+    # In the units of whatever is being coloured (K or arbitrary intensity), so it reverts to
+    # autoscale when that quantity changes.
+    colorrange::Base.RefValue{Any} = Ref{Any}(nothing)
+    # Which observables enter the χ², as `(V², T3amp, T3φ)` weights of 1 or 0 — one set for
+    # the Model tab's fits and one for the Imaging tab, because a common sequence is to fit the
+    # shape on V² and T3amp and then image with the closure phases as well.
+    fitweights::Base.RefValue{NTuple{3,Float64}} = Ref((1.0, 1.0, 1.0))
+    imgweights::Base.RefValue{NTuple{3,Float64}} = Ref((1.0, 1.0, 1.0))
     # The mesh the model is evaluated on, and the float type it is built in. Both belong to the
     # MODEL rather than to a plot: they decide what is being fitted, not how it is drawn.
     tessel::Base.RefValue{Symbol} = Ref(:healpix)   # :longlat is not wired yet
@@ -2066,9 +2080,12 @@ current dataset", which is almost always what is wanted and is one fewer number 
 """
 function shell_set_surface_field(intensity, model, band_um)
     sh = _sh()
-    sh.intensity[] = _qmlstr(intensity) == "1"
+    newint = _qmlstr(intensity) == "1"
     m = Symbol(_qmlstr(model))
     m in (:linear, :planck) || return "unknown intensity model $(model)"
+    # A pinned range is in the units of the old quantity, and would be meaningless on the new.
+    (newint != sh.intensity[] || m !== sh.intensity_model[]) && (sh.colorrange[] = nothing)
+    sh.intensity[] = newint
     sh.intensity_model[] = m
     b = _qmlreal(band_um, 0.0)
     sh.band[] = b > 0 ? b * 1e-6 : _data_band(sh)
@@ -2262,7 +2279,8 @@ function _decor(sh::ShellState)
             plotmesh = d[:plotmesh],
             rotation_axis = d[:spin], rotation_arrow = d[:spin],
             graticule_dlat = sh.gratlat[], graticule_dlon = sh.gratlon[],
-            graticule_color = Symbol(sh.gratcolor[]))
+            graticule_color = Symbol(sh.gratcolor[]),
+            colorrange = sh.colorrange[])
 end
 
 function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
@@ -2307,7 +2325,7 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
                          star_params2 = star_params(m.companion), _decor(sh)...)
     end
     if bin2 === nothing
-        show_star3d!(sh.star, star, allv)
+        show_star3d!(sh.star, star, allv; colorrange = sh.colorrange[])
     else
         # BOTH components in 3-D too, at the same separation the sky view draws — the z term
         # included, which the sky view drops. That is the whole reason to look at the pair in
@@ -2329,9 +2347,10 @@ function refresh_model_tab!(sh::ShellState; got = build_epoch_star(sh))
             Makie.Point3f[]
         end
         show_binary3d!(sh.star, star, allv, star2, allv2,
-                       (Float64(off[1]), Float64(off[2]), zoff); track = track)
+                       (Float64(off[1]), Float64(off[2]), zoff); track = track,
+                       colorrange = sh.colorrange[])
     end
-    show_mollweide!(sh.moll, allv, star)
+    show_mollweide!(sh.moll, allv, star; colorrange = sh.colorrange[])
     # Say which panel is wrong and how, rather than leaving "exception in render" as the only
     # evidence. Cheap: two length comparisons against work already done.
     check_mesh!(sh, sh.moll.mesh[], sh.moll.colors[], "the Mollweide")
@@ -2342,41 +2361,11 @@ end
 """
     refresh_data_tab!(sh)
 
-Redraw the sky view for the current epoch and the per-epoch χ² panel.
+Redraw the Explore tab: its observable plot, for the current epoch. `got` is accepted and
+ignored, so the callers that share one geometry build between the tabs need not know which
+tabs use it.
 """
-function refresh_data_tab!(sh::ShellState; got = build_epoch_star(sh))
-    m = current_model(sh.session)
-    if got === nothing
-        idle!(sh.sky, current_dataset(sh.session) === nothing ?
-                      "no dataset — use Open OIFITS…" :
-                      "no model — add one on the Model tab")
-    else
-        star, tmap = got[1], got[2]
-        bin2 = length(got) >= 5 ? (got[3], got[4], got[5]) : nothing
-        vals = surface_values(sh, tmap, star; visible_only = true)
-        sh.sky.cbarlabel[] = sh.intensity[] ? "I (arb.)" : "T (K)"
-        d = current_dataset(sh.session)
-        ttl = d === nothing ? "" :
-              Printf.@sprintf("epoch %d — MJD %.4f  (t = %.3f d)", sh.session.current_epoch,
-                              d.mjd[clamp(sh.session.current_epoch, 1, length(d.mjd))],
-                              d.tepochs[clamp(sh.session.current_epoch, 1, length(d.tepochs))])
-        if bin2 === nothing
-            show_map!(sh.sky, star, vals; title = ttl, star_params = star_params(m),
-                      _decor(sh)...)
-        else
-            star2, tmap2, off = bin2
-            v2 = surface_values(sh, tmap2, star2; visible_only = true)
-            show_binary_map!(sh.sky, star, vals, star2, v2, off; title = ttl,
-                             star_params = star_params(m),
-                             star_params2 = star_params(m.companion), _decor(sh)...)
-        end
-    end
-    c = epoch_chi2(sh)
-    c === nothing ? idle!(sh.chi2, "no χ² yet — load a dataset and set a model") :
-                    show_chi2!(sh.chi2, c)
-    refresh_obs!(sh)
-    return sh
-end
+refresh_data_tab!(sh::ShellState; got = nothing) = (refresh_obs!(sh); sh)
 
 """
     companion_offsets(sh, m, mjd) -> Vector{Tuple{Float64,Float64}}
@@ -2545,19 +2534,22 @@ epoch_chi2(sh::ShellState) = (s = model_state(sh); s === nothing ? nothing : s.c
 _oitools_gui() = Base.get_extension(OITOOLS, :OITOOLSGUIExt)
 
 """
-    build_obs_canvas(fig) -> (canvas, model_points)
+    build_obs_canvas(fig) -> canvas
 
-An OITOOLS `LiveCanvas` plus ONE extra scatter for the model prediction.
-
-The extra series is inserted here, at build time, which is the only moment a plot may be added
-— afterwards the window owns the GL context. It is drawn in black rings over OITOOLS' filled
-markers so the two read as data and model rather than as two datasets.
+An OITOOLS `LiveCanvas`, or `nothing` without OITOOLSGUIExt. The model's prediction and the
+residuals are drawn by the canvas itself (`update_canvas!`'s `overlay` and `residual`), the
+same way OITOOLS' Explore draws them.
 """
 function build_obs_canvas(fig)
     O = _oitools_gui()
-    O === nothing && return (nothing, Makie.Observable(Makie.Point2f[]))
+    O === nothing && return nothing
     ax = Makie.Axis(fig[1, 1])
     c  = O.build_canvas(fig, ax)
+    # The canvas carries a hidden heatmap for OITOOLS' reconstructed image, on cell edges
+    # −0.5…1.5. A figure first displayed with a log y axis — "Save plot…" of a log V² — runs
+    # log10 over those edges and fails to render at all. ROTIR never shows an image here, so
+    # the layer is moved to positive coordinates where a log axis can transform it.
+    c.imagey[] = Float32[0.5, 1.0, 1.5]
     # Right-click returns the view to the data. `build_canvas` gives this axis Makie's own
     # `:limitreset`, which resets to `ax.limits[]` — and `update_canvas!` calls `autolimits!`,
     # leaving that automatic, so the reset had nothing to go back to and did nothing visible.
@@ -2572,15 +2564,7 @@ function build_obs_canvas(fig)
         end
         return Makie.Consume(false)
     end
-    pts = Makie.Observable(Makie.Point2f[])
-    # SMALL GREY SQUARES. The model is an annotation on the data, not a second dataset: it has
-    # to be legible where it lands on top of a point and not compete with it anywhere else.
-    # Square because every data series here is round, so the shape alone says which is which
-    # even in one colour; grey because the data carry the colour, coded by baseline, wavelength
-    # or epoch, and a black ring at markersize 9 read as another observation.
-    Makie.scatter!(ax, pts; color = (:grey35, 0.85), markersize = 5, marker = :rect,
-                   strokewidth = 0)
-    return (c, pts)
+    return c
 end
 
 # Which PLOTS each availability flag enables.
@@ -2652,112 +2636,219 @@ function shell_obs_kinds()
 end
 
 """
-    shell_set_obs_view(kind, color, overlay, logy) -> String
+    shell_set_obs_view(kind, color, compare, logy, maxbaseline = "0", panels = "0") -> String
 
-Redraw the observable plot: which quantity, what to colour by, whether to overlay the model's
-prediction, and whether the y axis is logarithmic.
+Redraw the observable plot, with the options OITOOLS' Explore offers: which quantity, what to
+colour by, what to compare the data with, a logarithmic y axis, closure quantities against the
+longest baseline, and one panel per baseline (or triplet, or station).
+
+`compare` is `"data"`, `"model"`, `"image"`, `"residmodel"` or `"residimage"` — the data alone,
+the model's or the current reconstruction's observables over them, or `(model − data)/σ`.
+`"1"` and `"0"` are read as `"model"` and `"data"`.
 """
-function shell_set_obs_view(kind, color, overlay, logy, maxbaseline = "0")
+function shell_set_obs_view(kind, color, compare, logy, maxbaseline = "0", panels = "0")
     sh = _sh()
     k = _qmlstr(kind)
     # A closure quantity can be plotted against the geometric mean of its triangle's baselines
     # or against the LONGEST leg — the resolution the closure actually probes. Same data, so it
     # is a modifier on the view rather than a view of its own.
-    if String(maxbaseline) == "1" && k in ("t3amp", "t3phi")
+    if _qmlstr(maxbaseline) == "1" && k in ("t3amp", "t3phi")
         k *= "_max"
     end
+    c = _qmlstr(compare)
+    c = c == "1" ? "model" : c == "0" ? "" : c
     sh.obskind[]    = Symbol(k)
     sh.obscolor[]   = Symbol(_qmlstr(color))
-    sh.obsoverlay[] = String(overlay) == "1"
-    sh.obslog[]     = String(logy) == "1"
+    sh.obscompare[] = c in ("model", "image", "residmodel", "residimage") ? Symbol(c) : :data
+    sh.obslog[]     = _qmlstr(logy) == "1"
+    sh.obspanels[]  = _qmlstr(panels) == "1"
     return refresh_obs!(sh)
 end
+
+"""
+    shell_obs_grouping_noun(kind) -> String
+
+What one panel of the per-group view holds for `kind` — `"baseline"`, `"triplet"` or
+`"station"` — or `""` when the view has no groups (uv coverage). From OITOOLS, so the tick is
+labelled the way OITOOLS labels it.
+"""
+function shell_obs_grouping_noun(kind)
+    k = Symbol(_qmlstr(kind))
+    O = _oitools_gui()
+    (O === nothing || !haskey(O.OBS_SPECS, k)) && return ""
+    return O.grouping_noun(k)
+end
+
+"""
+    shell_obs_compare_available() -> String
+
+`"model=1,image=0"`: whether the current model, and the current reconstruction, can be compared
+with the data — what the Compare choices are enabled by.
+"""
+function shell_obs_compare_available()
+    sh = _sh()
+    d = current_dataset(sh.session)
+    m = current_model(sh.session)
+    okm = d !== nothing && m !== nothing && model_state(sh) !== nothing
+    oki = d !== nothing && m !== nothing && m.companion === nothing &&
+          current_image(sh.session) !== nothing
+    return "model=$(okm ? 1 : 0),image=$(oki ? 1 : 0)"
+end
+
+"The kinds a log y axis applies to: the positive ones, as in OITOOLS."
+const OBS_LOG_KINDS = (:v2, :t3amp, :t3amp_max, :visamp, :flux, :diffvisamp)
+
+"The kinds ROTIR predicts, and so can overplot or turn into residuals."
+const OBS_PREDICTED = (:v2, :t3amp, :t3amp_max, :t3phi, :t3phi_max)
 
 """
     _obs_logscale(sh) -> Bool
 
 Whether the observable plot's y axis is logarithmic for the view it is currently showing.
 
-The tick is remembered across views, but it applies only to V² and T3amp: a closure phase takes
-both signs, and uv coverage is a geometry. Decided here rather than only in QML, because the
-callback is also reachable from a script and from the tests, and a log axis on a phase is not a
-rescaling — it is half the points thrown away.
+The tick is remembered across views, but it applies only to positive quantities: a closure
+phase takes both signs, uv coverage is a geometry, and a residual is centred on zero. Decided
+here rather than only in QML, because the callback is also reachable from a script and from the
+tests, and a log axis on a phase is not a rescaling — it is half the points thrown away.
 """
-_obs_logscale(sh::ShellState) = sh.obslog[] && sh.obskind[] in (:v2, :t3amp)
+_obs_logscale(sh::ShellState) = sh.obslog[] && sh.obskind[] in OBS_LOG_KINDS &&
+                                !(sh.obscompare[] in (:residmodel, :residimage))
+
+"""
+    _predicted_obs(sh, dat, epoch, source) -> (; v2, t3amp, t3phi) or an error String
+
+The observables the current model (`source = :model`) or the current reconstruction
+(`:image`) predicts for one epoch, in the data's own point order.
+
+The model comes from [`model_state`](@ref), so it is the same evaluation the χ² column is
+computed from, both components of a binary included. The reconstruction is evaluated on the
+current model's geometry at the map's own HEALPix level, with the intensity law the Imaging
+tab reconstructs with — the same three things the reconstruction itself used.
+"""
+function _predicted_obs(sh::ShellState, dat, epoch::Int, source::Symbol)
+    m = current_model(sh.session)
+    m === nothing && return "no model to compare with"
+    if source === :model
+        st = model_state(sh)
+        st === nothing && return "the model's parameters do not build a star"
+        v2, t3a, t3p = if hasproperty(st, :stars2)
+            ox, oy = st.offsets[epoch]
+            binary_observables(st.x, st.stars[epoch], st.x2, st.stars2[epoch], dat,
+                               binary_phase_shift(dat.uv, ox, oy))
+        else
+            observables(st.x, st.stars[epoch], dat)
+        end
+        return (; v2, t3amp = t3a, t3phi = t3p)
+    end
+    im = current_image(sh.session)
+    im === nothing && return "no reconstruction yet — run one in Imaging first"
+    m.companion === nothing ||
+        return "a reconstruction is one surface and the model is a binary"
+    ii = _imaging_intensity(sh, m)
+    isempty(ii.err) || return ii.err
+    d = current_dataset(sh.session)
+    star = create_star(tessellation_healpix(im.nside_exp), star_params(m), d.tepochs[epoch];
+                       secondary = m.secondary)
+    v2, t3a, t3p = observables(im.x, star, dat; intensity_model = ii.model, band = ii.band)
+    return (; v2, t3amp = t3a, t3phi = t3p)
+end
+
+"""
+    _obs_compare(sh, dat, epoch) -> (; overlay, residual) or an error String
+
+What the Compare choice adds to the plot, as the two vectors OITOOLS' `update_canvas!` takes:
+the prediction to draw over the data, or `(model − data)/σ` to draw instead of them. Both
+`nothing` for the data alone, and for a view ROTIR does not predict (uv, visibilities, flux).
+"""
+function _obs_compare(sh::ShellState, dat, epoch::Int)
+    none = (; overlay = nothing, residual = nothing)
+    cmp = sh.obscompare[]
+    kind = sh.obskind[]
+    (cmp === :data || !(kind in OBS_PREDICTED)) && return none
+    src = cmp in (:model, :residmodel) ? :model : :image
+    # Nothing to compare WITH is not an error, only the data alone: the choice stays set, so a
+    # model added later appears over the data without the box being touched again.
+    current_model(sh.session) === nothing && return none
+    src === :image && current_image(sh.session) === nothing && return none
+    p = try
+        _predicted_obs(sh, dat, epoch, src)
+    catch err
+        "$(src) observables failed: $(sprint(showerror, err))"
+    end
+    p isa String && return p
+    base = kind in (:t3amp_max,) ? :t3amp : kind in (:t3phi_max,) ? :t3phi : kind
+    y = Float64.(getproperty(p, base))
+    if cmp in (:residmodel, :residimage)
+        obs = Float64.(getfield(dat, base)); err = Float64.(getfield(dat, Symbol(base, :_err)))
+        r = base === :t3phi ? ROTIR.mod360(y .- obs) ./ err : (y .- obs) ./ err
+        return (; overlay = nothing, residual = r)
+    end
+    # On a log axis OITOOLS drops the data's non-positive and unmeasured points before drawing,
+    # and an overlay that no longer matches the data point for point is not drawn at all — so
+    # the same points are dropped from it here.
+    if _obs_logscale(sh)
+        obs = Float64.(getfield(dat, base))
+        OITOOLS.hide_unmeasured!(obs, Float64.(getfield(dat, Symbol(base, :_err))))
+        y = y[isfinite.(obs) .& (obs .> 0)]
+    end
+    return (; overlay = y, residual = nothing)
+end
+
+"""
+    _draw_obs!(sh, canvas, dat, epoch) -> String
+
+Draw one epoch into an OITOOLS canvas the way the Explore tab is set: the per-group panels, or
+the single plot with the Compare choice on it. Returns a status line; throws what the canvas
+throws, for the caller to report.
+"""
+function _draw_obs!(sh::ShellState, c, dat, epoch::Int)
+    O = _oitools_gui()
+    kind = sh.obskind[]
+    if sh.obspanels[] && haskey(O.OBS_SPECS, kind)
+        c === sh.obs && (sh.obsinfo = String[]; sh.picktext = "")
+        O.show_panels!(c, true)
+        n = O.update_panels!(c, dat, kind)
+        return "$(kind): $(n) $(O.grouping_noun(kind))$(n == 1 ? "" : "s"), against wavelength"
+    end
+    O.show_panels!(c, false)
+    cmp = _obs_compare(sh, dat, epoch)
+    msg = ""
+    if cmp isa String
+        msg = cmp
+        cmp = (; overlay = nothing, residual = nothing)
+    end
+    info = O.update_canvas!(c, dat, kind; color = sh.obscolor[], logscale = _obs_logscale(sh),
+                            overlay = cmp.overlay, residual = cmp.residual)
+    c === sh.obs && (sh.obsinfo = info; sh.picktext = "")
+    return msg
+end
 
 """
     refresh_obs!(sh) -> String
 
-Push the current epoch's data into the observable plot, and the model's prediction over it.
+Push the current epoch's data into the observable plot, with whatever the Explore tab compares
+it with.
 
 ONE epoch, not the concatenation: the epochs are separate observations of a rotating star, and
 a V² curve stacked across six nights is six curves drawn on top of each other. The epoch is the
-one the Data tab's slider selects.
+one the Explore tab's table selects.
 """
 function refresh_obs!(sh::ShellState)
     sh.obs === nothing && return sh.status
-    O = _oitools_gui()
     d = current_dataset(sh.session)
-    if d === nothing
-        sh.obsmodel[] = Makie.Point2f[]
-        return sh.status
-    end
+    d === nothing && return sh.status
     i = clamp(sh.session.current_epoch, 1, length(d.data))
-    dat = d.data[i]
-    # The overlay is emptied BEFORE the data goes in. `update_canvas!` ends by flipping the
-    # axis to log10, which transforms every point loaded AT THAT MOMENT — and what is still
-    # loaded here is the PREVIOUS view's prediction, a closure phase among them, on which
-    # `log10` is a DomainError. Same reason OITOOLS sets `identity` before pushing its series.
-    sh.obsmodel[] = Makie.Point2f[]
-    try
-        # `logscale` is OITOOLS' own keyword: it drops the non-positive points and sets the
-        # limits from what is left, so the failure mode it has to survive — a noise-dominated
-        # V² at or below zero — is handled once, in the canvas both GUIs share. It throws only
-        # when NOTHING is positive, which is a message on the console, not a broken tab.
-        O.update_canvas!(sh.obs, dat, sh.obskind[]; color = sh.obscolor[],
-                         logscale = _obs_logscale(sh))
+    msg = try
+        _draw_obs!(sh, sh.obs, d.data[i], i)
     catch err
         console!(sh, "could not draw $(sh.obskind[]): $(sprint(showerror, err))")
         return sh.status
     end
-    sh.obsmodel[] = sh.obsoverlay[] ? _model_points(sh, dat, i) : Makie.Point2f[]
-    return sh.status
-end
-
-"""
-    _model_points(sh, dat, epoch) -> Vector{Point2f}
-
-The current model's prediction for the current view, positioned on the same x axis as the data.
-
-Empty when there is no model, when the parameters do not build, or when the view is `uv` —
-uv coverage is geometry, not a prediction, so there is nothing for a model to say about it.
-"""
-function _model_points(sh::ShellState, dat, epoch::Int)
-    m = current_model(sh.session)
-    m === nothing && return Makie.Point2f[]
-    kind = sh.obskind[]
-    kind in (:v2, :t3amp, :t3phi) || return Makie.Point2f[]
-    # THE CACHED geometry, not a fresh one. This is called on every view switch and every
-    # epoch step, and rebuilding the mesh at all epochs and re-running `setup_oi!` for it is
-    # the same work `epoch_chi2` has already done with the same parameters.
-    st = model_state(sh)
-    st === nothing && return Makie.Point2f[]
-    try
-        v2m, t3am, t3pm = observables(st.x, st.stars[epoch], dat)
-        y, xs = kind === :v2    ? (v2m,  dat.v2_baseline) :
-                kind === :t3amp ? (t3am, dat.t3_baseline) :
-                                  (t3pm, dat.t3_baseline)
-        # The same 1e-6 Mλ scaling OITOOLS' ObsSpec applies, so the two series land on one axis.
-        pts = [Makie.Point2f(Float32(xs[k]) * 1f-6, Float32(y[k])) for k in eachindex(y)]
-        # A log axis transforms the overlay too, and a model V² of exactly zero — a visibility
-        # null — transforms to -Inf, which is not a limit Makie's log axis accepts. The data
-        # series drops its non-positive points inside `canvas_data`; the overlay drops its own,
-        # or the whole panel fails with nothing but "exception in render" to say why.
-        return _obs_logscale(sh) ? filter(p -> p[2] > 0, pts) : pts
-    catch err
-        console!(sh, "model overlay failed: $(sprint(showerror, err))")
-        return Makie.Point2f[]
-    end
+    isempty(msg) || console!(sh, msg)
+    # `update_canvas!` empties the filter preview; the points the Filter panel would remove
+    # from this epoch and this observable go back on.
+    sh.obspanels[] || _draw_filter_preview!(sh)
+    return isempty(msg) ? sh.status : msg
 end
 
 # ── view controls ────────────────────────────────────────────────────────────────────────
@@ -2780,7 +2871,7 @@ and three different ramps for one temperature field is a way to misread it, not 
 function shell_set_colormap(name)
     sh = _sh()
     ok = false
-    for c in (sh.sky, sh.msky, sh.star, sh.moll, sh.imsky, sh.immoll)
+    for c in (sh.msky, sh.star, sh.moll, sh.imsky, sh.immoll)
         ok |= set_colormap!(c, _qmlstr(name))
     end
     # The Mollweide computes its colours from the map, so it has to be redrawn rather than
@@ -2788,6 +2879,48 @@ function shell_set_colormap(name)
     ok && refresh_model_tab!(sh)
     ok && refresh_data_tab!(sh)
     return ok ? "colormap: $(name)" : "unknown colormap $(name)"
+end
+
+"""
+    shell_set_colorrange(lo, hi) -> String
+
+Pin every surface view to the colour range `[lo, hi]`, or return them to autoscaling when
+either bound is empty or not a number. Bounds given in the wrong order are swapped.
+"""
+function shell_set_colorrange(lo, hi)
+    sh = _sh()
+    a = _qmlreal(lo, NaN); b = _qmlreal(hi, NaN)
+    if !(isfinite(a) && isfinite(b)) || a == b
+        sh.colorrange[] = nothing
+        msg = "colour range: auto"
+    else
+        a > b && ((a, b) = (b, a))
+        sh.colorrange[] = (Float32(a), Float32(b))
+        msg = Printf.@sprintf("colour range: %.4g – %.4g", a, b)
+    end
+    refresh_model_tab!(sh)
+    refresh_data_tab!(sh)
+    refresh_image_tab!(sh)
+    return msg
+end
+
+"""
+    shell_colorrange(tab, view) -> String
+
+`"auto\tlo\thi"` for the canvas `view` (0 orthographic, 1 Mollweide, 2 3-D) of `tab`
+(`"model"` or `"image"`): whether the range is autoscaled, and the range that canvas is
+drawn with — the autoscaled one included, so the fields can show it. Empty when that canvas
+has not been built.
+"""
+function shell_colorrange(tab, view)
+    sh = _sh()
+    v = round(Int, _qmlreal(view, 0))
+    cs = _qmlstr(tab) == "image" ? (sh.imsky, sh.immoll, sh.imstar) :
+                                   (sh.msky, sh.moll, sh.star)
+    c = cs[clamp(v + 1, 1, 3)]
+    (c === nothing || !hasproperty(c, :cbarlimits)) && return ""
+    lo, hi = c.cbarlimits[]
+    return Printf.@sprintf("%d\t%.6g\t%.6g", sh.colorrange[] === nothing ? 1 : 0, lo, hi)
 end
 
 """
@@ -2801,7 +2934,7 @@ driving the shell, still wants a way to ask for it by name.
 """
 function shell_reset_zoom()
     sh = _sh()
-    for c in (sh.sky, sh.msky, sh.imsky); reset_zoom!(c); end
+    for c in (sh.msky, sh.imsky); reset_zoom!(c); end
     return ""
 end
 
@@ -2825,7 +2958,7 @@ neither has a QML equivalent:
 Called once, from `gui()`, after the canvases exist and before the window does.
 """
 function install_interactions!(sh::ShellState)
-    for c in (sh.sky, sh.msky, sh.imsky)
+    for c in (sh.msky, sh.imsky)
         # ONE handler owns the wheel and the right-click, and it enforces the bounds BEFORE it
         # moves the view — see `_install_zoom!`. What was here instead was Makie's own
         # `ScrollZoom` plus a `finallimits` listener that pulled the view back afterwards, and
@@ -3577,7 +3710,8 @@ makes this feasible at all. `fit_orbit` refuses tessellated components partly be
 "orders of magnitude slower per likelihood", and that was true while every evaluation built an
 `nuv × npix` matrix per component through `setup_oi!`. It is 13 ms now.
 """
-function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop, health)
+function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop, health;
+                           weights = (1, 1, 1))
     return function (θ)
         stop[] && return 1e30          # NOT counted: see `FitHealth`
         _eval!(health)
@@ -3603,7 +3737,7 @@ function _binary_objective(snap, names, tess, data, mjd, tepochs, orbit, stop, h
             tot = 0.0
             for i in eachindex(data)
                 ph = binary_phase_shift(data[i].uv, offs[i][1], offs[i][2])
-                tot += binary_chi2_f(x1, s1[i], x2, s2[i], data[i], ph)
+                tot += binary_chi2_f(x1, s1[i], x2, s2[i], data[i], ph; weights = weights)
             end
             return isfinite(tot) ? tot : _refused!(health)
         catch err
@@ -3682,6 +3816,53 @@ function _sampler_theta_error(m, sh, names, what::AbstractString)
                "$(m.surface_type) has no differentiable log-posterior"
     end
     return ""
+end
+
+"""
+    _weighted_ndata(data, w) -> Int
+
+The number of points a χ² weighted by `w = (V², T3amp, T3φ)` sums over: an observable with
+weight zero contributes no terms, so it contributes no degrees of freedom either.
+"""
+_weighted_ndata(data, w) = sum(d -> (w[1] > 0) * d.nv2 + (w[2] > 0) * d.nt3amp +
+                                    (w[3] > 0) * d.nt3phi, data; init = 0)
+
+const OBS_NAMES = ("V²", "T3amp", "T3φ")
+
+"`\"\"` when every observable is in, else `\" — V², T3amp only\"` for the console."
+_weights_note(w) = all(>(0), w) ? "" :
+    " — " * join((OBS_NAMES[k] for k in 1:3 if w[k] > 0), ", ") * " only"
+
+"`w` as the literal a script passes: `(1, 1, 0)`."
+_weights_src(w) = "(" * join((isinteger(x) ? string(Int(x)) : string(x) for x in w), ", ") * ")"
+
+_weights_ref(sh, tab) = String(tab) == "image" ? sh.imgweights : sh.fitweights
+
+"""
+    shell_obs_weights(tab) -> String
+
+Which observables the `"model"` tab's fits or the `"image"` tab's reconstructions use, as
+`"v2\tt3amp\tt3phi"` with each `1` or `0`.
+"""
+shell_obs_weights(tab) =
+    join((x > 0 ? "1" : "0" for x in _weights_ref(_sh(), _qmlstr(tab))[]), "\t")
+
+"""
+    shell_set_obs_weights(tab, v2, t3amp, t3phi) -> String
+
+Tick or untick V², T3amp and T3φ for the `"model"` tab's fits or the `"image"` tab's
+reconstructions. Unticking all three is allowed here and refused when a run starts, so the
+boxes can be changed in any order.
+"""
+function shell_set_obs_weights(tab, v2, t3amp, t3phi)
+    sh = _sh()
+    t = _qmlstr(tab)
+    on(x) = (x === true || x == 1 || _qmlstr(x) in ("true", "1")) ? 1.0 : 0.0
+    w = (on(v2), on(t3amp), on(t3phi))
+    _weights_ref(sh, t)[] = w
+    what = t == "image" ? "reconstructions" : "fits"
+    return any(>(0), w) ? "$(what) use " * join((OBS_NAMES[k] for k in 1:3 if w[k] > 0), ", ") :
+                          "$(what) use no observable — tick at least one"
 end
 
 """
@@ -3794,7 +3975,9 @@ function shell_fit(method, maxeval)
     mjd = d === nothing ? Float64[] : copy(d.mjd)
     data = d.data
     tepochs = copy(d.tepochs)
-    nd = sum(dd.nv2 + dd.nt3amp + dd.nt3phi for dd in data)
+    w = sh.fitweights[]
+    nd = _weighted_ndata(data, w)
+    nd > 0 || return "no data to fit: tick at least one observable the dataset has"
     # THE ENGINE'S OWN UNIT, floored at 1 and not at 10: each runner clamps to its own range
     # (see `FIT_BUDGETS`), and a central floor of 10 would have turned a Pigeons budget of 8
     # ROUNDS into 10 — four times the run the panel asked for.
@@ -3833,12 +4016,14 @@ function shell_fit(method, maxeval)
     # path used to be an exception, forcing Float64 and printing `prec` anyway; it honours the
     # box now, so this line is true for all six engines.
     console!(sh, "fit $(join(names, ", ")) by $(meth), $(it) $(unit), " *
-                 "HEALPix level $(nexp) ($(12 * (2^nexp)^2) tessels, $(prec))"; kind = :cmd)
+                 "HEALPix level $(nexp) ($(12 * (2^nexp)^2) tessels, $(prec))" *
+                 _weights_note(w); kind = :cmd)
     body = function (stop)
         tess = tessellation_healpix(nexp; T = prec)
         health = FitHealth()
         obj = isbin ?
-            _binary_objective(snap, bnames, tess, data, mjd, tepochs, orbit_snap, stop, health) :
+            _binary_objective(snap, bnames, tess, data, mjd, tepochs, orbit_snap, stop, health;
+                              weights = w) :
             function (θ)
             stop[] && return 1e30          # NOT counted: see `FitHealth`
             _eval!(health)
@@ -3846,29 +4031,31 @@ function shell_fit(method, maxeval)
             p = star_params(snap)
             isempty(validate_star_params(p)) || return _refused!(health)
             c = try
-                parametric_chi2(p, tess, data, tepochs)
+                parametric_chi2(p, tess, data, tepochs; weights = w)
             catch err
                 return _refused!(health, err)
             end
             return isfinite(c) ? c : _refused!(health)
         end
         best, chi2, extra, post, nevals = if meth === :hmc
-            _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
+            _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it; weights = w)
         elseif meth === :pigeons
             # Same three-way split as `:hmc` above: the θ layout is the surface's.
             if snap.surface_type == 0
-                _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, it)
+                _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, it;
+                                        weights = w)
             elseif snap.surface_type == 1
-                _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, it)
+                _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, it;
+                                           weights = w)
             else
-                _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
+                _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it; weights = w)
             end
         elseif meth !== :gradient
             _run_fit(meth, obj, θ0, lb, ub, names, it)
         elseif gradient_fit_kind(snap) === :parametric
-            _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
+            _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it; weights = w)
         else
-            _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it)
+            _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, it; weights = w)
         end
         # Say what the objective swallowed, and refuse a run in which everything failed.
         # Placed here rather than inside the objective: this is the worker, whose stdout the
@@ -3925,7 +4112,8 @@ of iterations. It is what `demos/rapid_rotator_betCas_param_fit.jl` uses.
 Restricted to `surface_type = 2` because that is the parameter vector `fit_parametric` is
 written for; `shell_fit_methods` only offers it there.
 """
-function _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval)
+function _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval;
+                           weights = (1, 1, 1))
     # Full theta from the model, INCLUDING the frozen entries: `fit_parametric` wants the whole
     # vector and moves only the indices named in `free`.
     L = _fit_layout(snap, names)
@@ -3945,11 +4133,10 @@ function _run_gradient_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, 
     base = star_params(snap)
     θ̂, chi2r, info = ROTIR.fit_parametric(data, tess, tepochs, base;
                                           θ0 = θfull, free = free, lb = lo, ub = hi,
-                                          tpole_free = true, layout = L,
+                                          tpole_free = true, layout = L, weights = weights,
                                           maxiter = max(10, maxeval), verb = true)
     best = [θ̂[_theta_slot(L, n)] for n in names]
-    nd = sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data)
-    return best, chi2r * nd, Dict{Symbol,Float64}(), nothing, 0
+    return best, chi2r * info.ndof, Dict{Symbol,Float64}(), nothing, 0
 end
 
 """
@@ -3965,15 +4152,18 @@ where the step size and the mass matrix are set and starving it is the commonest
 divergences.
 """
 
-function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval)
+function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval;
+                      weights = (1, 1, 1))
     # A SPHERE has its own, much shorter θ, so it takes its own route. Its orientation and its
     # polar temperature carry no information in normalised visibilities — MEASURED, see
     # `build_sphere_logπ` — so what is sampled is the angular radius and the limb darkening,
     # which is exactly what an interferometer measures for a single star.
     snap.surface_type == 0 &&
-        return _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+        return _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval;
+                                   weights = weights)
     snap.surface_type == 1 &&
-        return _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+        return _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval;
+                                      weights = weights)
     L = _fit_layout(snap, names)
     getp(k) = Float64(get(snap.params, k, 0.0))
     θfull = Float64[getp(f) for f in L.fields]
@@ -3988,6 +4178,7 @@ function _run_hmc_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxev
     base = star_params(snap)
     ndraw = clamp(Int(maxeval), 50, 20_000)
     r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                       weights = weights,
                        tpole_free = true, layout = L, n_samples = ndraw,
                        n_adapt = 3ndraw ÷ 4, verb = true)
     # `_fit_hmc` returns the free parameters in the order `parametric_free_indices` sorts them,
@@ -4020,7 +4211,8 @@ NUTS on a SPHERE: `θ = [radius, ld…]`, and nothing else.
 `inclination` and `position_angle` are flat to within the mesh's own faceting on a sphere, and
 `tpole` divides out of the normalised visibility, so neither reaches this far.
 """
-function _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+function _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval;
+                             weights = (1, 1, 1))
     base = star_params(snap)
     θnames = ROTIR.sphere_param_names(base.ldtype)
     lo, hi = ROTIR.default_sphere_bounds(base.ldtype)
@@ -4035,6 +4227,7 @@ function _run_sphere_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, max
     tess = tessellation_healpix(nexp; T = prec)
     ndraw = clamp(Int(maxeval), 50, 20_000)
     r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                       weights = weights,
                        model = :sphere, n_samples = ndraw, n_adapt = 3ndraw ÷ 4, verb = true)
     # Sampler columns come back in sorted-index order, not the order the panel listed them.
     order = sortperm([findfirst(==(String(n)), θnames) for n in names])
@@ -4066,7 +4259,8 @@ and β. `tpole` joins only under `:planck`: under `:linear` the map is `tpole·f
 `cvis = F/flux` divides the scale out, so it would be a flat direction (measured at 8.8e-16 —
 machine zero — against 1.1e-2 under Planck).
 """
-function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval;
+                                weights = (1, 1, 1))
     sh = _sh()
     base = star_params(snap)
     tpf = :tpole in names && sh.intensity_model[] === :planck
@@ -4084,6 +4278,7 @@ function _run_ellipsoid_hmc_fit(snap, data, tepochs, names, lb, ub, nexp, prec, 
     tess = tessellation_healpix(nexp; T = prec)
     ndraw = clamp(Int(maxeval), 50, 20_000)
     r = ROTIR._fit_hmc(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                       weights = weights,
                        model = :ellipsoid, tpole_free = tpf,
                        intensity_model = sh.intensity_model[],
                        band = sh.band[] > 0 ? sh.band[] : nothing,
@@ -4165,7 +4360,8 @@ not mixing but the EVIDENCE: comparing a sphere against an ellipsoid against a r
 by `log(Z)` needs a `log(Z)` from each, and Nautilus was the only other source (measured at
 836 s against Nelder-Mead's 4.4 s on a lam And sphere).
 """
-function _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+function _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval;
+                                 weights = (1, 1, 1))
     base = star_params(snap)
     θnames = ROTIR.sphere_param_names(base.ldtype)
     lo, hi = ROTIR.default_sphere_bounds(base.ldtype)
@@ -4181,6 +4377,7 @@ function _run_sphere_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec,
     tess = tessellation_healpix(nexp; T = prec)
     nr = clamp(Int(maxeval), 6, 12)
     r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                           weights = weights,
                            model = :sphere, n_rounds = nr, PIGEONS_GUI_OPTS...,
                            multithreaded = Threads.nthreads() > 1, verb = true)
     return _pigeons_result(r, names, θnames, nr)
@@ -4197,7 +4394,8 @@ normalisation divides out, so `build_ellipsoid_logπ` REFUSES to free it; it car
 only under `:planck`, where the map's contrast depends on it. The same `tpf` test as
 `_run_ellipsoid_hmc_fit`, for the same reason.
 """
-function _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval)
+function _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, prec, maxeval;
+                                    weights = (1, 1, 1))
     sh = _sh()
     base = star_params(snap)
     tpf = :tpole in names && sh.intensity_model[] === :planck
@@ -4215,6 +4413,7 @@ function _run_ellipsoid_pigeons_fit(snap, data, tepochs, names, lb, ub, nexp, pr
     tess = tessellation_healpix(nexp; T = prec)
     nr = clamp(Int(maxeval), 6, 12)
     r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                           weights = weights,
                            model = :ellipsoid, tpole_free = tpf,
                            intensity_model = sh.intensity_model[],
                            band = sh.band[] > 0 ? sh.band[] : nothing,
@@ -4273,7 +4472,8 @@ costs as much as everything before it, so the knob has to be a power rather than
 explorer is the slice sampler — no gradient — since ROTIR posteriors are badly conditioned
 often enough that a preconditioned MALA is the riskier default (see `_fit_pigeons`).
 """
-function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval)
+function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxeval;
+                          weights = (1, 1, 1))
     L = _fit_layout(snap, names)
     getp(k) = Float64(get(snap.params, k, 0.0))
     θfull = Float64[getp(f) for f in L.fields]
@@ -4291,6 +4491,7 @@ function _run_pigeons_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, m
     # one run is longer than a working session.
     nr = clamp(Int(maxeval), 6, 12)
     r = ROTIR._fit_pigeons(data, tess, tepochs, base; θ0 = θfull, free = free, lb = lo, ub = hi,
+                           weights = weights,
                            tpole_free = true, n_rounds = nr, PIGEONS_GUI_OPTS...,
                            multithreaded = Threads.nthreads() > 1, verb = true)
     # The rapid rotator's panel names are not its θ names — `PARAMETRIC_THETA` maps between
@@ -4327,7 +4528,7 @@ map: `shape_chi2_fg!` also returns a gradient with respect to the map, and letti
 the Imaging tab.
 """
 function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, maxiter;
-                       verb::Bool = true)
+                       verb::Bool = true, weights = (1, 1, 1))
     layout = SHAPE_THETA[snap.surface_type]
     n = maximum(values(layout))
     inv = Dict(v => k for (k, v) in layout)
@@ -4368,7 +4569,7 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
     xmap = T.(parametric_temperature_map(base, star; secondary = snap.secondary))
     gθ = zeros(T, n); gx = zeros(T, length(xmap))
     teps = collect(T, tepochs)
-    npts = sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data)
+    npts = max(_weighted_ndata(data, weights), 1)
     calls = Ref(0)
     function fg!(x, g)
         calls[] += 1
@@ -4379,7 +4580,7 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
         # objective itself), and that mismatch is what stalls the optimiser. A no-op for a
         # sphere, whose uniform map depends on nothing in θ.
         c = shape_chi2_fg!(gθ, gx, xmap, collect(T, x), data, tess, base, teps;
-                           parametric_map = true)
+                           parametric_map = true, weights = weights)
         g .= gθ ./ npts
         # `verb` exists for the PRECOMPILE WORKLOAD, which drives this function to compile it
         # and has nowhere for a trace to go: the lines landed in the package build log, twelve
@@ -4399,7 +4600,8 @@ function _run_shape_fit(snap, data, tepochs, names, θ0, lb, ub, nexp, prec, max
     # `ModelEntry.params` are all Float64, and widening three numbers at the end costs nothing.
     # The same split `_fit_hmc` makes with its quantiles.
     best = Float64[θ̂[layout[nm]] for nm in names]
-    c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, teps; parametric_map = true)
+    c = shape_chi2_fg!(gθ, gx, xmap, θ̂, data, tess, base, teps; parametric_map = true,
+                       weights = weights)
     return best, Float64(c), Dict{Symbol,Float64}(), nothing, 0
 end
 
@@ -4823,9 +5025,14 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
     tepochs = copy(d.tepochs)
     data = d.data
     sec = m.secondary
-    console!(sh, "image_reconstruct_oi(...; nside=2^$n, maxiter=$it, intensity: $(ii.label))"; kind = :cmd)
-    ikw = imodel === :linear ? "" :
-          Printf.@sprintf(", intensity_model = :%s, band = %.6e", imodel, iband)
+    w = sh.imgweights[]
+    _weighted_ndata(data, w) > 0 ||
+        return "no data to image: tick at least one observable the dataset has"
+    console!(sh, "image_reconstruct_oi(...; nside=2^$n, maxiter=$it, intensity: $(ii.label))" *
+                 _weights_note(w); kind = :cmd)
+    ikw = (imodel === :linear ? "" :
+           Printf.@sprintf(", intensity_model = :%s, band = %.6e", imodel, iband)) *
+          (w == (1.0, 1.0, 1.0) ? "" : ", weights = $(_weights_src(w))")
     log!(sh.session,
          "tess  = tessellation_healpix($n)\n" *
          "stars = create_star_multiepochs(tess, $(m.name), tepochs)\n" *
@@ -4856,9 +5063,9 @@ function shell_reconstruct(nside_exp, regspec, maxiter)
         # (x_start, DATA, stars) — that order, checked against src/oichi2_spheroid.jl:1032.
         x  = image_reconstruct_oi(x0, data, stars; regularizers = regs,
                                   maxiter = it, verbose = true,
-                                  intensity_model = imodel, band = iband,
+                                  intensity_model = imodel, band = iband, weights = w,
                                   callback = cb, callback_every = 25)
-        return (; x, n, regs, stars, data, intensity_model = imodel, band = iband)
+        return (; x, n, regs, stars, data, intensity_model = imodel, band = iband, weights = w)
     end; progress = prog)
 end
 
@@ -4874,13 +5081,18 @@ function job_succeeded!(sh::ShellState, kind::Symbol, result)
         b = chi2_breakdown(result.x, result.stars, result.data;
                            intensity_model = get(result, :intensity_model, :linear),
                            band = get(result, :band, nothing))
+        # THE χ² THE MAP WAS FITTED TO: an observable left out of the reconstruction is left
+        # out of the number reported for it. The per-epoch plot still shows all three.
+        w = get(result, :weights, (1.0, 1.0, 1.0))
+        chi2 = w[1] * b.v2 + w[2] * b.t3amp + w[3] * b.t3phi
+        nd = _weighted_ndata(result.data, w)
         e = add_image!(sh.session, "map$(length(sh.session.images) + 1)", result.x,
-                       result.n, b.total, b.ndata, result.regs,
+                       result.n, chi2, nd, result.regs,
                        something(current_dataset(sh.session), (; name = "")).name)
-        sh.status = Printf.@sprintf("%s: χ²ᵣ = %.4f over %d points", e.name, b.totalr, b.ndata)
+        sh.status = Printf.@sprintf("%s: χ²ᵣ = %.4f over %d points", e.name, chi2 / max(nd, 1),
+                                    nd) * _weights_note(w)
         console!(sh, sh.status)
         show_reconstruction!(sh, result.stars[1], result.x; title = e.name)
-        show_chi2!(sh.chi2, b.epochs)
     elseif kind === :orbit
         # `fit_orbit` returns `params` (the resolved FULL vector), `names`, `chi2_red` and its
         # `spec`, whose `free` holds the indices it moved. A nested sampler adds `q16`/`q84`.
@@ -4962,11 +5174,11 @@ function show_reconstruction!(sh::ShellState, star, x; title::AbstractString = "
     sh.imstar === nothing || (sh.imstar.cbarlabel[] = whole_surface_label(sh))
     show_map!(sh.imsky, star, visible_values(sh, allv, star);
               title = title, star_params = sp, _decor(sh)...)
-    show_mollweide!(sh.immoll, allv, star)
-    sh.imstar === nothing || show_star3d!(sh.imstar, star, allv)
+    show_mollweide!(sh.immoll, allv, star; colorrange = sh.colorrange[])
+    sh.imstar === nothing || show_star3d!(sh.imstar, star, allv; colorrange = sh.colorrange[])
     # And the Model tab's own 3-D scene, which is where the recovered map is compared with the
     # parametric one it started from.
-    show_star3d!(sh.star, star, allv)
+    show_star3d!(sh.star, star, allv; colorrange = sh.colorrange[])
     return sh
 end
 
@@ -5003,7 +5215,7 @@ two used to call `build_epoch_star` for itself, so `create_star` and
 """
 function refresh_both!(sh::ShellState)
     got = build_epoch_star(sh)
-    refresh_data_tab!(sh; got = got)
+    refresh_data_tab!(sh)
     refresh_model_tab!(sh; got = got)
     return sh
 end
@@ -5409,7 +5621,7 @@ shell_plot_scale() = join((live_plot_scale(), PLOT_SCALE_USER[], marker_size_use
 
 The data-point size the panel last set, or 0 for "each plot's own default".
 
-Held by OITOOLS rather than here: the Data tab's plot IS `build_obs_canvas`, which comes from
+Held by OITOOLS rather than here: the Explore tab's plot IS `build_obs_canvas`, which comes from
 `OITOOLSGUIExt`, so the number that governs it is that package's `MARKER_SIZE_USER`. A second
 copy here would be the one this panel showed and the other the one the plot obeyed.
 """
@@ -5427,7 +5639,7 @@ end
 """
     shell_set_marker_size(x) -> String
 
-Set the data-point size in the Data tab's plot. Zero restores each plot's own default.
+Set the data-point size in the Explore tab's plot. Zero restores each plot's own default.
 
 Forwarded to OITOOLS, which owns that canvas — see [`marker_size_user`](@ref).
 """

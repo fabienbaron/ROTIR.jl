@@ -39,11 +39,10 @@ function fresh_shell()
     # No observable canvas: it needs OITOOLSGUIExt's `build_canvas`, and `refresh_obs!` is a
     # no-op without it. The observable plot is covered by gui_click.sh, which has a window.
     sh = G.ShellState(; session = s,
-        sky    = G.build_sky_canvas(figs[1]),  star  = G.build_star_canvas(figs[2]),
-        moll   = G.build_moll_canvas(figs[3]), chi2  = G.build_chi2_canvas(figs[4]),
+        star   = G.build_star_canvas(figs[2]),
+        moll   = G.build_moll_canvas(figs[3]),
         imsky  = G.build_sky_canvas(figs[5]),  immoll = G.build_moll_canvas(figs[6]),
         msky   = G.build_sky_canvas(figs[7]),
-        obsmodel = Makie.Observable(Makie.Point2f[]),
         orbitcanvas = G.build_orbit_canvas(figs[8]),
         post   = G.build_post_canvas(figs[9]),
         imstar = G.build_star_canvas(figs[10]))
@@ -103,10 +102,9 @@ end
     # Every plot must exist before a window does — that is the whole arrangement of
     # src/gui/livecanvas.jl — so a build failure here is a build failure in `gui()`.
     sh = fresh_shell()
-    @test sh.sky !== nothing && sh.star !== nothing
-    @test sh.moll !== nothing && sh.chi2 !== nothing
+    @test sh.msky !== nothing && sh.star !== nothing && sh.moll !== nothing
     # Idle from the start, rather than an empty axis beside a 0-1 colorbar.
-    @test !isempty(sh.sky.message[])
+    @test !isempty(sh.msky.message[])
     @test !isempty(sh.star.message[])
 end
 
@@ -1043,7 +1041,7 @@ end
     @test length(iv) == length(tv)
     @test !(iv ≈ tv)
     @test all(iv .<= tv .* (1 + 1e-9))             # ld <= 1 everywhere
-    @test sh.sky.cbarlabel[] == "I (arb.)"
+    @test sh.msky.cbarlabel[] == "I (arb.)"
 
     # Planck: a real surface brightness, strongly non-linear in T, so the CONTRAST across the
     # star is larger than the linear proxy gives.
@@ -1067,7 +1065,7 @@ end
     @test occursin("unknown", G.shell_set_surface_field("1", "nosuchmodel", "0"))
     G.shell_set_surface_field("0", "linear", "0")
     @test !sh.intensity[]
-    @test sh.sky.cbarlabel[] == "T (K)"
+    @test sh.msky.cbarlabel[] == "T (K)"
     # The whole-surface label rule, stated once where the field is set. `linear` intensity of
     # a temperature map is that map, so on a view with no limb it is still "T (K)"; `planck`
     # is a different physical quantity and is labelled as one.
@@ -1095,26 +1093,79 @@ end
     G.shell_set_surface_field("0", "linear", "0")
 end
 
+@testset "the V², T3amp and T3φ ticks" begin
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    d = G.current_dataset(sh.session)
+    nv2 = sum(x.nv2 for x in d.data); nt3a = sum(x.nt3amp for x in d.data)
+    # All three by default, and the two tabs keep separate sets: fitting the shape on V² and
+    # T3amp and then imaging with the closure phases is the sequence they exist for.
+    @test G.shell_obs_weights("model") == "1\t1\t1"
+    @test occursin("V², T3amp", G.shell_set_obs_weights("model", true, true, false))
+    @test G.shell_obs_weights("model") == "1\t1\t0"
+    @test G.shell_obs_weights("image") == "1\t1\t1"
+    @test sh.fitweights[] == (1.0, 1.0, 0.0)
+
+    G.shell_add_model(0)
+    G.shell_set_param("radius", "1.2")
+    G.shell_set_param_state("radius", "free")
+    G.shell_set_bound("radius", "0.5", "3.0")
+    # The derivative-free path and the shape gradient both count only what they summed.
+    for engine in ("neldermead", "gradient")
+        @test G.shell_fit(engine, 30) == ""
+        drain!()
+        @test occursin("over $(nv2 + nt3a) points", sh.status)
+        @test occursin("T3amp only", G.shell_console())
+    end
+    # The χ² the fit reports is the weighted one, at the value it found.
+    fe = G.current_fit(sh.session)
+    p = merge(G.star_params(G.current_model(sh.session)),
+              (; radius = fe.best[findfirst(==(:radius), fe.names)]))
+    tess = tessellation_healpix(sh.nside_exp[]; T = Float64)
+    c110 = parametric_chi2(p, tess, d.data, d.tepochs; weights = (1, 1, 0))
+    @test fe.chi2 ≈ c110 rtol = 1e-3
+    @test !(fe.chi2 ≈ parametric_chi2(p, tess, d.data, d.tepochs) )
+
+    # Unticking everything is allowed on the boxes and refused when a run starts.
+    @test occursin("tick at least one", G.shell_set_obs_weights("model", false, false, false))
+    @test occursin("tick at least one", G.shell_fit("neldermead", 30))
+    @test sh.job === nothing
+
+    # IMAGING, with its own ticks.
+    G.shell_clear_model()
+    G.shell_add_model(2)
+    G.shell_set_param("rpole", "1.37131")
+    G.shell_set_param("tpole", "4800.0")
+    G.shell_set_obs_weights("image", "1", "1", "0")
+    @test G.shell_reconstruct(3, "sobel2:10.0:0", 5) == ""
+    drain!()
+    e = sh.session.images[end]
+    @test e.ndata == nv2 + nt3a
+    @test occursin("weights = (1, 1, 0)", G.shell_script())
+    G.shell_set_obs_weights("image", 0, 0, 0)
+    @test occursin("tick at least one", G.shell_reconstruct(3, "sobel2:10.0:0", 5))
+end
+
 @testset "views, colormaps and zoom" begin
     sh = fresh_shell()
     G.shell_open(LAM[1], "0")
     G.shell_add_model(2)
-    G.refresh_data_tab!(sh)
+    G.refresh_model_tab!(sh)
 
-    @test isempty(sh.sky.message[])                      # busy once something is drawn
-    @test !isempty(sh.sky.lastvalues[])
-    @test sh.sky.homespan[] > 0
+    @test isempty(sh.msky.message[])                     # busy once something is drawn
+    @test !isempty(sh.msky.lastvalues[])
+    @test sh.msky.homespan[] > 0
 
     @test occursin("colormap", G.shell_set_colormap("viridis"))
     @test occursin("unknown", G.shell_set_colormap("not-a-colormap"))
     @test length(rows(G.shell_colormaps())) == length(G.SURFACE_COLORMAPS)
 
     # Zoom is bounded: overzooming is refused, not clamped into a loop.
-    a = sh.sky.homespan[] / 2
-    Makie.xlims!(sh.sky.axis, -a/100, a/100); Makie.ylims!(sh.sky.axis, -a/100, a/100)
-    @test G.clamp_zoom!(sh.sky)
-    G.reset_zoom!(sh.sky)
-    @test !G.clamp_zoom!(sh.sky)
+    a = sh.msky.homespan[] / 2
+    Makie.xlims!(sh.msky.axis, -a/100, a/100); Makie.ylims!(sh.msky.axis, -a/100, a/100)
+    @test G.clamp_zoom!(sh.msky)
+    G.reset_zoom!(sh.msky)
+    @test !G.clamp_zoom!(sh.msky)
 
     # THE ORBIT VIEW IS BOUNDED TOO, and it is the one that was not.
     #
@@ -1160,6 +1211,24 @@ end
     @test sh.gratlat[] == 45.0 && sh.gratlon[] == 60.0
     G.shell_clear_model()
 
+    # A PINNED COLOUR RANGE reaches every surface view, reads back for the fields, and lets go.
+    G.shell_add_model(0)
+    G.refresh_both!(sh)
+    auto = split(G.shell_colorrange("model", 0), '\t')
+    @test auto[1] == "1" && parse(Float64, auto[2]) < parse(Float64, auto[3])
+    @test occursin("3000", G.shell_set_colorrange("9000", "3000"))   # swapped, not refused
+    @test sh.msky.cbarlimits[] == (3000f0, 9000f0)
+    @test sh.moll.cbarlimits[] == (3000f0, 9000f0)
+    @test sh.star.cbarlimits[] == (3000f0, 9000f0)
+    @test split(G.shell_colorrange("model", 1), '\t')[1] == "0"
+    @test occursin("auto", G.shell_set_colorrange("", ""))
+    @test sh.colorrange[] === nothing
+    G.shell_set_colorrange(3000.0, 9000.0)
+    # Switching between temperature and intensity changes the units, so the pin is dropped.
+    G.shell_set_surface_field(sh.intensity[] ? "0" : "1", "linear", "")
+    @test sh.colorrange[] === nothing
+    G.shell_clear_model()
+
     # CLEARING A MODEL CLEARS THE PICTURE, not just the caption. `idle!` used to set the
     # message alone, so "− model" left the old star on screen with "no model" written over it
     # — measured at 422 polygons and 3072 mesh vertices still drawn. The caption was already
@@ -1176,8 +1245,8 @@ end
     # Back to idle when there is nothing to draw.
     G.shell_close_dataset()
     sh.session.current_model = 0
-    G.refresh_data_tab!(sh)
-    @test !isempty(sh.sky.message[])
+    G.refresh_model_tab!(sh)
+    @test !isempty(sh.msky.message[])
 end
 
 @testset "the observable plot's log y axis" begin
@@ -1201,12 +1270,11 @@ end
     @test G._obs_logscale(sh)
 
     # The rest needs the real canvas, which is OITOOLS' — `fresh_shell` has none.
-    c, pts = G.build_obs_canvas(Makie.Figure())
+    c = G.build_obs_canvas(Makie.Figure())
     if c === nothing
         @info "OITOOLSGUIExt is not loaded; the log axis itself is untested"
     else
         sh.obs = c
-        sh.obsmodel = pts
         for k in ("v2", "t3amp", "t3phi", "uv"), lg in ("0", "1")
             G.shell_set_obs_view(k, "baseline", "1", lg)
         end
@@ -1214,9 +1282,11 @@ end
 
         G.shell_set_obs_view("v2", "baseline", "1", "1")
         @test sh.obs.axis.yscale[] === log10
-        # The overlay is transformed by the same axis, so a model null at exactly zero is
-        # dropped with the data's non-positive points rather than reaching log10.
-        @test all(p -> p[2] > 0, sh.obsmodel[])
+        # The model is drawn over the data on the log axis too: OITOOLS draws an overlay only
+        # when it matches the plotted points one for one, and on a log axis those are the
+        # positive ones.
+        @test sh.obs.overplot.visible[]
+        @test length(sh.obs.overpoints[]) == length(sh.obs.points[])
         G.shell_set_obs_view("v2", "baseline", "1", "0")
         @test sh.obs.axis.yscale[] === identity
         G.shell_set_obs_view("t3phi", "baseline", "1", "1")
@@ -1239,6 +1309,97 @@ end
         @test any(l -> occursin("could not draw", l), sh.console)
         dat.v2 .= v2
         @test G.shell_set_obs_view("v2", "baseline", "1", "1") isa String
+    end
+end
+
+@testset "the Explore tab plots as OITOOLS does" begin
+    sh = fresh_shell()
+    G.shell_open(LAM[1], "0")
+    c = G.build_obs_canvas(Makie.Figure())
+    if c === nothing
+        @info "OITOOLSGUIExt is not loaded; the Explore plot options are untested"
+    else
+        sh.obs = c
+        dat = G.current_dataset(sh.session).data[1]
+        # The per-group noun is OITOOLS': closures group by triplet, and uv has no groups.
+        @test G.shell_obs_grouping_noun("v2") == "baseline"
+        @test G.shell_obs_grouping_noun("t3phi") == "triplet"
+        @test G.shell_obs_grouping_noun("uv") == ""
+        # Nothing to compare with yet: the data alone, and no complaint on the console.
+        @test G.shell_obs_compare_available() == "model=0,image=0"
+        G.shell_set_obs_view("v2", "baseline", "model", "0")
+        @test !sh.obs.overplot.visible[]
+        @test !any(l -> occursin("compare", l) || occursin("could not draw", l), sh.console)
+
+        # PER BASELINE: OITOOLS' panel grid, one per baseline against wavelength.
+        G.shell_set_obs_view("v2", "baseline", "data", "0", "0", "1")
+        O = G._oitools_gui()
+        nb = length(unique(O.group_names(dat, O.OBS_SPECS[:v2])))
+        @test count(a -> getfield(a, :blockscene).visible[], sh.obs.panels.axes) == nb
+        @test !any(l -> occursin("could not draw", l), sh.console)
+        G.shell_set_obs_view("t3phi", "baseline", "data", "0", "0", "1")
+        @test count(a -> getfield(a, :blockscene).visible[], sh.obs.panels.axes) ==
+              min(O.MAX_PANELS, length(unique(O.group_names(dat, O.OBS_SPECS[:t3phi]))))
+        # And back to the single plot, with the grid emptied.
+        G.shell_set_obs_view("v2", "baseline", "data", "0", "0", "0")
+        @test all(isempty(p[]) for p in sh.obs.panels.points)
+        @test length(sh.obs.points[]) == length(dat.v2)
+
+        # Every colour mode OITOOLS offers draws.
+        for col in ("baseline", "wav", "mjd", "none")
+            G.shell_set_obs_view("v2", col, "data", "0")
+        end
+        @test !any(l -> occursin("could not draw", l), sh.console)
+
+        # THE MODEL over the data, and its residuals in place of them.
+        G.shell_add_model(2)
+        G.shell_set_param("rpole", "1.37131")
+        G.shell_set_param("tpole", "4800.0")
+        @test startswith(G.shell_obs_compare_available(), "model=1")
+        G.shell_set_obs_view("v2", "baseline", "model", "0")
+        @test sh.obs.overplot.visible[]
+        st = G.model_state(sh)
+        v2m, _, t3pm = observables(st.x, st.stars[1], dat)
+        @test [p[2] for p in sh.obs.overpoints[]] ≈ Float32.(v2m)
+        G.shell_set_obs_view("t3phi", "baseline", "residmodel", "1")
+        @test !G._obs_logscale(sh)               # a residual is centred on zero
+        @test [p[2] for p in sh.obs.points[]] ≈
+              Float32.(ROTIR.mod360(t3pm .- dat.t3phi) ./ dat.t3phi_err) rtol = 1e-5
+        @test !sh.obs.overplot.visible[]
+        # Against the longest baseline, the same residuals.
+        G.shell_set_obs_view("t3phi", "baseline", "residmodel", "0", "1")
+        @test sh.obskind[] === :t3phi_max && length(sh.obs.points[]) == length(dat.t3phi)
+        # A kind ROTIR does not predict shows the data alone rather than failing.
+        G.shell_set_obs_view("uv", "baseline", "residmodel", "0")
+        @test !any(l -> occursin("could not draw", l), sh.console)
+
+        # THE IMAGE: the current reconstruction on the model's geometry.
+        @test endswith(G.shell_obs_compare_available(), "image=0")
+        G.shell_reconstruct(3, "sobel2:10.0:0", 5); drain!()
+        @test G.shell_obs_compare_available() == "model=1,image=1"
+        G.shell_set_obs_view("v2", "baseline", "image", "0")
+        @test sh.obs.overplot.visible[]
+        im = G.current_image(sh.session)
+        star = create_star(tessellation_healpix(im.nside_exp),
+                           G.star_params(G.current_model(sh.session)), 0.0)
+        @test [p[2] for p in sh.obs.overpoints[]] ≈ Float32.(observables(im.x, star, dat)[1]) rtol = 1e-4
+        G.shell_set_obs_view("v2", "baseline", "residimage", "0")
+        @test length(sh.obs.points[]) == length(dat.v2)
+
+        # A BINARY is drawn whole: both components in the prediction, not the primary alone.
+        G.shell_set_binary("1", 0)
+        G.shell_set_obs_view("v2", "baseline", "model", "0")
+        sb = G.model_state(sh)
+        ox, oy = sb.offsets[1]
+        v2b = ROTIR.binary_observables(sb.x, sb.stars[1], sb.x2, sb.stars2[1], dat,
+                                       ROTIR.binary_phase_shift(dat.uv, ox, oy))[1]
+        @test [p[2] for p in sh.obs.overpoints[]] ≈ Float32.(v2b) rtol = 1e-5
+        @test endswith(G.shell_obs_compare_available(), "image=0")
+        @test !any(l -> occursin("could not draw", l), sh.console)
+
+        # "Save plot…" draws the same figure: panels included.
+        G.shell_set_obs_view("v2", "baseline", "data", "0", "0", "1")
+        @test G._snapshot_figure(sh, "obs", (800, 600)) isa Makie.Figure
     end
 end
 
@@ -1307,6 +1468,110 @@ end
     @test G.shell_current_epoch() == "1"
 end
 
+@testset "the Explore tab filters epoch by epoch" begin
+    sh = fresh_shell()
+    if G._oitools_gui() === nothing
+        @warn "OITOOLSGUIExt not loaded; the filter is not tested"
+    else
+        G.shell_open(LAM[1], "0")
+        G.shell_open(LAM[2], "1")
+        root = G.current_dataset(sh.session)
+        @test length(root.data) == 2
+        ch = rows(G.shell_filter_choices())
+        @test any(startswith("extent_bl\t"), ch) && any(startswith("station\t"), ch)
+        @test any(==("has\tv2"), ch)
+        blmax = maximum(maximum(d.uv_baseline) for d in root.data) / 1e6
+        cut = "bl_unit\tMλ\nbl_max\t$(blmax / 2)\nv2_rel\t0.05"
+        @test startswith(G.shell_filter_preview(cut), "Filtered ")
+        @test startswith(G.shell_filter_preview("bl_min\t5\nbl_max\t1"), "!")   # empty range
+        @test startswith(G.shell_apply_filter(""), "!")                          # nothing to do
+        G.shell_apply_filter(cut)
+        e = G.current_dataset(sh.session)
+        @test e !== root && endswith(e.name, "› filtered") && e.source == root.name
+        @test length(e.data) == 2 && e.tepochs == root.tepochs
+        @test sum(e.nv2) < sum(root.nv2)
+        @test all(all(d.v2_err .>= 0.05f0 .* abs.(d.v2) .- 1f-6) for d in e.data)
+        @test all(maximum(d.uv_baseline) <= blmax / 2 * 1e6 + 1 for d in e.data)
+        @test G.shell_filter_spec() == cut
+        @test sum(root.nv2) == sum(d.nv2 for d in root.data)                    # source kept
+        # Filtering the filtered dataset again starts from its source.
+        G.shell_apply_filter("v2_rel\t0.05")
+        @test sum(G.current_dataset(sh.session).nv2) == sum(root.nv2)
+        # A read option reads the files again, into the same epochs.
+        G.shell_apply_filter("use_t3\t0")
+        e3 = G.current_dataset(sh.session)
+        @test length(e3.data) == 2 && all(d -> d.nt3phi == 0, e3.data) && sum(e3.nv2) > 0
+        @test occursin("set_data_filter", G.export_script(sh.session))
+        @test G.shell_filter_preview_clear() == ""
+    end
+end
+
+@testset "points by hand, and the OIFITS export" begin
+    sh = fresh_shell()
+    c = G.build_obs_canvas(Makie.Figure())
+    if c === nothing
+        @warn "OITOOLSGUIExt not loaded; selection and export are not tested"
+    else
+        sh.obs = c
+        G.shell_open(LAM[1], "0")
+        G.shell_open(LAM[2], "1")
+        root = G.current_dataset(sh.session)
+        # Epoch 2, V² against baseline: the plot's points carry one description each.
+        G.shell_select_epoch(2)
+        G.shell_set_obs_view("v2", "baseline", "data", "0")
+        d2 = root.data[2]
+        @test length(sh.obsinfo) == length(sh.obs.points[]) == length(d2.v2)
+        # A box over the short baselines selects their V², ringed, on epoch 2.
+        x = d2.v2_baseline ./ 1e6
+        cutx = sort(x)[10] + 1e-6
+        box = [Makie.Point2f(0, -1), Makie.Point2f(cutx, -1), Makie.Point2f(cutx, 2), Makie.Point2f(0, 2)]
+        @test G.shell_set_select_tool("box") == ""
+        n = G.select_obs_polygon!(sh, box)
+        @test n == count(<(cutx), x) && n > 0
+        @test length(sh.obs.selpoints[]) == n
+        @test occursin("V² points of epoch 2", G.shell_selection_text())
+        spec = G.shell_selection_spec()
+        @test startswith(spec, "remove_v2\t") && all(startswith("2:"), split(split(spec, '\t')[2], ','))
+        # Applying it removes those points from epoch 2 and nothing from epoch 1.
+        @test occursin("$(n)/", G.shell_filter_preview(spec))
+        G.shell_apply_filter(spec)
+        e = G.current_dataset(sh.session)
+        @test e.data[1].nv2 == root.data[1].nv2
+        @test e.data[2].nv2 == root.data[2].nv2 - n
+        @test minimum(e.data[2].v2_baseline) >= cutx * 1e6 - 1
+        @test occursin("hand = Dict(2 => (; remove_v2 = [", G.export_script(sh.session))
+        @test G.shell_selection_text() == ""                       # used up by the filter
+        # A selection made on the FILTERED copy names the same points of the source.
+        G.shell_select_epoch(2)
+        G.shell_set_obs_view("v2", "baseline", "data", "0")
+        x2 = e.data[2].v2_baseline ./ 1e6
+        cut2 = sort(x2)[3] + 1e-6
+        @test G.select_obs_polygon!(sh, [Makie.Point2f(0, -1), Makie.Point2f(cut2, -1),
+                                         Makie.Point2f(cut2, 2), Makie.Point2f(0, 2)]) == 3
+        spec2 = G.shell_selection_spec()
+        ri = sort(parse.(Int, last.(split.(split(split(spec2, '\t')[2], ','), ':'))))
+        @test sort(Float32.(d2.v2_baseline[ri])) == sort(Float32.(x2[x2 .< cut2] .* 1e6))
+        # With a read option the files are read again, and the picked points found in them.
+        G.shell_apply_filter(spec * "\nuse_t3\t0")
+        e3 = G.current_dataset(sh.session)
+        @test e3.data[2].nv2 == root.data[2].nv2 - n && all(d -> d.nt3phi == 0, e3.data)
+        @test !occursin("not found", sh.status)
+        @test startswith(G._split_hand("remove_v2\t17"), "!")      # an epoch is required
+        # Nothing is selected on a residual plot, whose y is not the data's.
+        G.shell_set_obs_view("v2", "baseline", "residmodel", "0")
+        @test G.shell_set_select_tool("none") == ""
+
+        # EXPORT: every epoch, as filtered, into one file that reads back the same.
+        path = joinpath(mktempdir(), "explore.oifits")
+        @test startswith(G.shell_export_oifits(path), "saved")
+        back = G.read_epochs([path])[1]
+        @test length(back) == length(e3.data)
+        @test [d.nv2 for d in back] == [d.nv2 for d in e3.data]
+        @test occursin("write_oifits(", G.export_script(sh.session))
+        # The file the data came from is never the target.
+        @test occursin("read from", G.shell_export_oifits(LAM[1]))
+    end
+end
 @testset "a running job reports as it goes" begin
     # Before this, a twenty-minute reconstruction showed a spinner and a scrolling trace: no
     # count, no criterion, and the map only at the end. The engine now reports through the
@@ -1662,7 +1927,7 @@ end
 
     G.shell_open(LAM[1], "0")
     G.shell_add_model(2)
-    for w in ("sky", "mollweide", "star3d", "chi2", "orbit")
+    for w in ("sky", "mollweide", "star3d", "obs", "orbit")
         p = joinpath(dir, "$(w).png")
         # Rebuilt offscreen through the window's own builders — the live framebuffer cannot be
         # read under QMLMakie at all. See src/gui/snapshot.jl.
@@ -1678,7 +1943,7 @@ end
     # and registers it; left open it keeps the process alive after the Qt window closes, which
     # showed up as a click-test run that did everything right and then never exited.
     before = length(GLMakie.ALL_SCREENS)
-    G.shell_save_figure("chi2", joinpath(dir, "screens.png"), 400, 300)
+    G.shell_save_figure("orbit", joinpath(dir, "screens.png"), 400, 300)
     @test length(GLMakie.ALL_SCREENS) <= before
 end
 
@@ -1986,6 +2251,22 @@ end
             for f in filter(f -> endswith(f, ".toml"), readdir(d)); rm(joinpath(d, f)); end
             @test G.orbit_dir() == d
             @test isempty(filter(f -> endswith(f, ".toml"), readdir(d)))
+        end
+    end
+
+    # (4) A FOLDER THAT ALREADY HOLDS A SHIPPED NAME, and no marker: seeding skips that file
+    # rather than throwing on it. `cp(...; force = false)` throws when the target exists, so the
+    # marker was never written and every launch warned and fell back to `pwd()`.
+    mktempdir() do cfg
+        withenv("XDG_CONFIG_HOME" => cfg, "APPDATA" => cfg) do
+            pre = joinpath(cfg, "rotir", "orbits"); mkpath(pre)
+            names = sort(filter(f -> endswith(f, ".toml"), readdir(shipped)))
+            write(joinpath(pre, first(names)), "# the user's own\n")
+            d = @test_logs G.orbit_dir()                  # no warning
+            @test d == pre
+            @test isfile(joinpath(d, G.ORBIT_SEED_MARKER))
+            @test read(joinpath(d, first(names)), String) == "# the user's own\n"
+            @test sort(filter(f -> endswith(f, ".toml"), readdir(d))) == names
         end
     end
 
@@ -2543,6 +2824,17 @@ end
         @test survives(G.shell_step_time, a)
         @test survives(G.shell_set_graticule, a, a, "black")
         @test survives(G.shell_set_colormap, a)
+        @test survives(G.shell_set_colorrange, a, a)
+        @test survives(G.shell_colorrange, a, a)
+        @test survives(G.shell_set_obs_weights, a, a, a, a)
+        @test survives(G.shell_obs_weights, a)
+        @test survives(G.shell_filter_preview, a)
+        @test survives(G.shell_apply_filter, a)
+        @test survives(G.shell_set_select_tool, a)
+        # In a scratch directory: a shape that is a valid file name ("abc", 0) IS written.
+        cd(mktempdir()) do
+            @test survives(G.shell_export_oifits, a)
+        end
     end
 
     # And the READERS, which QML calls on every refresh: one of these throwing freezes the

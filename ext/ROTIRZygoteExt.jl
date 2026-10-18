@@ -31,7 +31,8 @@ unconstrained space, a bounded optimizer does not.
   `["rpole", "ld1"]`. Frozen entries keep their `θ0` value. See
   [`parametric_free_indices`](@ref)
 - `lb`, `ub` — box bounds (default [`default_parametric_bounds`](@ref))
-- `intensity_model`, `band`, `κ`, `GM`, `tpole_free` — passed to `build_parametric_logπ`
+- `intensity_model`, `band`, `κ`, `GM`, `tpole_free`, `weights` — passed to
+  `build_parametric_logπ`; `weights = (w_V², w_T3amp, w_T3φ)`
 - `logprior` — optional `θ -> log p(θ)` added to the objective. The reported χ²ᵣ is always
   the likelihood part alone
 - `maxiter`, `gtol`, `mem`, `verb` — optimizer settings
@@ -56,6 +57,7 @@ function fit_parametric(data_epochs::AbstractVector, tessels, tepochs, base_para
     logprior                 = nothing,
     provider                 = nothing,
     layout                   = nothing,
+    weights                  = (1, 1, 1),
     maxiter         ::Int    = 200,
     gtol                     = (0.0, 1e-6),
     xtol                     = (0.0, 1e-9),
@@ -82,12 +84,15 @@ function fit_parametric(data_epochs::AbstractVector, tessels, tepochs, base_para
                                  intensity_model=intensity_model, band=band,
                                  κ=κ, GM=GM, tpole_free=tpole_free,
                                  gravity_law=gravity_law, logprior=nothing,
-                                 provider=provider, layout=L)
+                                 provider=provider, layout=L, weights=Tuple(weights))
     # Scale the objective by 1/npoints. χ² here is O(10⁶) and its gradient O(10⁵); at that
     # magnitude vmlmb's bound-constrained line search trips its own `stp == ls.stp`
     # assertion. A uniform rescale moves neither the minimiser nor the relative gradient
     # tolerance, and the reported χ²ᵣ below is computed from `logπ`, not from this.
-    npts  = sum(d -> d.nv2 + d.nt3amp + d.nt3phi, data_epochs)
+    # Only the observables `weights` keeps count: χ²ᵣ over V² and T3amp alone is divided by
+    # their points, not by closure phases that never entered the sum.
+    npts  = sum(d -> (weights[1] > 0) * d.nv2 + (weights[2] > 0) * d.nt3amp +
+                     (weights[3] > 0) * d.nt3phi, data_epochs)
     fscal = one(T) / max(npts, 1)
     full = logprior === nothing ? (θ -> -fscal * logπ(θ)) :
                                   (θ -> -fscal * (logπ(θ) + logprior(θ)))

@@ -16,6 +16,7 @@ function __init__()
                      shell_select_dataset, shell_select_epoch, shell_current_dataset,
                      shell_current_epoch,
                      shell_obs_kinds, shell_set_obs_view,
+                     shell_obs_grouping_noun, shell_obs_compare_available,
                      shell_surface_field, shell_set_surface_field,
                      shell_decorations, shell_set_decoration, shell_clear_model,
                      shell_graticule, shell_set_graticule, shell_graticule_colors,
@@ -54,6 +55,12 @@ function __init__()
                      shell_fit_methods, shell_fit, shell_last_fit,
                      shell_free_count,
                      shell_colormaps, shell_set_colormap, shell_reset_zoom,
+                     shell_colorrange, shell_set_colorrange,
+                     shell_obs_weights, shell_set_obs_weights,
+                     shell_filter_choices, shell_filter_preview, shell_filter_preview_clear,
+                     shell_apply_filter, shell_filter_spec,
+                     shell_set_select_tool, shell_selection_text, shell_clear_selection,
+                     shell_selection_spec, shell_pick_text, shell_export_oifits,
                      shell_set_zoom_step, shell_version, orbit_dir, image_dir,
                      shell_binary, shell_set_binary, shell_params2,
                      shell_binary_placement, shell_set_binary_placement,
@@ -108,10 +115,11 @@ function _session_status(s::Session)
 end
 
 "Tab names, in the order Main.qml lists them."
-const TAB_NAMES = ("data", "model", "imaging", "orbit")
+const TAB_NAMES = ("explore", "model", "imaging", "orbit")
 
 """
-Which perspective the window opens on, from `\$ROTIRGUI_TAB` (default Data).
+Which perspective the window opens on, from `\$ROTIRGUI_TAB` (default Explore; `data`
+is still accepted for it).
 
 Its reason for existing is testing: a tab that is never current is constructed but never laid
 out, so any layout warning it would emit never appears. Naming a tab is what makes an automated
@@ -121,9 +129,10 @@ otherwise look like the setting having no effect.
 function _initial_tab()
     want = lowercase(strip(get(ENV, "ROTIRGUI_TAB", "")))
     isempty(want) && return 0
+    want == "data" && (want = "explore")
     i = findfirst(==(want), TAB_NAMES)
     if i === nothing
-        @warn "ROTIRGUI_TAB is not a tab name; opening on Data" got = want options = TAB_NAMES
+        @warn "ROTIRGUI_TAB is not a tab name; opening on Explore" got = want options = TAB_NAMES
         return 0
     end
     return i - 1        # QML indexes from zero
@@ -289,36 +298,30 @@ function ROTIR.gui(session::Session = Session();
 
     # SIX figures, and every one of them is separate on purpose.
     #
-    # Four kinds of axis — a 2-D sky projection, a 3-D scene, a bar chart, a whole-sphere
+    # Three kinds of surface axis — a 2-D sky projection, a 3-D scene, a whole-sphere
     # projection — and no axis can be more than one of them. On top of that, a Makie Figure can
-    # be attached to ONE MakieArea at a time: pointing the Imaging tab's areas at the Data and
-    # Model tabs' figures leaves one area blank and draws the other detached over the panel
-    # beside it. So Imaging gets its own sky and Mollweide, which also means a reconstruction
-    # cannot wipe the plot being read on another tab.
-    skyfig  = Makie.Figure(size = (760, 700), backgroundcolor = :white)
+    # be attached to ONE MakieArea at a time: pointing the Imaging tab's areas at the Model
+    # tab's figures leaves one area blank and draws the other detached over the panel beside
+    # it. So Imaging gets its own sky and Mollweide, which also means a reconstruction cannot
+    # wipe the plot being read on another tab.
     starfig = Makie.Figure(size = (760, 700), backgroundcolor = :white)
     mollfig = Makie.Figure(size = (900, 560), backgroundcolor = :white)
-    chi2fig = Makie.Figure(size = (760, 360), backgroundcolor = :white)
     imskyfig  = Makie.Figure(size = (760, 620), backgroundcolor = :white)
     immollfig = Makie.Figure(size = (900, 560), backgroundcolor = :white)
-    # The Model tab's own sky view, and the reason it exists rather than sharing the Data
-    # tab's: a Figure belongs to one MakieArea at a time. This is the DEFAULT view there —
-    # the sky projection is what the data actually constrains, and the 3-D scene is a
-    # deliberate step away from it.
+    # The Model tab's sky view. This is the DEFAULT view there — the sky projection is what
+    # the data actually constrains, and the 3-D scene is a deliberate step away from it.
     mskyfig = Makie.Figure(size = (760, 700), backgroundcolor = :white)
-    # The Data tab's observable plot — V² against baseline, closure phase, uv coverage. It uses
+    # The Explore tab's observable plot — V² against baseline, closure phase, uv coverage. It uses
     # OITOOLS' font set, because it IS an OITOOLS canvas.
     obsfig  = Makie.Figure(size = (860, 640), backgroundcolor = :white)
     orbfig  = Makie.Figure(size = (820, 760), backgroundcolor = :white)
 
-    sky    = build_sky_canvas(skyfig)
     star   = build_star_canvas(starfig)
     moll   = build_moll_canvas(mollfig)
-    chi2   = build_chi2_canvas(chi2fig)
     imsky  = build_sky_canvas(imskyfig)
     immoll = build_moll_canvas(immollfig)
     msky   = build_sky_canvas(mskyfig)
-    obs, obsmodel = build_obs_canvas(obsfig)
+    obs           = build_obs_canvas(obsfig)
     orbitcanvas   = build_orbit_canvas(orbfig)
     postfig = Makie.Figure(size = (900, 520), backgroundcolor = :white)
     post    = build_post_canvas(postfig)
@@ -327,20 +330,22 @@ function ROTIR.gui(session::Session = Session();
     imstarfig = Makie.Figure(size = (760, 700), backgroundcolor = :white)
     imstar    = build_star_canvas(imstarfig)
     obs === nothing &&
-        @warn "OITOOLSGUIExt is not loaded, so the Data tab's observable plot is unavailable"
+        @warn "OITOOLSGUIExt is not loaded, so the Explore tab's observable plot is unavailable"
 
     # BY KEYWORD. Only what this window actually has: everything else — the view state, the
     # decorations, the caches — takes the default that lives with the field, so adding a field
     # to `ShellState` does not touch this call at all. (Intensity rather than temperature is
     # one of those defaults: the map is a temperature, but what the interferometer measures is
     # the emergent intensity, so that is the picture a χ² can be reasoned about from.)
-    sh = ShellState(; session, sky, star, moll, chi2, imsky, immoll, msky,
-                    obs, obsmodel, orbitcanvas, post, imstar,
+    sh = ShellState(; session, star, moll, imsky, immoll, msky,
+                    obs, orbitcanvas, post, imstar,
                     status = _session_status(session))
     SHELL[] = sh
     # Right-click to reset the zoom, and the zoom bound itself. Both read Makie's event
     # stream, so they attach to the canvases rather than to anything in QML.
     install_interactions!(sh)
+    # Identification and the box and lasso on the Explore tab's plot, as in OITOOLS.
+    install_obs_interactions!(sh)
 
     # Seed the console before the window exists, so it opens with a transcript rather than an
     # empty box — including the graphics decisions, which are exactly what you want to see when
@@ -355,15 +360,13 @@ function ROTIR.gui(session::Session = Session();
     console!(sh, "ui scale: $(uiscale.reason)")
     isempty(session.datasets) && console!(sh, "no dataset loaded — use Open OIFITS…")
 
-    # `skyfig`, not `skyfig.scene`: QMLMakie's MakieArea resolves the scene itself. Handing it
+    # `starfig`, not `starfig.scene`: QMLMakie's MakieArea resolves the scene itself. Handing it
     # the root Scene directly skips whatever the figure-level path sets up.
     # A redraw asked for before this loop turns deadlocks the window black; see `GUI_LIVE`.
     GUI_LIVE[] = false
     QML.loadqml(qmlfile;
-                skyPlot         = skyfig,
                 starPlot        = starfig,
                 mollPlot        = mollfig,
-                chi2Plot        = chi2fig,
                 imSkyPlot       = imskyfig,
                 imMollPlot      = immollfig,
                 modelSkyPlot    = mskyfig,

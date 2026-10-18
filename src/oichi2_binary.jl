@@ -201,7 +201,7 @@ See [`binary_cvis`](@ref) for the intensity-model keywords.
 """
 function binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose::Bool=false,
                        intensity_model::Symbol = :linear, band = nothing,
-                       occultation = false)
+                       occultation = false, weights = (1, 1, 1))
     v2_model, t3amp_model, t3phi_model = binary_observables(x1, star1, x2, star2, data, phase_shift;
                                                             intensity_model=intensity_model, band=band,
                                                             occultation=occultation)
@@ -213,7 +213,7 @@ function binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose::Bool=fa
         printstyled(@sprintf("T3A: %.4f ", chi2_t3amp/data.nt3amp), color=:blue)
         printstyled(@sprintf("T3P: %.4f\n", chi2_t3phi/data.nt3phi), color=:green)
     end
-    return chi2_v2 + chi2_t3amp + chi2_t3phi
+    return weights[1]*chi2_v2 + weights[2]*chi2_t3amp + weights[3]*chi2_t3phi
 end
 
 """
@@ -263,9 +263,12 @@ brightness a nonlinear function of it, and this derivative is the linear one. Th
 
 `occultation` takes the same values as [`binary_cvis`](@ref). The weights depend on the
 geometry, not on the maps, so they enter as constants — the derivative is exact with them on.
+
+`weights = (w_V², w_T3amp, w_T3φ)` scales each observable's χ², as in `spheroid_chi2_fg`.
 """
 @views function binary_chi2_fg(x1, g1, star1, x2, g2, star2, data, phase_shift;
-                               verbose::Bool = false, occultation = false)
+                               verbose::Bool = false, occultation = false,
+                               weights = (1, 1, 1))
     T = real(float(promote_type(eltype(x1), eltype(x2))))
     i1 = star1.index_quads_visible
     i2 = star2.index_quads_visible
@@ -296,7 +299,8 @@ geometry, not on the maps, so they enter as constants — the derivative is exac
     N = fl1 + fl2
     cvis = (F1 .+ F2 .* phase_shift) ./ N
 
-    chi2, a = cvis_to_chi2_fg(_ascomplexfloat(cvis), data; weights = OI_DEFAULT_WEIGHTS)
+    chi2, a = cvis_to_chi2_fg(_ascomplexfloat(cvis), data;
+                              weights = [Float64.(collect(weights)); zeros(4)])
 
     gs1 = real(transpose(star1.polyft) * a)
     gs2 = real(transpose(star2.polyft) * (a .* phase_shift))
@@ -353,7 +357,7 @@ before the sum, and to the gradient with them.
 """
 function binary_crit_allepochs_fg(x, g, stars1, stars2, data, phase_shifts;
                                   regularizers1 = [], regularizers2 = [], epochs_weights = [],
-                                  verbose = false, T = eltype(x))
+                                  verbose = false, T = eltype(x), weights = (1, 1, 1))
     nepochs = length(data)
     length(stars1) == nepochs && length(stars2) == nepochs ||
         throw(DimensionMismatch("$(length(stars1)) primary and $(length(stars2)) secondary " *
@@ -373,7 +377,8 @@ function binary_crit_allepochs_fg(x, g, stars1, stars2, data, phase_shifts;
     Threads.@threads for i in 1:nepochs
         chi2_t[i] = binary_chi2_fg(view(x, 1:n1), view(ge[i], 1:n1), stars1[i],
                                    view(x, n1+1:n1+n2), view(ge[i], n1+1:n1+n2), stars2[i],
-                                   data[i], phase_shifts[i]; verbose = verbose)
+                                   data[i], phase_shifts[i]; verbose = verbose,
+                                   weights = weights)
     end
     w = _epoch_weights(epochs_weights, nepochs, T)
     f = w === nothing ? sum(chi2_t) : sum(chi2_t .* w)
@@ -422,13 +427,15 @@ and must be copied to be kept, and that the count is evaluations rather than ite
 function binary_reconstruct_oi(x_start, data, stars1, stars2, phase_shifts;
                                epochs_weights = [], verbose = true, lower = 0, upper = Inf,
                                maxiter = 100, regularizers1 = [], regularizers2 = [],
+                               weights = (1, 1, 1),
                                callback = nothing, callback_every::Int = 25)
     nevals = Ref(0)
     crit = function (x, g)
         f = binary_crit_allepochs_fg(x, g, stars1, stars2, data, phase_shifts;
                                      regularizers1 = regularizers1,
                                      regularizers2 = regularizers2,
-                                     epochs_weights = epochs_weights, verbose = verbose)
+                                     epochs_weights = epochs_weights, verbose = verbose,
+                                     weights = weights)
         nevals[] += 1
         if callback !== nothing && (nevals[] == 1 || nevals[] % max(1, callback_every) == 0)
             try

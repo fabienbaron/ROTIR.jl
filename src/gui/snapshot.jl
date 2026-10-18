@@ -56,12 +56,12 @@ function _snapshot_figure(sh::ShellState, which::String, sz::Tuple{Int,Int})
             # in one frame is two pictures. The live view makes the same choice.
             c = build_moll_canvas(fig)
             c.cbarlabel[] = whole_surface_label(sh)
-            show_mollweide!(c, allv, star)
+            show_mollweide!(c, allv, star; colorrange = sh.colorrange[])
         else
             c = build_star_canvas(fig)
             c.cbarlabel[] = whole_surface_label(sh)
             if bin2 === nothing
-                show_star3d!(c, star, allv)
+                show_star3d!(c, star, allv; colorrange = sh.colorrange[])
             else
                 star2, tmap2, off = bin2
                 cc = m.companion
@@ -80,30 +80,21 @@ function _snapshot_figure(sh::ShellState, which::String, sz::Tuple{Int,Int})
                 end
                 show_binary3d!(c, star, allv, star2,
                                surface_values(sh, tmap2, star2; visible_only = false),
-                               (Float64(off[1]), Float64(off[2]), zoff); track = track)
+                               (Float64(off[1]), Float64(off[2]), zoff); track = track,
+                               colorrange = sh.colorrange[])
             end
         end
-        return fig
-    elseif which == "chi2"
-        b = epoch_chi2(sh)
-        b === nothing && return "! no χ² yet — a dataset and a model are both needed"
-        show_chi2!(build_chi2_canvas(fig), b)
         return fig
     elseif which == "obs"
         d === nothing && return "! no dataset loaded"
         O = _oitools_gui()
         O === nothing && return "! the observable plots need OITOOLSGUIExt"
-        c, pts = build_obs_canvas(fig)
+        c = build_obs_canvas(fig)
         c === nothing && return "! the observable canvas could not be built"
         i = clamp(sh.session.current_epoch, 1, length(d.data))
-        O.update_canvas!(c, d.data[i], sh.obskind[]; color = sh.obscolor[],
-                         logscale = _obs_logscale(sh))
-        # The model prediction too, when the panel is showing it: a data plot saved without
-        # the overlay is a different figure from the one on screen.
-        sh.obsoverlay[] &&
-            Makie.scatter!(c.axis, _model_points(sh, d.data[i], i);
-                           color = (:black, 0.0), strokecolor = :black, strokewidth = 1.1,
-                           markersize = 9, marker = :circle)
+        # The same drawing as the screen — panels, comparison and residuals included: a saved
+        # plot that differs from the one on screen is a different figure.
+        _draw_obs!(sh, c, d.data[i], i)
         return fig
     elseif which == "orbit"
         c = build_orbit_canvas(fig)
@@ -131,9 +122,11 @@ function _snapshot_figure(sh::ShellState, which::String, sz::Tuple{Int,Int})
             show_map!(c, star, Float64.(im.x[star.index_quads_visible]);
                       title = im.name, star_params = star_params(m), _decor(sh)...)
         elseif which == "imaging_moll"
-            show_mollweide!(build_moll_canvas(fig), Float64.(im.x), star)
+            show_mollweide!(build_moll_canvas(fig), Float64.(im.x), star;
+                            colorrange = sh.colorrange[])
         else
-            show_star3d!(build_star_canvas(fig), star, Float64.(im.x))
+            show_star3d!(build_star_canvas(fig), star, Float64.(im.x);
+                         colorrange = sh.colorrange[])
         end
         return fig
     end

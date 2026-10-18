@@ -169,6 +169,10 @@ end
     # to `spheroid_chi2_fg` when the secondary is dark.
     include(joinpath(TESTDIR, "test_binary_imaging.jl"))
 
+    # V², T3amp and T3φ weights in the imaging and shape criteria: value and gradient both
+    # linear in them, so an unticked observable is out of the descent as well as the number.
+    include(joinpath(TESTDIR, "test_observable_weights.jl"))
+
     # The geometry and map FITS files: the mesh back bit-for-bit, and the ASCII aliasing that
     # lets a Roche model's Unicode orbital elements into a FITS string column at all.
     include(joinpath(TESTDIR, "test_geometry_io.jl"))

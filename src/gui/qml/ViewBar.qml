@@ -52,6 +52,9 @@ Pane {
     property var decorations: []          // {name, label, on} per tick
     property bool graticulesOn: false
     property var graticuleColors: []
+    // Which tab's canvases the colour-range fields read back: "model" or "image".
+    property string tab: "model"
+    property bool rangeAuto: true
     signal viewChanged()
     signal epochRequested(int i)
     signal statusChanged(string s)
@@ -108,6 +111,23 @@ Pane {
             var ci = graticuleColors.indexOf(g[2])
             if (ci >= 0) gratColor.currentIndex = ci
         }
+    }
+
+    // The fields show the range the visible canvas is ACTUALLY drawn with, autoscaled or not,
+    // so pinning starts from the numbers on screen rather than from a blank.
+    function loadRange() {
+        var r = Julia.shell_colorrange(tab, viewIndex)
+        if (r.length === 0) return
+        var g = r.split("\t")
+        if (g.length < 3) return
+        rangeAuto = g[0] === "1"
+        if (!vminField.activeFocus) vminField.text = g[1]
+        if (!vmaxField.activeFocus) vmaxField.text = g[2]
+    }
+
+    function pushRange(lo, hi) {
+        statusChanged(Julia.shell_set_colorrange(lo, hi))
+        viewChanged()
     }
 
     function loadColormaps() {
@@ -363,6 +383,38 @@ Pane {
                     root.viewChanged()
                 }
             }
+        }
+        Label {
+            text: "range"; color: "#7f8c98"; font.pointSize: root.fontPt - 1
+            Layout.leftMargin: root.dp(8)
+        }
+        TextField {
+            id: vminField
+            Layout.preferredWidth: root.dp(72)
+            font.pointSize: root.fontPt - 2
+            selectByMouse: true
+            ToolTip.text: "lower end of the colour scale; editing it pins the range on every view"
+            ToolTip.visible: hovered
+            onEditingFinished: root.pushRange(vminField.text, vmaxField.text)
+        }
+        Label { text: "–"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
+        TextField {
+            id: vmaxField
+            Layout.preferredWidth: root.dp(72)
+            font.pointSize: root.fontPt - 2
+            selectByMouse: true
+            ToolTip.text: "upper end of the colour scale; editing it pins the range on every view"
+            ToolTip.visible: hovered
+            onEditingFinished: root.pushRange(vminField.text, vmaxField.text)
+        }
+        Button {
+            text: "auto"
+            checkable: true
+            checked: root.rangeAuto
+            font.pointSize: root.fontPt - 2
+            ToolTip.text: "scale each view to its own map's minimum and maximum"
+            ToolTip.visible: hovered
+            onClicked: root.pushRange("", "")
         }
         Item { Layout.fillWidth: true }
     }

@@ -184,10 +184,11 @@ I/O and data handling.
 ## Graphical interface (work in progress)
 
 One window over one session — the same dataset moves from epoch browsing to model fitting to
-reconstruction without being written out and read back. Three tabs: **Data exploring** (epochs,
-uv coverage, observables, per-epoch reduced χ² against the current model), **Modeling** (a
-parameter form generated from the surface schema, each parameter free/fixed/tied, and the fit
-backends below), and **Imaging** (tessellation, the ten regularisers, and the reconstruction).
+reconstruction without being written out and read back. Four tabs: **Explore** (epochs, OITOOLS'
+filtering and observable plots — per baseline, against the model or a reconstruction, or as
+residuals — and per-epoch reduced χ² against the current model), **Modeling** (a parameter form
+generated from the surface schema, each parameter free/fixed/tied, and the fit backends below),
+**Imaging** (tessellation, the regularisers, and the reconstruction), and **Orbit**.
 It is under active development: the panels work, but not every control behind them is wired yet.
 
 One call opens it, from a plain session:

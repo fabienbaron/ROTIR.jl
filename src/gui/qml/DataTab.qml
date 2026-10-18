@@ -1,9 +1,10 @@
-// Data: what was observed, and how well the current model reproduces it.
+// Explore: what was observed, and how well the current model reproduces it.
 //
-// Deliberately NOT a generic uv / V² / T3 browser — OITOOLS has those and does them better.
-// What ROTIR adds is the EPOCH structure: a surface map is constrained by how the star looks
-// at several rotation phases, so the questions this tab answers are "which phase is this",
-// "what does the model look like there", and "which epoch does the model fit badly".
+// The observable plots, their options and the filtering are OITOOLS' own — the same canvas,
+// the same plot kinds, per-baseline panels and residuals — so a dataset reads the same in both
+// GUIs. What ROTIR adds is the EPOCH structure: a surface map is constrained by how the star
+// looks at several rotation phases, so the questions this tab answers are "which phase is
+// this", "what does the model look like there", and "which epoch does the model fit badly".
 
 import QtQuick
 import QtQuick.Controls
@@ -42,66 +43,93 @@ Pane {
     // there is a χ² only when a model is set — and the header says which, rather than putting
     // "χ²ᵣ" above a column of counts.
     property bool showingChi2: false
-    // The observable views this file actually has, then the two model views. Built from
-    // OITOOLS' own availability check, so the tab cannot offer a panel for a table that is
-    // not in the file.
-    property var obsKinds: []
-    property var views: []
-    property int nObs: 0
-    property int viewIndex: 0
+    property string filterKey: ""
+    property string kindsKey: ""
+    // What one panel of the per-group view holds — baseline, triplet or station — from OITOOLS.
+    property string groupingNoun: "baseline"
+    // "data", "model", "image", "residmodel" or "residimage": one radio group, so at most one
+    // is ever on — a residual has the model subtracted already, and overplotting it there
+    // would draw the prediction against its own difference.
+    property string compareMode: "model"
+    property bool haveModelObs: false
+    property bool haveImageObs: false
+    property string pickText: ""
+
+    // The point a click identified and the selection a drag made are Julia's, from Makie's
+    // event stream, so they are polled — as OITOOLS' Explore does; 150 ms is imperceptible.
+    Timer {
+        interval: 150; running: root.visible; repeat: true
+        onTriggered: {
+            var t = Julia.shell_pick_text()
+            if (t !== root.pickText) root.pickText = t
+            if (filterPanel.selectTool !== "none" || filterPanel.selectionText.length > 0) {
+                var st = Julia.shell_selection_text()
+                if (st !== filterPanel.selectionText) filterPanel.selectionText = st
+            }
+        }
+    }
+
+    function currentKind() {
+        return kindBox.currentIndex >= 0 ? kindModel.get(kindBox.currentIndex).key : "uv"
+    }
+    function predictedKind() { return ["v2", "t3amp", "t3phi"].indexOf(currentKind()) >= 0 }
 
     // What the observable canvas should show. Pushed to Julia, which owns the drawing.
     function applyView() {
-        if (root.viewIndex < root.nObs) {
-            root.statusChanged(Julia.shell_set_obs_view(
-                root.obsKinds[root.viewIndex], colorBox.currentText,
-                overlayBox.checked ? "1" : "0",
-                logBox.enabled && logBox.checked ? "1" : "0",
-                maxBaseBox.enabled && maxBaseBox.checked ? "1" : "0"))
-        }
+        root.groupingNoun = Julia.shell_obs_grouping_noun(root.currentKind())
+        root.statusChanged(Julia.shell_set_obs_view(
+            root.currentKind(), colorBox.currentText, root.compareMode,
+            logBox.enabled && logBox.checked ? "1" : "0",
+            maxBaseBox.enabled && maxBaseBox.checked ? "1" : "0",
+            panelsBox.enabled && panelsBox.checked ? "1" : "0"))
         root.redraw()
     }
 
-    // Labels for the observable keys. Kept here rather than in Julia because they are purely
-    // presentational — the KEY is what crosses the boundary.
-    function obsLabel(k) {
-        return k === "uv"     ? "uv coverage"
-             : k === "v2"     ? "V²"
-             : k === "t3amp"  ? "T3 amp"
-             : k === "t3phi"  ? "T3 phase"
-             : k === "visamp" ? "vis amp"
-             : k === "visphi" ? "vis phase"
-             : k === "flux"   ? "flux"
-             : k === "diffphi" ? "diff. phase"
-             : k === "diffvisamp" ? "diff. vis amp"
-             : k
+    // Every OITOOLS plot kind, with whether this dataset can supply it. Shown but disabled
+    // when it cannot, as OITOOLS does: which observables a file carries is worth seeing.
+    ListModel {
+        id: kindModel
+        ListElement { key: "uv";         label: "uv coverage";   available: true }
+        ListElement { key: "v2";         label: "V²";            available: true }
+        ListElement { key: "t3phi";      label: "T3 phase";      available: true }
+        ListElement { key: "t3amp";      label: "T3 amp";        available: true }
+        ListElement { key: "visamp";     label: "vis amp";       available: true }
+        ListElement { key: "visphi";     label: "vis phase";     available: true }
+        ListElement { key: "diffphi";    label: "diff. phase";   available: true }
+        ListElement { key: "diffvisamp"; label: "diff. vis amp"; available: true }
+        ListElement { key: "flux";       label: "flux";          available: true }
+    }
+
+    function refreshKinds() {
+        var flags = Julia.shell_obs_kinds()
+        if (flags.length === 0) return
+        var have = {}
+        var fl = flags.split("\n")
+        for (var j = 0; j < fl.length; ++j) {
+            var g = fl[j].split("\t")
+            if (g.length >= 2) have[g[0]] = (g[1] === "1")
+        }
+        for (var r = 0; r < kindModel.count; ++r)
+            kindModel.setProperty(r, "available", have[kindModel.get(r).key] === true)
+        // A kind the new dataset cannot draw falls back to V², or to uv coverage.
+        if (!kindModel.get(kindBox.currentIndex).available)
+            kindBox.currentIndex = kindModel.get(1).available ? 1 : 0
+    }
+
+    function refreshCompare() {
+        var parts = Julia.shell_obs_compare_available().split(",")
+        for (var i = 0; i < parts.length; ++i) {
+            var kv = parts[i].split("=")
+            if (kv[0] === "model") root.haveModelObs = (kv[1] === "1")
+            if (kv[0] === "image") root.haveImageObs = (kv[1] === "1")
+        }
     }
 
     ListModel { id: epochModel }
     ListModel { id: datasetModel }
 
     function refresh() {
-        // Which observable panels this dataset supports, from OITOOLS' availability flags.
-        if (root.obsKinds.length === 0) {
-            var flags = Julia.shell_obs_kinds()
-            var ks = []
-            if (flags.length > 0) {
-                var fl = flags.split("\n")
-                for (var j = 0; j < fl.length; ++j) {
-                    var g = fl[j].split("\t")
-                    if (g.length >= 2 && g[1] === "1") ks.push(g[0])
-                }
-            }
-            if (ks.length > 0) {
-                root.obsKinds = ks
-                root.nObs = ks.length
-                var vs = []
-                for (var q = 0; q < ks.length; ++q) vs.push(root.obsLabel(ks[q]))
-                vs.push("sky map"); vs.push("per-epoch χ²")
-                root.views = vs
-                root.applyView()
-            }
-        }
+        root.refreshCompare()
         var drows = Julia.shell_datasets()
         var dkeep = dsBox.currentIndex
         datasetModel.clear()
@@ -118,6 +146,20 @@ Pane {
         var cur = parseInt(Julia.shell_current_dataset())
         if (cur >= 1 && cur <= datasetModel.count) dsBox.currentIndex = cur - 1
         else if (dkeep >= 0 && dkeep < datasetModel.count) dsBox.currentIndex = dkeep
+        // The Filter panel offers what THIS dataset holds, and shows a filtered dataset's own
+        // settings again — but only when the dataset changes: this runs on every parameter
+        // edit, and the choices come from reading the files' headers.
+        var dkey = dsBox.currentIndex >= 0 && dsBox.currentIndex < datasetModel.count
+                   ? datasetModel.count + ":" + datasetModel.get(dsBox.currentIndex).dname : ""
+        if (dkey !== root.filterKey) {
+            root.filterKey = dkey
+            if (dkey.length > 0) filterPanel.refresh()
+        }
+        // Which plot kinds this dataset can draw, again only when the dataset changes.
+        if (dkey !== root.kindsKey) {
+            root.kindsKey = dkey
+            if (dkey.length > 0) { root.refreshKinds(); root.applyView() }
+        }
 
         var rows = Julia.shell_epochs()
         var keep = epochList.currentIndex
@@ -216,9 +258,16 @@ Pane {
             // while every row started at the Frame's padding plus the ItemDelegate's — a
             // couple of dozen pixels of style-dependent offset that no width in this file
             // could have compensated for, since neither number is fixed here.
+            //
+            // AS TALL AS ITS ROWS, up to the room there is: one epoch gets one row, not half
+            // the column. `fillHeight` with the frame's own implicit height as the maximum
+            // grows it with the epoch count and lets the Filter panel below share the rest;
+            // past that the list scrolls.
             Frame {
+                id: epochFrame
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.maximumHeight: implicitHeight
                 ColumnLayout {
                     anchors.fill: parent
                     spacing: dp(2)
@@ -240,9 +289,20 @@ Pane {
                     id: epochList
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    // Every row, or at least three of them once that no longer fits.
+                    Layout.preferredHeight: contentHeight
+                    Layout.minimumHeight: Math.min(contentHeight, dp(90))
                     clip: true
                     model: epochModel
                     ScrollBar.vertical: ScrollBar { id: epochScroll }
+                    // UP AND DOWN STEP THROUGH THE EPOCHS once the table has been clicked:
+                    // a click gives the list the focus (the rows take none of their own), and
+                    // moving the current row is all a step needs — `onCurrentIndexChanged`
+                    // below selects the epoch and redraws.
+                    focus: true
+                    keyNavigationEnabled: true
+                    Keys.onUpPressed: if (currentIndex > 0) currentIndex = currentIndex - 1
+                    Keys.onDownPressed: if (currentIndex < count - 1) currentIndex = currentIndex + 1
                     onCurrentIndexChanged: {
                         // The REPAINT is the second half of this and it is not optional:
                         // `shell_select_epoch` refills the Observables, but Makie draws on
@@ -261,7 +321,11 @@ Pane {
                         leftPadding: 0
                         rightPadding: 0
                         highlighted: ListView.isCurrentItem
-                        onClicked: epochList.currentIndex = index
+                        focusPolicy: Qt.NoFocus
+                        onClicked: {
+                            epochList.currentIndex = index
+                            epochList.forceActiveFocus()
+                        }
                         contentItem: RowLayout {
                             spacing: dp(6)
                             Label { text: idx;  Layout.preferredWidth: dp(24); font.pointSize: root.fontPt }
@@ -299,17 +363,60 @@ Pane {
                                        : "V² / T3amp / T3phi columns: point counts (no model yet)"
             }
 
+            // OITOOLS' filtering, epoch by epoch: Apply makes a new dataset and selects it,
+            // and the unfiltered one stays in the Dataset box as the undo.
+            Label {
+                text: "Filter"; font.bold: true; font.pointSize: root.fontPt
+                visible: datasetModel.count > 0
+            }
+            ScrollView {
+                id: filterScroll
+                visible: datasetModel.count > 0
+                Layout.fillWidth: true
+                // Takes what the epoch table leaves, up to its own height; scrolls below that.
+                Layout.fillHeight: true
+                Layout.preferredHeight: filterPanel.implicitHeight
+                Layout.maximumHeight: filterPanel.implicitHeight
+                Layout.minimumHeight: Math.min(filterPanel.implicitHeight, dp(120))
+                clip: true
+                contentWidth: availableWidth
+                FilterPanel {
+                    id: filterPanel
+                    width: filterScroll.availableWidth
+                    uiScale: root.uiScale
+                    baseFontPt: root.fontPt
+                    onStatusReported: function (t) { root.statusChanged(t) }
+                    onApplied: root.refreshAllRequested()
+                    onPreviewChanged: root.redraw()
+                    onSelectionCleared: root.redraw()
+                }
+            }
+
+            // The dataset on screen, every epoch, filtered as it is — OITOOLS' Export.
+            RowLayout {
+                visible: datasetModel.count > 0
+                Layout.fillWidth: true
+                spacing: dp(6)
+                Button {
+                    text: "Export OIFITS…"
+                    font.pointSize: root.fontPt - 1
+                    ToolTip.text: "write this dataset, as filtered, to a new OIFITS file"
+                    ToolTip.visible: hovered
+                    onClicked: root.saveRequested("oifits", 0, 0)
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            // Whatever both leave stays BELOW them, rather than being spread between the rows.
+            Item { Layout.fillHeight: true; Layout.preferredHeight: 0 }
         }
 
-        // ── right: one view at a time ────────────────────────────────────────
+        // ── right: the observable plot ───────────────────────────────────────
         //
-        // The DATA is what this tab is for, so the observable views come first: V² against
-        // baseline, closure phase, uv coverage — the OITOOLS GUI's own plots, drawn by its own
-        // canvas (see `build_obs_canvas`). The model's prediction goes OVER them, which is the
-        // thing ROTIR adds and the reason the tab is not simply OITOOLS' Explore.
-        //
-        // The sky projection and the per-epoch χ² are the other two views. They are about the
-        // model rather than the data, which is why they are not the default here.
+        // V² against baseline, closure phase, uv coverage — the OITOOLS GUI's own plots, drawn
+        // by its own canvas (see `build_obs_canvas`), for the selected epoch. The model's or a
+        // reconstruction's prediction goes over them, or their residuals replace them. The
+        // model's own pictures are on the Model tab.
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -318,67 +425,79 @@ Pane {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: dp(6)
-                Repeater {
-                    model: root.views
-                    Button {
-                        text: modelData
-                        checkable: true
-                        checked: root.viewIndex === index
-                        font.pointSize: root.fontPt
-                        onClicked: { root.viewIndex = index; root.applyView() }
-                    }
-                }
                 Button {
                     text: "Save plot…"
                     font.pointSize: root.fontPt - 1
-                    onClicked: {
-                        // Rebuilt offscreen, not grabbed: see src/gui/snapshot.jl.
-                        var w = root.viewIndex < root.nObs ? "obs"
-                              : root.viewIndex === root.nObs ? "sky" : "chi2"
-                        root.saveRequested(w, obsArea.width, obsArea.height)
-                    }
+                    // Rebuilt offscreen, not grabbed: see src/gui/snapshot.jl.
+                    onClicked: root.saveRequested("obs", obsArea.width, obsArea.height)
                 }
                 Item { Layout.fillWidth: true }
                 Label {
-                    text: root.viewIndex < root.nObs
-                          ? "the selected epoch · model prediction over the data"
-                          : root.viewIndex === root.nObs
-                            ? "the model at the selected epoch · scroll to zoom · right-click resets"
-                            : "reduced χ² per epoch: V² / T3amp / T3phi"
+                    text: "the selected epoch · scroll to zoom · right-click resets"
                     color: "#7f8c98"
                     font.pointSize: root.fontPt - 1
                 }
             }
 
+            // OITOOLS' Plot options, in the order its Explore lists them.
             RowLayout {
                 Layout.fillWidth: true
                 spacing: dp(6)
-                visible: root.viewIndex < root.nObs
+                Label { text: "plot"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
+                ComboBox {
+                    id: kindBox
+                    Layout.preferredWidth: dp(130)
+                    model: kindModel
+                    textRole: "label"
+                    currentIndex: 1
+                    font.pointSize: root.fontPt - 1
+                    delegate: ItemDelegate {
+                        id: kindItem
+                        required property var model
+                        required property int index
+                        width: kindBox.width
+                        enabled: model.available
+                        highlighted: kindBox.highlightedIndex === index
+                        // Dimmed by hand: Fusion draws a disabled ItemDelegate like an enabled one.
+                        contentItem: Label {
+                            text: kindItem.model.label
+                            opacity: kindItem.enabled ? 1.0 : 0.4
+                            font.pointSize: root.fontPt - 1
+                        }
+                        ToolTip.visible: hovered && !model.available
+                        ToolTip.text: "this dataset has no " + model.label + " data"
+                    }
+                    onActivated: root.applyView()
+                }
                 Label { text: "colour by"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
                 ComboBox {
                     id: colorBox
-                    Layout.preferredWidth: dp(130)
-                    model: ["baseline", "wav", "mjd", "station"]
+                    Layout.preferredWidth: dp(110)
+                    model: ["baseline", "wav", "mjd", "none"]
                     font.pointSize: root.fontPt - 1
                     onActivated: root.applyView()
                 }
                 CheckBox {
-                    id: overlayBox
-                    text: "model prediction"
-                    checked: true
+                    id: logBox
+                    text: "log y"
+                    // Only where it means something: the positive quantities. A phase takes
+                    // both signs, uv coverage is a geometry, and a residual is centred on zero.
+                    enabled: ["v2", "visamp", "t3amp", "flux", "diffvisamp"]
+                             .indexOf(root.currentKind()) >= 0 &&
+                             root.compareMode.indexOf("resid") !== 0
                     font.pointSize: root.fontPt - 1
-                    ToolTip.text: "black rings: the current model at this epoch"
+                    ToolTip.text: "points at or below zero are dropped, not piled on the floor"
                     ToolTip.visible: hovered
                     onToggled: root.applyView()
                 }
                 CheckBox {
-                    id: logBox
-                    text: "log y"
-                    // Only where it means something. V² and T3amp are positive quantities;
-                    // a closure phase takes both signs, and uv coverage is a geometry.
-                    enabled: ["v2", "t3amp"].indexOf(root.obsKinds[root.viewIndex]) >= 0
+                    id: panelsBox
+                    // Labelled from OITOOLS: closure quantities group by triplet and flux by
+                    // station, and "per baseline" over a grid of triangles would be wrong.
+                    text: "per " + root.groupingNoun
+                    enabled: root.currentKind() !== "uv"
                     font.pointSize: root.fontPt - 1
-                    ToolTip.text: "points at or below zero are dropped, not piled on the floor"
+                    ToolTip.text: "one panel per " + root.groupingNoun + ", against wavelength"
                     ToolTip.visible: hovered
                     onToggled: root.applyView()
                 }
@@ -386,9 +505,9 @@ Pane {
                     id: maxBaseBox
                     text: "max baseline"
                     // Only the closure quantities have a choice to make: a triangle has three
-                    // legs, so it has both a mean baseline and a longest one. V² has a single
-                    // baseline and uv coverage is a geometry.
-                    enabled: ["t3amp", "t3phi"].indexOf(root.obsKinds[root.viewIndex]) >= 0
+                    // legs, so it has both a mean baseline and a longest one.
+                    enabled: ["t3amp", "t3phi"].indexOf(root.currentKind()) >= 0 &&
+                             !(panelsBox.enabled && panelsBox.checked)
                     font.pointSize: root.fontPt - 1
                     ToolTip.text: "plot against the LONGEST leg of each triangle instead of " +
                                   "the geometric mean — the resolution the closure actually " +
@@ -399,49 +518,50 @@ Pane {
                 Item { Layout.fillWidth: true }
             }
 
-            // The same intensity tick as the Model tab, for the sky-map view.
+            // OITOOLS' Compare choices. ROTIR predicts V², T3amp and T3φ, so they apply there;
+            // the image is the current reconstruction, on the current model's geometry.
             RowLayout {
                 Layout.fillWidth: true
                 spacing: dp(6)
-                visible: root.viewIndex === root.nObs
-                CheckBox {
-                    id: dataIntensity
-                    // Ticked by default, matching the Model and Imaging tabs and Julia's own
-                    // default: the map is a temperature, but the intensity is what is measured.
-                    checked: true
-                    text: "intensity"
-                    font.pointSize: root.fontPt - 1
-                    ToolTip.text: "limb darkening multiplied in; unticked shows the temperature"
-                    ToolTip.visible: hovered
-                    onToggled: {
-                        root.statusChanged(Julia.shell_set_surface_field(
-                            checked ? "1" : "0", dataIntensityModel.currentText, "0"))
-                        root.redraw()
-                    }
-                }
-                ComboBox {
-                    id: dataIntensityModel
-                    visible: dataIntensity.checked
-                    Layout.preferredWidth: dp(110)
-                    model: ["linear", "planck"]
-                    font.pointSize: root.fontPt - 1
-                    onActivated: {
-                        root.statusChanged(Julia.shell_set_surface_field(
-                            dataIntensity.checked ? "1" : "0", currentText, "0"))
-                        root.redraw()
+                Label { text: "compare"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
+                ButtonGroup { id: compareGroup }
+                Repeater {
+                    model: [
+                        { key: "data",       label: "data only",         needModel: false },
+                        { key: "model",      label: "model",             needModel: true  },
+                        { key: "image",      label: "image",             needModel: false },
+                        { key: "residmodel", label: "residuals (model)", needModel: true  },
+                        { key: "residimage", label: "residuals (image)", needModel: false }
+                    ]
+                    RadioButton {
+                        required property var modelData
+                        text: modelData.label
+                        font.pointSize: root.fontPt - 1
+                        ButtonGroup.group: compareGroup
+                        checked: root.compareMode === modelData.key
+                        enabled: modelData.key === "data" ||
+                                 (root.predictedKind() && !(panelsBox.enabled && panelsBox.checked) &&
+                                  (modelData.needModel ? root.haveModelObs : root.haveImageObs))
+                        ToolTip.visible: hovered && !enabled
+                        ToolTip.text: !root.predictedKind()
+                            ? "ROTIR predicts V², T3 amp and T3 phase only"
+                            : (panelsBox.enabled && panelsBox.checked)
+                              ? "the per-" + root.groupingNoun + " panels show the data alone"
+                              : modelData.needModel ? "no model, or its parameters do not build"
+                                                    : "no reconstruction yet, or the model is a binary"
+                        onClicked: { root.compareMode = modelData.key; root.applyView() }
                     }
                 }
                 Item { Layout.fillWidth: true }
             }
 
             // Stepping through the epochs. ARROWS, not a slider: the action is "the next
-            // night", and a slider makes that a drag at a target a few pixels wide. The table
-            // on the left is for reading numbers off a particular night; this is for sweeping
-            // the rotation and watching the map turn.
+            // night", and a slider makes that a drag at a target a few pixels wide. The Up and
+            // Down keys do the same in the table on the left.
             RowLayout {
                 Layout.fillWidth: true
                 spacing: dp(4)
-                visible: root.viewIndex !== root.nObs + 1 && epochModel.count > 1
+                visible: epochModel.count > 1
                 Label { text: "epoch"; color: "#7f8c98"; font.pointSize: root.fontPt - 1 }
                 Button {
                     text: "◀"
@@ -465,23 +585,30 @@ Pane {
                 Item { Layout.fillWidth: true }
             }
 
-            StackLayout {
+            // Every plot kind shares ONE canvas: they differ in what is pushed into it.
+            MakieArea {
+                id: obsArea
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                // Every observable view shares ONE canvas — they differ in what is pushed into
-                // it, not in which axis they are — so the stack has three entries however many
-                // observables the file has.
-                currentIndex: root.viewIndex < root.nObs ? 0 : root.viewIndex - root.nObs + 1
-                MakieArea { id: obsArea;  scene: obsPlot }
-                MakieArea { id: skyArea;  scene: skyPlot }
-                MakieArea { id: chi2Area; scene: chi2Plot }
+                scene: obsPlot
+            }
+
+            // The point a click identified, as OITOOLS shows it under its plot.
+            Label {
+                Layout.fillWidth: true
+                text: root.pickText.length > 0 ? root.pickText
+                    : panelsBox.enabled && panelsBox.checked ? ""
+                    : filterPanel.selectTool !== "none" ? "drag on the plot to select points"
+                    : "click a point to identify it"
+                color: root.pickText.length > 0 ? "#000" : "#888"
+                font.family: "monospace"
+                font.pointSize: root.fontPt - 1
+                elide: Text.ElideRight
             }
         }
     }
 
     function redraw() {
-        if (root.viewIndex < root.nObs) obsArea.update()
-        else if (root.viewIndex === root.nObs) skyArea.update()
-        else chi2Area.update()
+        obsArea.update()
     }
 }

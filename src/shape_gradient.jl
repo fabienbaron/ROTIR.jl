@@ -351,6 +351,8 @@ flag is a no-op, and holding the map fixed was always exact there), an ellipsoid
 its three radii but not on its orientation, and a rapid rotator's is differentiated by Zygote
 in the parametric path instead. See `shape_map_and_derivs`.
 
+`weights = (w_V², w_T3amp, w_T3φ)` scales each observable's χ² and its share of both gradients.
+
 Returns chi2 (scalar). Modifies grad_θ and grad_xmap in place.
 """
 function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
@@ -359,7 +361,7 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
                          star_params_base, tepochs;
                          κ=T(50), verbose::Bool=false,
                          parametric_map::Bool=false,
-                         fit_v0::Bool=false) where T
+                         fit_v0::Bool=false, weights=(1, 1, 1)) where T
 
     # V0, THE VISIBILITY CALIBRATION SCALE, lives in the LAST slot of θ when `fit_v0` — after
     # every shape parameter, so each surface type's existing layout is untouched and the
@@ -466,15 +468,16 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
         chi2_v2 = sum(abs2, (v2_model - data.v2) ./ data.v2_err)
         chi2_t3amp = sum(abs2, (t3amp_model - data.t3amp) ./ data.t3amp_err)
         chi2_t3phi = sum(abs2, mod360(t3phi_model - data.t3phi) ./ data.t3phi_err)
-        total_chi2 += chi2_v2 + chi2_t3amp + chi2_t3phi
+        wv2, wt3a, wt3p = T(weights[1]), T(weights[2]), T(weights[3])
+        total_chi2 += wv2*chi2_v2 + wt3a*chi2_t3amp + wt3p*chi2_t3phi
 
         # Adjoint signal: ∂χ²/∂cvis
         adj_cvis = zeros(Complex{T}, nuv)
         for i in eachindex(data.indx_v2)
             k = data.indx_v2[i]
-            adj_cvis[k] += 4 * (v2_model[i] - data.v2[i]) / data.v2_err[i]^2 * conj(cvis_model[k])
+            adj_cvis[k] += 4wv2 * (v2_model[i] - data.v2[i]) / data.v2_err[i]^2 * conj(cvis_model[k])
         end
-        t3amp_res = 2 * (t3amp_model - data.t3amp) ./ data.t3amp_err.^2
+        t3amp_res = 2wt3a * (t3amp_model - data.t3amp) ./ data.t3amp_err.^2
         for i in eachindex(data.indx_t3_1)
             k1 = data.indx_t3_1[i]; k2 = data.indx_t3_2[i]; k3 = data.indx_t3_3[i]
             c1 = cvis_model[k1]; c2 = cvis_model[k2]; c3 = cvis_model[k3]
@@ -483,7 +486,7 @@ function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
             adj_cvis[k2] += t3amp_res[i] * conj(c2)/a2 * a1 * a3
             adj_cvis[k3] += t3amp_res[i] * conj(c3)/a3 * a1 * a2
         end
-        t3phi_res = mod360(t3phi_model - data.t3phi) ./ data.t3phi_err.^2
+        t3phi_res = wt3p * mod360(t3phi_model - data.t3phi) ./ data.t3phi_err.^2
         for i in eachindex(data.indx_t3_1)
             k1 = data.indx_t3_1[i]; k2 = data.indx_t3_2[i]; k3 = data.indx_t3_3[i]
             c1 = cvis_model[k1]; c2 = cvis_model[k2]; c3 = cvis_model[k3]

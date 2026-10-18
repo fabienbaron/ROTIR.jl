@@ -1114,6 +1114,13 @@ Pane {
                     // runners now take the number as given.
                     onActivated: root.applyBudget()
                 }
+                ObsTicks {
+                    Layout.fillWidth: true
+                    tab: "model"
+                    fontPt: root.fontPt
+                    spacing: dp(6)
+                    onStatusReported: (msg) => root.statusChanged(msg)
+                }
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: dp(6)
@@ -1608,5 +1615,6 @@ Pane {
         if (viewBar.viewIndex === 0) mSkyArea.update()
         else if (viewBar.viewIndex === 1) mollArea.update()
         else starArea.update()
+        viewBar.loadRange()
     }
 }
