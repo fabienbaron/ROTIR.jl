@@ -135,9 +135,13 @@ function build_gauss_samples(proj_west::AbstractMatrix, proj_north::AbstractMatr
     return xs, ys, fs
 end
 
+# NFFT.jl's adjoint computes `sum_j f_j exp(+2πi k·x_j)` in natural order k ∈ {-N/2,…,N/2-1}.
+# With negated positions `pos = (-y/L, -x/L)` it gives the DFT `sum f_j exp(-2πi k·r_j)`;
+# `ifftshift` converts to FFT order, and rows `1:nx/2+1` are the rfft layout.
 """
     polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize, nx;
-                        ngauss=4, nsub=1, T=float(real(eltype(proj_west))))
+                        ngauss=4, nsub=1, T=float(real(eltype(proj_west))),
+                        fftflags=FFTW.MEASURE)
 
 Compute `F[k] ~ sum_p x_weighted[p] * integral_polygon_p exp(-2*pi*i * k . r) dA`
 via an adjoint NFFT at Gauss-Legendre samples inside each quadrilateral.
@@ -146,24 +150,16 @@ Returns a `(nx/2+1, nx)` complex array whose layout matches
 `reshape(polyft*x_weighted, nx/2+1, nx)`, so that the caller can feed it
 directly to `irfft(F, nx)` to obtain the real-space forward model.
 
-Convention notes:
-- NFFT.jl's adjoint computes `sum_j f_j exp(+2*pi*i * k . x_j)` in natural
-  order `k in {-N/2, ..., N/2-1}`.
-- With negated positions `pos = (-y/L, -x/L)`, the adjoint directly produces
-  the standard DFT `sum f_j exp(-2*pi*i * k . r_j)`.
-- `ifftshift` converts natural NFFT order to standard FFT order, then
-  extracting rows `1:nx/2+1` gives the rfft layout.
 
 # Arguments
 - `proj_west, proj_north`: `(Npix, 4)` polygon vertex coordinates (mas)
 - `x_weighted`: `(Npix,)` intensity weights
 - `pixsize`: mas per pixel
 - `nx`: grid size (pixels per side)
-- `ngauss`: Gauss-Legendre order per axis (2..10)
-- `nsub`: number of sub-squares per axis for subdivision
-- `fftflags`: FFTW planner flags for the internal NFFT FFT. Default `FFTW.MEASURE`
-  (benchmarks once per grid size, cached in FFTW wisdom → faster transforms when the
-  NFFT is evaluated repeatedly). Pass `FFTW.ESTIMATE` for a single one-off call.
+- `ngauss`: Gauss-Legendre order per axis: 2, 3, 4, 5, 6, 8 or 10
+- `nsub`: number of sub-squares per axis
+- `fftflags`: FFTW planner flags. `FFTW.MEASURE` plans once per grid size and is faster for
+  repeated calls; `FFTW.ESTIMATE` suits a single call.
 """
 function polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize::Real,
                               nx::Integer; ngauss::Int=4, nsub::Int=1,
@@ -190,10 +186,11 @@ end
 
 """
     polyft_nfft_image(proj_west, proj_north, x_weighted, pixsize, nx;
-                      ngauss=4, nsub=1, T=float(real(eltype(proj_west))))
+                      ngauss=4, nsub=1, T=float(real(eltype(proj_west))),
+                      fftflags=FFTW.MEASURE)
 
-Convenience function: compute the NFFT-based Fourier coefficients and
-immediately inverse-FFT them to produce a real-space `(nx, nx)` image.
+The real-space `(nx, nx)` image `fftshift(irfft(polyft_nfft_forward(...), nx))`, indexed
+`(north, west)`; see [`sky_layout`](@ref) for OITOOLS' orientation.
 
 # Arguments
 Same as `polyft_nfft_forward`.

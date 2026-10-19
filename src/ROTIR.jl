@@ -461,7 +461,7 @@ export sometimes_visible, never_visible, invisible_neighbors, with_invisible_nei
 
 # Utilities
 export make_circ_spot, make_spot_move
-export rl1, max_rpole
+export rl1, max_rpole, roche_q
 export rescale_temperature_tpole, rescale_temperature_teff
 
 function __init__()

@@ -1,18 +1,8 @@
 # Multi-resolution imaging
 
-ROTIR supports a coarse-to-fine reconstruction strategy using the hierarchical
-structure of HEALPix. Starting at a low resolution, the reconstruction is
-progressively refined by upsampling and re-optimizing at each level.
-
-## Why multi-resolution?
-
-At high HEALPix resolution (n=4 or 5), the optimizer faces a high-dimensional
-problem with many local minima. Starting from a coarse solution and refining
-helps:
-
-- **Faster convergence**: fewer pixels at low resolution means fewer iterations
-- **Better global minimum**: coarse features are established first
-- **Robust regularization**: the effective regularization adapts to each scale
+Coarse-to-fine reconstruction on HEALPix: reconstruct at a low level, split each pixel into its
+four children, and reconstruct again at the next level. Fewer pixels at the coarse levels mean
+faster iterations, and the large-scale structure is fitted before the small-scale one.
 
 ## Using `multires_reconstruct_oi`
 
@@ -33,20 +23,20 @@ star_params = (
 
 tmap, stars = multires_reconstruct_oi(data, star_params, tepochs;
                                        n_start=2, n_end=4,
-                                       maxiter=500, reg_weight=1e-5,
+                                       maxiter=500, reg_weight=10.0,
                                        reg_type="sobel2", verbose=true)
 ```
 
-This runs reconstruction at HEALPix levels n=2, 3, 4:
+This reconstructs at HEALPix levels n=2, 3, 4:
 
-| Level | nside | npix | Description |
-|-------|-------|------|-------------|
-| n=2 | 4 | 192 | Coarse: captures large-scale features |
-| n=3 | 8 | 768 | Medium: refines spot structure |
-| n=4 | 16 | 3072 | Fine: resolves sharp features |
+| Level | nside | npix |
+|-------|-------|------|
+| n=2 | 4 | 192 |
+| n=3 | 8 | 768 |
+| n=4 | 16 | 3072 |
 
-At each level, the map from the previous level is upsampled (each HEALPix pixel
-splits into 4 children) and used as the starting point.
+Each level starts from the previous map, upsampled (each pixel copied into its 4 children).
+The first level starts from `parametric_temperature_map`.
 
 ### Keywords
 
@@ -55,16 +45,15 @@ splits into 4 children) and used as the starting point.
 | `n_start` | `2` | Starting HEALPix level |
 | `n_end` | `4` | Final HEALPix level |
 | `maxiter` | `500` | Max iterations per level |
-| `reg_weight` | `1e-5` | TV regularization weight |
-| `reg_type` | `"sobel2"` | Regularization type (`"sobel"`, `"sobel2"`, `"tv"`, `"tv2"`) |
+| `reg_weight` | `10.0` | regularization weight, the same at every level |
+| `reg_type` | `"sobel2"` | `"sobel"`, `"sobel2"`, `"tv"` or `"tv2"` |
 | `verbose` | `true` | Print diagnostics |
 
-Additional keywords are passed through to `image_reconstruct_oi` (e.g., `lower`,
-`upper`).
+Other keywords go to `image_reconstruct_oi` (e.g. `lower`, `upper`).
 
 ## Manual multi-resolution
 
-For more control, you can manually upsample and reconstruct at each level:
+The same ladder, step by step:
 
 ```julia
 # Level n=2
@@ -91,17 +80,19 @@ regularizers = [["sobel2", 10.0, sobel_gradient_healpix(n), 1:length(tmap)]]
 tmap = image_reconstruct_oi(tmap, data, stars; maxiter=500, regularizers=regularizers)
 ```
 
-The same weight is used at every level on purpose: `"sobel2"` carries the `4π/npix` solid
-angle, so it means the same thing at each resolution. A `"tv2"` weight does not — its value
-on a smooth map falls by ~×0.4 per doubling, so holding it fixed up the ladder quietly
-regularizes the finest level the least.
+`"sobel"` and `"sobel2"` include the `4π/npix` solid angle, so one weight has the same effect at
+every level. A `"tv2"` term on a smooth map falls by about ×0.4 per doubling of `nside`, so a
+fixed `"tv2"` weight regularizes the finest level least. Sobel weights are typically O(1–10²);
+`"tv2"` weights O(10⁻⁵–10⁻⁴).
 
 ## Downsampling
 
-To reduce resolution (e.g., for quick visualization or comparison):
+To go down one level:
 
 ```julia
 tmap_coarse, stars_coarse = downsample_map_stars(tmap, stars, star_params, tepochs)
 ```
 
-Each group of 4 child pixels is averaged into one parent pixel.
+Each group of 4 child pixels is averaged into its parent. For maps alone,
+`upsample_healpix_xmap(x, n_coarse, n_fine)` and `downsample_healpix_xmap(x, n_fine, n_coarse)`
+change resolution by any number of levels.

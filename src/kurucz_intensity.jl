@@ -56,9 +56,8 @@ const KURUCZ_MU = (1.000, 0.900, 0.800, 0.700, 0.600, 0.500, 0.400, 0.300, 0.250
 """
     KuruczModel
 
-One model atmosphere out of an intensity pack: its `Teff`, `logg`, the wavelength grid in
-**metres** (converted from the file's nm), and `I` as `(17, nλ)` in erg/cm²/s/Hz/sr with the
-μ axis still in the file's descending order.
+One model atmosphere from a Kurucz intensity pack: `Teff`, `logg`, the wavelengths `λ` in
+metres, and `I` as `(17, nλ)` in erg/cm²/s/Hz/sr, μ in the file's descending order.
 """
 struct KuruczModel{T<:AbstractFloat}
     Teff::T
@@ -72,12 +71,10 @@ end
 
 Parse every model in a Kurucz intensity pack.
 
-`λrange` is `(λmin, λmax)` in **metres** and is strongly recommended: a full pack is 1221
-wavelengths × 17 angles × ~500 models, and an H-band grid needs perhaps 30 of those
-wavelengths. Restricting here keeps the result small and the parse fast.
+`λrange = (λmin, λmax)` in metres restricts the wavelengths kept. A full pack is 1221
+wavelengths × 17 angles × ~500 models; an H-band window keeps about 30 wavelengths.
 
-Reads the `1pe10.3` continuum column and the 16 packed ratio integers and multiplies them out,
-so `I` is absolute — see the note on trap 2 in this file's header.
+`I` is absolute: the continuum column times the 16 packed intensity ratios.
 """
 function read_kurucz_models(path::AbstractString; T::Type = Float64,
                             λrange = nothing, verbose::Bool = true)
@@ -148,20 +145,17 @@ end
     read_kurucz_intensity(path; λrange, Teff = nothing, logg = nothing, T = Float64)
         -> RectGrid4
 
-A Kurucz intensity pack as a ROTIR grid, ready for [`TabulatedProvider`](@ref).
+Read a Kurucz intensity pack into a [`RectGrid4`](@ref) for [`TabulatedProvider`](@ref).
 
-`λrange` is `(λmin, λmax)` in metres and is required — see [`read_kurucz_models`](@ref).
-`Teff`/`logg` optionally restrict the axes to the models you want; the default takes every
-(Teff, logg) the pack contains that shares the full λ sampling.
+- `λrange = (λmin, λmax)` in metres, required.
+- `Teff`, `logg`: optional `(lo, hi)` restrictions of the axes. By default every
+  (Teff, logg) in the pack with the full λ sampling is used.
 
-**The pack is not a complete rectangle.** Kurucz computes each Teff only over the gravities
-where a model converges, so the hot end has no low-gravity entries and the cool end no high
-ones. A `RectGrid4` must be rectangular, so this fills missing (Teff, logg) nodes by copying
-the nearest available `logg` at the same `Teff`. That is a real approximation and it is
-deliberate rather than silent: restricting `logg` to the span your surface actually needs
-avoids relying on it. A warning names how many nodes were filled.
+The pack has no low-gravity models at high Teff and no high-gravity models at low Teff.
+Missing (Teff, logg) nodes are filled from the nearest `logg` at the same `Teff`, with a
+warning giving their number; restricting `logg` to the range the surface needs avoids this.
 
-μ comes out ASCENDING (0.01 … 1.0), reversed from the file, because `RectGrid4` requires it.
+μ is returned ascending (0.01 … 1.0).
 """
 function read_kurucz_intensity(path::AbstractString; λrange,
                                Teff = nothing, logg = nothing,

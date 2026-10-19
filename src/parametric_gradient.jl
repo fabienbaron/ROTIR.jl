@@ -90,8 +90,8 @@ end
 """
     vonzeipel_map(rpole, fev, β, tpole, sinθ, cosθ; GM=1) -> x
 
-Forward von Zeipel temperature map (Zygote primitive; rrule uses the hand-coded
-derivatives above).
+Per-tessel von Zeipel temperature map. Has an rrule built on
+`vonzeipel_map_and_derivs`.
 """
 vonzeipel_map(rpole, fev, β, tpole, sinθ, cosθ; GM = one(eltype(sinθ))) =
     first(vonzeipel_map_and_derivs(rpole, fev, β, tpole, sinθ, cosθ; GM = GM))
@@ -116,9 +116,8 @@ end
 """
     ld_and_derivs(nz, ldtype, ld1, ld2) -> (ld, dld_dnz, dld_dld1, dld_dld2)
 
-Per-tessel limb-darkening map and hand-coded derivatives w.r.t. nz (through μ),
-ld1 and ld2. μ = max(nz,0) (shared `mu_and_dmu`); consistent with the forward
-`compute_ldmap` via `limb_mu`.
+Per-tessel limb-darkening map and its derivatives with respect to `nz` (through
+μ = max(nz, 0)), `ld1` and `ld2`. Uses the same laws and `limb_mu` as `compute_ldmap`.
 """
 function ld_and_derivs(nz::AbstractVector{T}, ldtype::Integer, ld1::T, ld2::T,
                        ld3::T = zero(T), ld4::T = zero(T)) where {T}
@@ -190,7 +189,7 @@ end
 """
     ld_weight(nz, ldtype, ld1, ld2, ld3 = 0, ld4 = 0) -> ld
 
-Forward LD map (Zygote primitive).
+Limb-darkening map. Has an rrule built on `ld_and_derivs`; `ld3` and `ld4` are held fixed.
 """
 ld_weight(nz, ldtype, ld1, ld2, ld3 = zero(ld1), ld4 = zero(ld1)) =
     first(ld_and_derivs(nz, ldtype, ld1, ld2, ld3, ld4))
@@ -217,7 +216,7 @@ end
 """
     visibility_weight(nz, κ) -> vw
 
-Soft visibility σ(κ·nz) (Zygote primitive; reuses `sigmoid`/`dsigmoid`).
+Soft visibility σ(κ·nz). Has an rrule.
 """
 visibility_weight(nz::AbstractVector{T}, κ) where {T} = sigmoid.(T(κ) .* nz)
 
@@ -242,8 +241,8 @@ end
     project_geometry(rpole, fev, inc, PA, tessels, t, base_params) ->
         (proj_west, proj_north, nz)
 
-Projected quad vertices (all npix) and line-of-sight normal component, as a
-function of the geometry parameters (Zygote primitive).
+Projected quad vertices (all pixels) and line-of-sight normal components, as a function of
+the geometry parameters. Has an rrule built on `projected_vertices_and_derivs`.
 """
 function project_geometry(rpole, fev, inc, PA, tessels, t, base_params)
     sp = merge(base_params, (rpole = rpole, frac_escapevel = fev,
@@ -295,34 +294,6 @@ end
 # rrule pullback replicates the FD-validated adjoint of shape_chi2_fg!:
 #   x̄w  via compute_adjoint_cvis!  + flux-normalization correction
 #   p̄roj via compute_adjoint_vertices! + shoelace flux correction
-"""
-    interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data,
-                         weights = (1,1,1), V0 = 1) -> chi2
-
-Single-epoch interferometric χ² (V² + T3amp + T3phi) from LD/visibility-weighted
-per-tessel values `xw` and projected vertices. Real-valued Zygote primitive.
-`kx, ky, k2_inv_im` are the pre-scaled UV frequencies (see `precompute_k2_inv_im`).
-
-# `V0`, the visibility calibration scale
-
-A multiplicative factor on the COMPLEX visibility, so `V²` scales by `V0²`, `T3amp` by `V0³`
-and **`T3φ` not at all** — a real positive scale cannot rotate a phase. That is the only
-choice self-consistent across the three observables; scaling `V²` alone would contradict
-`T3amp`.
-
-It is not a property of the star. ROTIR's model visibility is exactly 1 at zero baseline by
-construction (`compute_polyflux_and_cvis!` divides by `dot(polyflux, xw)`), so `V0` exists to
-absorb what scales the MEASURED visibilities uniformly: calibrator-diameter error, coherence
-loss, incoherent over-resolved flux. Roettenbacher et al. fit one for ζ And and report
-1.02 ± 0.02; freeing one here returns 1.020–1.022 on the same data.
-
-The default is `1`, which is the behaviour every existing caller had, and it is differentiable:
-`∂χ²/∂V0 = Σₖ Re(adj_cvis[k] · Fₖ/flux)`, one extra reduction over the uv points.
-
-**It is only identifiable where the data constrain the visibility SHAPE independently** — short
-of the first null it trades against the angular diameter. Check `corr(V0, rpole)` before
-trusting a fitted value.
-"""
 # WEIGHTS, as `(V², T3amp, T3φ)`. A zero SKIPS the term outright rather than multiplying it by
 # zero, in the primal and in the pullback alike — disabling an observable should cost nothing,
 # and for T3φ the skipped block is the most expensive of the three.
@@ -343,6 +314,23 @@ trusting a fitted value.
 # ROTATOR it is not: an inclined, oblate, gravity-darkened figure has the bright pole displaced
 # from the projected centre, so its closure phases are genuinely non-zero and carry the
 # inclination and position angle. Do not blanket-disable T3φ there.
+"""
+    interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data,
+                         weights = (1,1,1), V0 = 1) -> chi2
+
+Single-epoch χ² (V², T3amp, T3φ) from the weighted per-tessel values `xw` (intensity ×
+limb darkening × soft visibility) and the projected vertices. A real-valued primitive with an
+rrule. `kx, ky, k2_inv_im` are the scaled uv frequencies (see `precompute_k2_inv_im`).
+
+`weights = (w_V², w_T3amp, w_T3φ)` scale the three terms; a zero weight skips the term.
+
+`V0` multiplies the complex visibility: V² scales by `V0²`, T3amp by `V0³`, T3φ is unchanged.
+The model visibility is 1 at zero baseline, so `V0` absorbs a uniform scale on the measured
+visibilities (calibrator diameter, coherence loss, over-resolved flux). It is differentiable,
+`∂χ²/∂V0 = Σₖ Re(adj_cvis[k] · Fₖ/flux)`. Below the first visibility null it trades against
+the angular diameter; check `corr(V0, rpole)`. On ζ And, Roettenbacher et al. report
+1.02 ± 0.02 and a free `V0` here gives 1.020–1.022.
+"""
 interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data) =
     interferometric_chi2(xw, proj_west, proj_north, kx, ky, k2_inv_im, data, (1, 1, 1))
 
@@ -490,43 +478,26 @@ end
 """
     build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                           intensity_model=:linear, band=nothing, κ=50, GM=1,
-                          tpole_free=false, gravity_law=nothing,
-                          logprior=nothing) -> logπ(θ)
+                          tpole_free=false, gravity_law=nothing, logprior=nothing,
+                          provider=nothing, layout=nothing, weights=(1,1,1)) -> logπ(θ)
 
-Return a Zygote-differentiable closure `θ -> -0.5·χ²(θ) + logprior(θ)` for the
-rapid-rotator parametric model. θ = [rpole, ω, inc, PA, β, ld1, ld2]
-(+ tpole if `tpole_free`). All epoch/data constants are captured once.
+Return a differentiable closure `θ -> -0.5·χ²(θ) + logprior(θ)` for the rapid-rotator
+parametric model. θ = `[rpole, ω, inc, PA, β, ld1, ld2]` (+ `tpole` if `tpole_free`). Epoch
+constants are computed once, when the closure is built.
 
-`gravity_law` selects the gravity-darkening law — `:vonzeipel` or `:elr`, see
-[`gravity_law_spec`](@ref). The default `nothing` takes it from `base_params.gravity_law`,
-so the law is a property of the MODEL and a caller who set it there need not repeat it here;
-pass it explicitly only to override. β is θ[5] under either law, and holding it at 1/4 to
-recover Espinosa Lara & Rieutord's published exponent is done by leaving `beta` out of the
-fit's `free` set, not by changing the law.
+- `gravity_law`: `:vonzeipel` or `:elr` (see [`gravity_law_spec`](@ref)); `nothing` reads
+  `base_params.gravity_law`. β is θ[5] under either law; to hold it at 1/4, leave `beta` out
+  of the fit's `free` set.
+- `layout`: a `ParametricLayout` (see `parametric_layout`). Parameters absent from it are held
+  at their `base_params` value.
+- `provider`: an [`IntensityProvider`](@ref). The per-tessel intensity is then
+  `I(Teff, logg, μ, band)` from a model atmosphere, with `logg` from [`logg_map`](@ref)
+  (fitting `d` needs `distance_free = true` in the layout). `ldtype` must be 0 and no
+  limb-darkening law is applied. With `ld1` out of the fit the β/ld1 correlation (+0.67 to
+  +0.99 with a fitted `ld1`) disappears; see `demos/betcas_fisher_predicted_ld.jl`.
+- `weights = (w_V², w_T3amp, w_T3φ)` scale the three χ² terms.
 
-## `layout` and `provider`: fitting with PREDICTED limb darkening
-
-`layout` is a [`ParametricLayout`](@ref); the default reproduces the historical
-`[rpole, ω, inc, PA, β, ld1, ld2]` (+`tpole`) exactly. Any parameter absent from the layout is
-held at its `base_params` value, so a layout is also how a parameter gets frozen structurally
-rather than through `free`.
-
-`provider` is an [`IntensityProvider`](@ref). Given one, the per-tessel intensity becomes
-`I(Teff, logg, μ, band)` from a model atmosphere instead of `intensity(Teff, model, band)`,
-and three things change:
-
-  * `logg` is computed per tessel by [`logg_map`](@ref) from `(rpole, d, fev, rotation_period)`
-    — which is why `d` belongs in the layout (`distance_free = true`) for it to be fitted.
-  * **the intensity moves INSIDE the epoch loop.** Without a provider `Imap` depends only on
-    the temperature map and is hoisted out; with one it depends on μ, hence on `nz`, hence on
-    the rotation phase, so it must be recomputed per epoch. That is a real cost and the reason
-    the two branches below are written separately rather than unified.
-  * **no limb-darkening factor is applied.** The provider already carries the μ dependence, so
-    `ldtype` must be 0 and `ld1`/`ld2` leave θ. This is the point: a fitted `ld1` absorbs the
-    error in whichever gravity-darkening law was assumed, and removing it is what breaks the
-    β/ld1 degeneracy (measured at +0.67 to +0.99; see `demos/betcas_fisher_predicted_ld.jl`).
-
-Compute the gradient with `Zygote.gradient(logπ, θ)` (load Zygote yourself).
+Gradient: `Zygote.gradient(logπ, θ)` (load Zygote yourself).
 """
 function build_parametric_logπ(data_epochs, tessels, tepochs, base_params;
                                intensity_model::Symbol = :linear, band = nothing,
@@ -704,6 +675,9 @@ function ChainRulesCore.rrule(::typeof(project_sphere_geometry), radius,
     return (pw, pn, nz), sphere_geom_pullback
 end
 
+# The limb-darkening coefficients the sphere's θ can carry: those the law reads AND that have
+# a derivative. `ld_and_derivs` differentiates `ld1` and `ld2`; the rrule returns
+# `ZeroTangent()` for Claret's `ld3`/`ld4`, so they stay in the forward law and out of θ.
 """
     sphere_param_names(ldtype) -> Vector{String}
     default_sphere_bounds(ldtype) -> (lb, ub)
@@ -715,9 +689,6 @@ it is not in the vector — the same rule the panel applies when it greys those 
 `radius` is bounded strictly away from zero: the visibilities are normalised by the total flux,
 so a zero radius is 0/0 and the objective is NaN exactly at the bound.
 """
-# The limb-darkening coefficients the sphere's θ can carry: those the law reads AND that have
-# a derivative. `ld_and_derivs` differentiates `ld1` and `ld2`; the rrule returns
-# `ZeroTangent()` for Claret's `ld3`/`ld4`, so they stay in the forward law and out of θ.
 _sphere_nld(ldtype::Integer) = min(length(ld_coefficients_used(ldtype)), 2)
 
 sphere_param_names(ldtype::Integer) =
@@ -921,15 +892,11 @@ end
     default_ellipsoid_bounds(; tpole_free = false) -> (lb, ub)
     ellipsoid_free_indices(free, ldtype; tpole_free = false) -> Vector{Int}
 
-The ellipsoid's θ layout, its box, and the mapping from names to positions.
+The ellipsoid's θ names, its default box, and the indices of the free parameters.
 
-The radii are bounded strictly away from zero for the reason
-`default_parametric_bounds` gives: the visibilities are normalised by the total flux, so a
-zero radius is 0/0 and the objective is NaN exactly at the bound.
-
-`ellipsoid_free_indices` REFUSES a limb-darkening coefficient the current law does not read —
-`ld_and_derivs` differentiates only `ld1` and `ld2`, and a coefficient nothing reads is
-perfectly unconstrained, so freeing it would add a direction the posterior is flat along.
+The radii are bounded away from zero (the visibilities are normalised by the total flux, so a
+zero radius gives NaN). `ellipsoid_free_indices` refuses a limb-darkening coefficient the
+current `ldtype` does not read.
 """
 ellipsoid_param_names(; tpole_free::Bool = false) =
     tpole_free ?

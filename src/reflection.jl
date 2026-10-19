@@ -48,8 +48,8 @@
 #   `redistribution.h` exists but is never called from Python). The non-reflected
 #   fraction 1 − albedo is simply lost.
 # * Dense n₁×n₂ kernels rather than PHOEBE's sparse pair list: for 3072×768 a pair list
-#   is ~2.4 M tuples (>100 MB) whereas the dense block is 9.4 MB and every solver sweep
-#   becomes a BLAS gemv.
+#   is ~2.4 M tuples (>100 MB) whereas the three dense blocks are 57 MB in Float64 (28 MB in
+#   Float32) and every solver sweep becomes a BLAS gemv.
 #
 # Forward model only — no ChainRules rrules. The temperature bump is a post-processing
 # step on the intrinsic (gravity-darkened) maps, applied before the flux operators.
@@ -61,16 +61,12 @@ const EPS_COSTHETA = 0.00872654   # cos(89.5°) — PHOEBE's grazing-angle cutof
 """
     tessel_centroids_areas(g::stellar_geometry) -> (centroids, areas)
 
-Per-tessel centroid `(npix, 3)` and **true 3-D** area `(npix,)` from the mesh vertices,
-in whatever frame `g.vertices_xyz` is expressed in (mas, so areas are mas²).
+Per-tessel centroid `(npix, 3)` and 3-D area `(npix,)`, in the frame of `g.vertices_xyz`
+(mas, so areas are in mas²).
 
-Vertices 1:4 are the quad corners and vertex 5 is the tessel centre, so the centroid is
-the mean of `vertices_xyz[i, 1:4, :]` and the area is the two-triangle split
-(1,2,3) + (1,3,4).
-
-Do **not** substitute `polyflux` here: that is the *projected* 2-D shoelace area used by
-the Fourier transform (`setup_polyflux_single`), which is `cos` -foreshortened and
-vanishes at the limb. View factors need the real area.
+The centroid is the mean of the four quad corners `vertices_xyz[i, 1:4, :]`; the area is the
+sum of triangles (1,2,3) and (1,3,4). This is the surface area, not the projected area
+`polyflux`.
 """
 function tessel_centroids_areas(g)
     T = eltype(g.vertices_xyz)
@@ -102,9 +98,7 @@ end
     ld_bol_D0(ldtype, ld1, ld2) -> D0/π
 
 Hemispheric normalisation `D0 = 2π ∫₀¹ D(μ) μ dμ` of a bolometric limb-darkening law,
-returned divided by π so that a uniform law gives exactly 1.
-
-`ldtype` follows ROTIR's convention with an extra `0`:
+divided by π (a uniform law gives 1).
 
 | ldtype | law | D0/π |
 |---|---|---|
@@ -113,8 +107,8 @@ returned divided by π so that a uniform law gives exactly 1.
 | 2 | quadratic, `1 − x(1−μ) − y(1−μ)²` | `1 − x/3 − y/6` |
 | 3 | Hestroffer power, `μ^x` | `2/(x+2)` |
 
-These are the *bolometric* coefficients used for the irradiation transport; they are a
-different quantity from the passband `ld1`/`ld2` that shape `ldmap`.
+These are bolometric coefficients for the irradiation, separate from the passband
+`ld1`/`ld2` that set `ldmap`. Other `ldtype` values raise an error.
 """
 function ld_bol_D0(ldtype::Integer, ld1::Real, ld2::Real)
     if ldtype == 0
@@ -156,38 +150,21 @@ _ldspec(p) = (ldtype = Int(get(p, :ldtype, 0)),
     crossbody_kernels(c1, n1, ld1, c2, n2, ld2; epsC=EPS_COSTHETA, T=Float64)
         -> (G, L12, L21)
 
-Dense `n₁ × n₂` irradiation kernels between two convex bodies whose element centroids
-`c1`, `c2` are expressed **in the same frame** and whose outward unit normals are `n1`,
-`n2`.
+Dense `n₁ × n₂` irradiation kernels between two convex bodies, from element centroids `c1`,
+`c2` (in the same frame) and outward unit normals `n1`, `n2`. `ld1`, `ld2` are the
+bolometric laws `(ldtype=, ld1=, ld2=)`.
 
-* `G[i,j] = cosθ_i cosθ_j / (π s²)` — the Lambert kernel, zero unless both cosines
-  exceed `epsC` (`cos 89.5°`, PHOEBE's grazing cutoff, which also keeps `1/s²` from
-  blowing up on near-tangential pairs).
-* `L12[i,j] = G[i,j] · D₂(cosθ_j)/(D0₂/π)` — star 2 emitting toward star 1, limb-darkened.
-* `L21[i,j] = G[i,j] · D₁(cosθ_i)/(D0₁/π)` — star 1 emitting toward star 2 (used
-  transposed).
+* `G[i,j] = cosθ_i cosθ_j / (π s²)`, the Lambert kernel; zero unless both cosines exceed
+  `epsC` (`cos 89.5°`, PHOEBE's grazing cutoff).
+* `L12[i,j] = G[i,j] · D₂(cosθ_j)/(D0₂/π)`: star 2 emitting toward star 1.
+* `L21[i,j] = G[i,j] · D₁(cosθ_i)/(D0₁/π)`: star 1 emitting toward star 2 (used transposed).
 
-[`ld_bol_D0`](@ref) returns `D0/π` directly, so the weight is a plain
-`ld_bol(μ) / ld_bol_D0(...)`.
+`L12 = L21 = G` for uniform laws. Emitter areas are applied in [`solve_radiosity`](@ref).
 
-`L12 ≡ L21 ≡ G` for uniform bolometric laws. The emitter areas are *not* folded in: they
-multiply the flux vectors inside [`solve_radiosity`](@ref).
-
-Memory is `3·n₁·n₂` elements — 57 MB at 3072×768 in Float64. Pass `T=Float32` (ample: the
-radiosity ratios are O(1) and the mesh truncation error dominates) or coarsen the
-tessellation when running many frames.
-
-This is the dominant single cost of a reflection evaluation, so the pair loop is threaded
-over `j`; each thread owns a disjoint set of columns of `G`/`L12`/`L21`, so no
-synchronisation is needed. Measured at 3072×768 (BenchmarkTools, minimum):
-
-    1 thread                6.83 ms
-    32 threads              2.07 ms      (3.3×, not 32× — it is memory-bandwidth bound,
-    32 threads, Float32     1.14 ms       writing 54 MiB across three matrices; Float32
-                                          halves the traffic and nearly halves the time)
-
-For context, a full frame (geometry + two temperature maps + kernels + solve) is ~5 ms,
-of which the Roche root solve is ~1 ms and `solve_radiosity` itself ~0.5 ms.
+Memory is `3·n₁·n₂` elements of type `T`: 57 MB at 3072×768 in `Float64`, half in
+`Float32`, which is sufficient. The loop is threaded over `j`. At 3072×768 it takes 6.8 ms
+on 1 thread, 2.1 ms on 32 threads and 1.1 ms on 32 threads in `Float32` (memory-bandwidth
+bound). A full frame (geometry, two temperature maps, kernels, solve) takes about 5 ms.
 """
 function crossbody_kernels(c1::AbstractMatrix, n1::AbstractMatrix, ld1,
                            c2::AbstractMatrix, n2::AbstractMatrix, ld2;
@@ -233,18 +210,16 @@ end
                     method=:horvat, epsF=1e-9, maxiter=100)
         -> (Fout_1, Fout_2, Fin_1, Fin_2, niter)
 
-Fixed-point solution of the two-body radiosity problem. `G`, `L12`, `L21` come from
-[`crossbody_kernels`](@ref); `A` are true 3-D element areas, `R` the bolometric albedos
-(scalars or per-element vectors) and `F0 = σT⁴` the intrinsic radiant exitances.
+Solve the two-body radiosity problem by fixed-point iteration. `G`, `L12`, `L21` come from
+[`crossbody_kernels`](@ref); `A1`, `A2` are 3-D element areas, `R1`, `R2` the bolometric
+albedos (scalars or per-element vectors) and `F0 = σT⁴` the intrinsic exitances.
 
-`method = :horvat` (PHOEBE's default) transports the *direct* irradiation with the
-emitter's limb darkening and re-emits the reflected component as a Lambert source;
-`:wilson` keeps the limb-darkened kernel at every scattering order. Each sweep is four
-`gemv`s; convergence is typically 3–10 sweeps at realistic albedos.
+`method = :horvat` (PHOEBE's default) applies the emitter's limb darkening to the direct
+irradiation and re-emits the reflected light as a Lambert source; `:wilson` uses the
+limb-darkened kernel at every order. Each sweep is four matrix–vector products; convergence
+takes 3–10 sweeps at typical albedos.
 
-`epsF` is a relative L∞ tolerance. PHOEBE uses 1e-12 in double precision; the default
-here is looser because ROTIR meshes are usually Float32 and the geometric truncation
-error dominates long before that.
+`epsF` is a relative L∞ tolerance (PHOEBE uses 1e-12).
 """
 function solve_radiosity(G::AbstractMatrix, L12::AbstractMatrix, L21::AbstractMatrix,
                          A1::AbstractVector, A2::AbstractVector,
@@ -303,13 +278,11 @@ end
     reflection_kernels(star1, star2; ldbol1=(ldtype=0,), ldbol2=(ldtype=0,),
                        kernel_eltype=Float64) -> (G, L12, L21, A1, A2)
 
-Geometry half of the radiosity problem: the view-factor kernels and true 3-D element
-areas for a pair of components placed by `center_offsets`.
+View-factor kernels and 3-D element areas for two components placed by `center_offsets`.
 
-Split out of [`handle_reflection`](@ref) because it depends only on the *geometry* and the
-bolometric LD laws — not on the albedos or the temperature maps. Scanning albedo at a
-fixed epoch therefore builds these once and passes them back in via the `kernels`
-keyword, which is the expensive part avoided (2.4 M pair evaluations at 3072×768).
+They depend only on the geometry and the bolometric laws. Pass the result to
+[`handle_reflection`](@ref) as `kernels` to reuse it across an albedo scan. Raises an error
+if both components have the same centre.
 """
 function reflection_kernels(star1, star2; ldbol1 = (ldtype = 0,), ldbol2 = (ldtype = 0,),
                             kernel_eltype::Type = Float64)
@@ -334,25 +307,22 @@ end
                       albedo1=0.6, albedo2=0.6,
                       ldbol1=(ldtype=0,), ldbol2=(ldtype=0,),
                       method=:horvat, epsF=1e-9, maxiter=100, verbose=false,
-                      kernels=nothing)
+                      kernel_eltype=Float64, kernels=nothing)
         -> (tmap1_heated, tmap2_heated)
 
 Heat both components' intrinsic (gravity-darkened) temperature maps by their mutual
-irradiation — the analogue of PHOEBE's `System.handle_reflection`.
+irradiation, as PHOEBE's `System.handle_reflection` does.
 
-The two meshes are placed in a common frame using `center_offsets`, which
-[`create_binary_geometry`](@ref) fills with the secondary's sky-frame offset. Calling
-this on stars built by plain `create_star` (both offsets `[0,0,0]`) would put the two
-components on top of each other, so it errors out in that case.
+The meshes are placed using `center_offsets`, which [`create_binary_geometry`](@ref) sets.
+Stars built with `create_star` (both offsets `[0,0,0]`) raise an error.
 
-`albedo` is the bolometric albedo (PHOEBE's `irrad_frac_refl_bol`, default 0.6); the
-remaining fraction is lost. `ldbol` selects the *bolometric* limb-darkening law of each
-irradiator — a NamedTuple `(ldtype=, ld1=, ld2=)` with `ldtype = 0` meaning Lambert (the
-default, and what PHOEBE falls back to when no bolometric LD model is set). These are
-**not** the passband `ld1`/`ld2` that shape `ldmap`.
-
-Pass `kernels` (from [`reflection_kernels`](@ref)) to reuse the geometry across an albedo
-scan at fixed epoch.
+- `albedo1`, `albedo2`: bolometric albedos (PHOEBE's `irrad_frac_refl_bol`); the rest of the
+  absorbed flux is lost.
+- `ldbol1`, `ldbol2`: bolometric limb-darkening law of each irradiator, `(ldtype=, ld1=, ld2=)`;
+  `ldtype = 0` is Lambert (PHOEBE's fallback). Separate from the passband `ld1`/`ld2`.
+- `method`, `epsF`, `maxiter`: see [`solve_radiosity`](@ref). Warns if `maxiter` is reached.
+- `kernel_eltype`: element type of the kernels.
+- `kernels`: output of [`reflection_kernels`](@ref), to reuse across an albedo scan.
 
 Returns new arrays; the inputs are not modified.
 """

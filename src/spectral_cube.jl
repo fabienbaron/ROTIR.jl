@@ -39,9 +39,7 @@ contributes at the observed wavelength `λ_obs`:
 
     λ_rest = λ_obs / (1 + v_rad/c)
 
-The INVERSE of [`doppler_lambda`](@ref), and the one a spectral cube needs: the channel is
-fixed by the instrument and the question is which part of each tessel's rest-frame spectrum
-lands in it. Broadcasts, so `λ_obs` may be a scalar and `v_rad` a per-tessel vector.
+The inverse of [`doppler_lambda`](@ref). Broadcasts over `λ_obs` and `v_rad`.
 """
 @inline function rest_lambda(λ_obs, v_rad)
     # Typed constant, not the bare Float64 `_C_KMS` — see the note in `doppler_lambda`. This
@@ -54,12 +52,9 @@ end
 """
     SurfaceState{T}
 
-Everything per-tessel that a spectral cube needs and that does NOT depend on wavelength:
-effective temperature, `logg`, the limb cosine μ, and the line-of-sight velocity.
-
-Built once per epoch by [`surface_state`](@ref) and reused across every channel — which is
-the whole reason it exists, since `logg_map` and `los_velocity` would otherwise be recomputed
-tens of times per epoch for no change in their answer.
+Wavelength-independent per-tessel quantities of one epoch: `Teff`, `logg`, μ, the
+line-of-sight velocity `v_los`, and the visible tessels' projected areas and weights. Built by
+[`surface_state`](@ref) and reused for every channel.
 """
 struct SurfaceState{T}
     Teff::Vector{T}
@@ -76,13 +71,12 @@ end
 
 Assemble the wavelength-independent per-tessel state of one epoch.
 
-`temperature_map` defaults to `parametric_temperature_map(star_params, star)`, i.e. the
-gravity-darkened map under whichever law `star_params` names. Pass one explicitly to use a
-reconstructed or spotted map instead.
+`temperature_map` defaults to `parametric_temperature_map(star_params, star)`; pass a
+reconstructed or spotted map to use it instead.
 
-Requires a distance: both `logg` and the velocity are meaningless without one (see
-`src/stellar_physics.jl`). Warns if `ldtype ≠ 0`, because an atmosphere provider and a
-limb-darkening law together count the limb twice.
+Raises an error if `star_params` has no distance `d`. The weights include `star.ldmap`, so
+with a provider that contains limb darkening use `ldtype = 0`
+([`check_provider_consistency`](@ref) reports the mismatch).
 """
 function surface_state(star, star_params; temperature_map = nothing)
     has_physical_scale(star_params) || throw(ArgumentError(
@@ -107,11 +101,8 @@ end
 """
     channel_intensity(provider, state, λ_obs) -> Vector
 
-Per-tessel intensity at one observed wavelength, with each tessel evaluated at its own
-Doppler-shifted rest wavelength.
-
-This is where the velocity field enters the observables. With a provider that ignores λ (or
-a zero velocity field) it reduces to a single grid lookup per tessel.
+Per-tessel intensity at observed wavelength `λ_obs`, each tessel evaluated at its rest
+wavelength [`rest_lambda`](@ref)`(λ_obs, v_los)`.
 """
 channel_intensity(p::IntensityProvider, st::SurfaceState, λ_obs) =
     provider_intensity(p, st.Teff, st.logg, st.μ, rest_lambda(λ_obs, st.v_los))
@@ -119,18 +110,12 @@ channel_intensity(p::IntensityProvider, st::SurfaceState, λ_obs) =
 """
     line_profile(provider, state, λ_channels) -> Vector
 
-Disk-integrated flux per channel — the spectrum the star would show, from the same surface
-and the same intensities the visibilities are built from.
+Disk-integrated flux per channel: `Σ I_i · w_i · dA_i` over visible tessels, with `w` the
+visibility weights times `ldmap` and `dA` the projected areas. This is the normalisation
+used by the visibilities, without a Fourier transform (about 100× cheaper than
+[`spectral_cvis`](@ref)).
 
-**No Fourier transform is involved**, so this is two orders of magnitude cheaper than
-[`spectral_cvis`](@ref) and is the path a purely spectroscopic fit (Doppler imaging) wants.
-The flux is `Σ I_i · w_i · dA_i` over visible tessels, with `w` the soft-visibility (times
-`ldmap`, unity under `ldtype = 0`) weights and `dA` the projected areas — exactly the
-normalisation `fused_cvis_parts` divides its transform by, so the profile and the
-visibilities cannot disagree about the star.
-
-Returns absolute flux in the provider's units. Divide by a continuum channel for a
-normalised profile; see [`normalize_profile`](@ref).
+Returns flux in the provider's units; [`normalize_profile`](@ref) normalises it.
 """
 function line_profile(p::IntensityProvider, st::SurfaceState{T},
                       λ_channels::AbstractVector) where {T}
@@ -148,16 +133,12 @@ end
 
 Complex visibilities and total flux per wavelength channel, for one epoch.
 
-`data_channels` is a vector of `OIdata` for the SAME epoch at different wavelengths — i.e. a
-column of what `readoifits(..., polychromatic = true)` returns, which every demo currently
-throws away with `data = data_all[1, :]`. Each channel carries its own `uv`, because `uv` is
-`B/λ` and so is channel-specific; that is why the transform has to be redone per channel
-while the geometry is not.
+`data_channels` is a vector of `OIdata` for one epoch at different wavelengths (a column of
+`readoifits(...; polychromatic = true)`); each carries its own `uv`. `λ` overrides the
+channel wavelengths.
 
-`cvis[c]` is normalised (`F/flux`) exactly as `fused_cvis` is, so it is directly
-comparable to `poly_to_cvis` on a single channel. `flux[c]` is the same quantity
-[`line_profile`](@ref) returns — computed here as a by-product of the normalisation rather
-than a second time.
+`cvis[c]` is normalised (`F/flux`) as in `fused_cvis`. `flux[c]` equals
+[`line_profile`](@ref)'s value.
 """
 function spectral_cvis(p::IntensityProvider, st::SurfaceState{T}, star,
                        data_channels::AbstractVector; λ = nothing) where {T}
@@ -192,11 +173,8 @@ end
 """
     continuum_mask(λ, window) -> BitVector
 
-`true` for channels OUTSIDE `window = (λ_lo, λ_hi)`, i.e. the continuum reference channels.
-
-Errors if fewer than two channels fall outside: a differential quantity measured against a
-single channel carries that channel's noise into every point of the line, and against none
-is undefined.
+`true` for channels outside `window = (λ_lo, λ_hi)`: the continuum channels. Raises an
+error if fewer than two channels are outside.
 """
 function continuum_mask(λ::AbstractVector, window::Tuple{<:Real,<:Real})
     m = .!(window[1] .<= λ .<= window[2])
@@ -216,13 +194,11 @@ Differential visibility amplitude and phase across a line, relative to the conti
     dvisamp[c] = |V_c| / |V_cont|
     dvisphi[c] = arg(V_c) − arg(V_cont)      [degrees, wrapped to (−180, 180]]
 
-with `V_cont` the mean of the COMPLEX visibility over the continuum channels
-([`continuum_mask`](@ref)). Averaging the complex visibility rather than the phases is what
-avoids a wrap-around bias when the continuum phase sits near ±180°; it is also what an
-instrument pipeline does.
+with `V_cont` the mean complex visibility over the continuum channels
+([`continuum_mask`](@ref)).
 
-Each returned array is `(nuv, nchannel)`. Requires every channel to share a `uv` layout —
-true for a polychromatic split of one exposure, and checked.
+Each returned array is `(nuv, nchannel)`. All channels must have the same number of uv
+points.
 """
 function differential_observables(cvis::AbstractVector{<:AbstractVector{<:Complex}},
                                   λ::AbstractVector, window::Tuple{<:Real,<:Real})
@@ -254,12 +230,8 @@ end
 """
     normalize_profile(F, λ, window) -> Vector
 
-`F` divided by its mean over the continuum channels — the normalised line profile a
-spectroscopic dataset is compared against.
-
-Uses the same [`continuum_mask`](@ref) as the differential visibilities, so the two are
-normalised against the same reference and a residual in one is comparable to a residual in
-the other.
+`F` divided by its mean over the continuum channels ([`continuum_mask`](@ref), as for
+[`differential_observables`](@ref)).
 """
 function normalize_profile(F::AbstractVector, λ::AbstractVector,
                            window::Tuple{<:Real,<:Real})
@@ -275,9 +247,7 @@ Equivalent width of the line in `F`, in the units of `λ`.
     W = Σ (1 − F_c/F_cont) Δλ_c
 
 over the channels inside `window`, with `Δλ` from the channel spacing. Positive for
-absorption. A cheap scalar summary for checking that a profile behaves as the geometry says
-it should — it must, for instance, be independent of inclination for a rigidly rotating star
-with no spots, because rotation redistributes flux in wavelength without removing any.
+absorption.
 """
 function line_equivalent_width(F::AbstractVector, λ::AbstractVector,
                                window::Tuple{<:Real,<:Real})

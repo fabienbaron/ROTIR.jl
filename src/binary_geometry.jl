@@ -31,9 +31,9 @@
 #   ŷ = ẑ × x̂
 #
 # BOTH Roche lobes use this SAME x̂. Reading the potentials:
-#   compute_potential_primary   puts the companion at +D x̂ (geometry_rochelobe.jl:135)
-#   compute_potential_secondary puts the companion at −D x̂ (geometry_rochelobe.jl:148,
-#       confirmed by solve_R_L1 using θ = −π/2 for the secondary at :176)
+#   compute_potential_primary   puts the companion at +D x̂
+#   compute_potential_secondary puts the companion at −D x̂ (solve_R_L1 uses θ = −π/2 for
+#       the secondary)
 # i.e. the primary's body +x̂ points AT the secondary and the secondary's body +x̂ points
 # AWAY from the primary — which is the same direction in space. One matrix orients both.
 # ---------------------------------------------------------------------------
@@ -58,10 +58,9 @@ Orientation of the binary at time `tepoch_jd` (JD).
 * `r_rel_sky` — the secondary's offset from the primary in the sky frame (mas),
   `= R * [D_mas, 0, 0]`.
 
-`R` is built from `binary_orbit_abs` and `compute_coeff` directly, so it cannot drift out
-of sync with the orbit used everywhere else (`orbit_to_rotir_offset`, `plot2d_binary`).
-`bparams` may be either a `binaryparameters` NamedTuple or a Roche `star_params`
-NamedTuple — both carry `i, Ω, ω, P, a, e, T0, q, dP`.
+`R` is built from `binary_orbit_abs` and `compute_coeff`, the same orbit as
+`orbit_to_rotir_offset` and `plot2d_binary`. `bparams` is a `binaryparameters` NamedTuple or
+a Roche `star_params` NamedTuple; both carry `i, Ω, ω, P, a, e, T0, q, dP`.
 """
 function binary_frame(bparams, tepoch_jd)
     x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, Float64(tepoch_jd))
@@ -93,21 +92,18 @@ end
                        secondary=false, T=eltype(tessels), κ=T(50),
                        volume_conserving=false, omega=nothing)
 
-One component of a binary, deformed by the *shared* instantaneous separation `D(t)` and
-oriented by the *shared* [`binary_frame`](@ref) rather than by a free spin phase.
+One component of a binary at `tepoch_jd` (JD), deformed by the binary's instantaneous
+separation `D(t)` and oriented by [`binary_frame`](@ref).
 
-Identical to [`create_star`](@ref) except for those two substitutions, so everything
-downstream (normals, soft visibility, projection, `ldmap`, `setup_oi!`, `polyft`) is
-unchanged. Works for any `surface_type`; only type 3 (Roche) actually uses `D`.
+Same as [`create_star`](@ref) otherwise (normals, soft visibility, projection, `ldmap`).
+Works for any `surface_type`; only type 3 (Roche) uses `D`.
 
-`volume_conserving=true` holds the component's *volume* fixed as `D(t)` varies (PHOEBE's
-choice, and the physically right invariant on an orbital timescale) instead of holding
-`rpole` fixed. It costs a root solve per call — see [`roche_omega_for_volume`](@ref) and
-[`roche_omega_table`](@ref) for the cached version. `omega` short-circuits it with a
-precomputed equipotential.
+`volume_conserving=true` holds the component's volume fixed as `D(t)` varies, as PHOEBE
+does, instead of `rpole`; it costs a root solve per call ([`roche_omega_for_volume`](@ref)).
+`omega` gives the equipotential directly, e.g. from [`roche_omega_table`](@ref).
 
-The vertices are centred on this component. Its offset from the primary lives in
-`center_offsets`, set by [`create_binary_geometry`](@ref).
+The vertices are centred on this component; [`create_binary_geometry`](@ref) sets its
+offset in `center_offsets`.
 """
 function create_binary_star(tessels::tessellation, star_params, bparams, tepoch_jd;
                             secondary=false, T=eltype(tessels), κ=T(50),
@@ -139,14 +135,13 @@ end
                            omega1=nothing, omega2=nothing) -> (star1, star2)
 
 Both components at one epoch, in one frame. The secondary is built with `secondary=true`
-(its potential and gravity use the inverted mass ratio — `params2.q` must already be
-`M₁/M₂`, as in `demos/spica_binary_roche.jl`).
+Each component's `q` is its own `M_companion/M_self`: `params1.q = M₂/M₁`,
+`params2.q = M₁/M₂` (see [`roche_q`](@ref)).
 
 The secondary's sky-frame offset from the primary is stored in `star2.center_offsets`
-(West, North, toward-observer; mas), with `star1.center_offsets = [0,0,0]`. That single
-field is the whole interface used by [`handle_reflection`](@ref) and by the binary
-plotting/animation code to place the two meshes relative to each other — the vertex
-arrays themselves stay centred on their own component, so `polyft` and
+(West, North, toward observer; mas), and `star1.center_offsets = [0,0,0]`.
+[`handle_reflection`](@ref) and the binary plotting and animation code place the meshes with
+it. The vertex arrays stay centred on their own component, so `polyft` and
 `binary_phase_shift` are unaffected.
 """
 function create_binary_geometry(tessels1::tessellation, params1,
@@ -198,17 +193,15 @@ Volume (in units of a³) enclosed by the `Ω` equipotential, evaluated on `tesse
 `V = (1/3) Σᵢ rᵢ³ ΔΩᵢ` with `rᵢ` the radius at each tessel centre and `ΔΩᵢ` its solid
 angle on the unit sphere.
 
-This is deliberately the volume of the *mesh ROTIR actually integrates over*, not the
-exact analytic volume. It is what makes [`roche_omega_for_volume`](@ref) well-posed —
-the same discretisation appears on both sides of `V(Ω) = V_target`, so the conserved
-quantity is exactly the thing the forward model sees. It is also ~5× cheaper than
-[`roche_volume`](@ref) and uses the same safe `rpole` seed as `update_roche_radii`.
+This is the volume of the mesh, not the analytic volume, so
+[`roche_omega_for_volume`](@ref) uses the same discretisation on both sides of
+`V(Ω) = V_target`. About 5× faster than [`roche_volume`](@ref).
 """
 function roche_mesh_volume(tessels::tessellation, star_params, D, Ω; secondary=false)
     p = star_params
     pf = secondary ? compute_potential_secondary : compute_potential_primary
     async_ratio = synchronicity(p)
-    q = p.q
+    q = roche_q(p; secondary = secondary)
     r0 = p.rpole / p.a          # the pole is the minimum radius: always inside the surface
     dΩ = tessel_solid_angles(tessels)
     # Angles follow the mesh; the ACCUMULATOR stays Float64 regardless. Same rule as the χ²:
@@ -226,13 +219,11 @@ end
 """
     tessel_solid_angles(tessels) -> Vector{eltype(tessels)}
 
-Solid angle subtended by each tessel on the unit sphere, from the two-triangle area of
-its unit-sphere corners. For HEALPix these are all equal (`≈ 4π/npix`); for the
-latitude/longitude scheme they are not, hence the explicit computation.
+Solid angle of each tessel on the unit sphere, from the two-triangle area of its corners,
+renormalised so that `Σ ΔΩ = 4π`. Equal (`≈ 4π/npix`) for HEALPix, not for the
+latitude/longitude scheme.
 
-Returns the **mesh's own float type**. The renormalising sum is accumulated in `Float64`
-and the scale factor narrowed back, so a Float32 mesh gives `Σ ΔΩ = 4π` to ~3e-8 relative
-rather than being silently widened to `Float64`.
+Returns the mesh's float type; the normalising sum is accumulated in `Float64`.
 """
 function tessel_solid_angles(tessels::tessellation)
     n = tessels.npix
@@ -256,30 +247,26 @@ end
     roche_omega_for_volume(tessels, star_params, D; secondary=false, V_target=nothing,
                            D_ref=1.0, rtol=1e-6) -> Ω
 
-Surface equipotential giving this component the same volume at separation `D` as it has
-at `D_ref` with its nominal `rpole`.
+Surface equipotential giving this component the same volume at separation `D` (units of
+a) as it has at `D_ref` with its nominal `rpole`. `V_target` overrides that volume.
 
-`update_roche_radii` normally holds `rpole` fixed and lets Ω follow `D`, which makes the
-star's *volume* breathe over an eccentric orbit. Physically the volume is the invariant
-on an orbital timescale — PHOEBE re-solves Ω from a fixed equivalent-volume radius
-(`universe.py:1421-1439`) — and the difference between the two choices *is* the
-ellipsoidal variation this whole exercise is about.
+With a fixed `rpole`, the volume changes over an eccentric orbit; PHOEBE instead re-solves Ω
+from a fixed equivalent-volume radius (`universe.py:1421-1439`).
 
-Volume is monotonically decreasing in Ω, so the solve is a bracket plus Brent on
-[`roche_mesh_volume`](@ref). Each evaluation costs `npix` Halley solves, so prefer
-[`roche_omega_table`](@ref) when sweeping an orbit.
+Volume decreases monotonically with Ω; the solve brackets and then uses Brent on
+[`roche_mesh_volume`](@ref). Each evaluation costs `npix` Halley solves; use
+[`roche_omega_table`](@ref) to sweep an orbit. If no bracket is found it warns and returns
+the fixed-`rpole` equipotential.
 
-**Reference phase.** `D_ref = 1.0` means the conserved volume is the one the star would
-have at separation `D = a`. Codes differ here and the choice shifts the absolute size
-slightly (not the modulation): ELISa also references `components_distance = 1.0`, whereas
-Wilson–Devinney and PHOEBE legacy reference **periastron** (`D = 1 − e`). PHOEBE 2's
-`requiv` is phase-independent. Pass `D_ref = 1 - bparams.e` to match the WD convention.
+`D_ref = 1.0` conserves the volume at `D = a`, as ELISa does. Wilson–Devinney and PHOEBE
+legacy use periastron: pass `D_ref = 1 - bparams.e`. PHOEBE 2's `requiv` is
+phase-independent. The choice changes the absolute size slightly, not the modulation.
 """
 function roche_omega_for_volume(tessels::tessellation, star_params, D; secondary=false,
                                 V_target=nothing, D_ref=1.0, rtol=1e-6)
     p = star_params
     async_ratio = synchronicity(p)
-    q = p.q
+    q = roche_q(p; secondary = secondary)
     pot_fun = secondary ? compute_potential_secondary : compute_potential_primary
 
     Ω_ref, _ = pot_fun(p.rpole / p.a, D_ref, 0.0, 0.0, q, async_ratio)
@@ -312,9 +299,8 @@ end
     roche_omega_table(tessels, star_params, bparams; secondary=false, npoints=15) -> Ω(D)
 
 Precompute the volume-conserving equipotential on a grid of separations spanning
-`[1−e, 1+e]` (units of a) and return a linear-interpolating closure `Ω(D)`. One table
-amortises the solve across a whole movie or epoch set; the interpolation error is far
-below the mesh resolution.
+`[1−e, 1+e]` (units of a) and return a linear-interpolating closure `Ω(D)`, constant
+outside that range.
 """
 function roche_omega_table(tessels::tessellation, star_params, bparams;
                            secondary=false, npoints=15)
@@ -338,9 +324,8 @@ end
 """
     projected_separation(bparams, tepoch_jd) -> ρ
 
-Sky-projected centre-to-centre separation (mas) — the quantity that decides whether the
-two components overlap on the image plane, as opposed to the 3-D separation returned by
-[`binary_frame`](@ref).
+Sky-projected centre-to-centre separation (mas). [`binary_frame`](@ref) returns the 3-D
+separation.
 """
 function projected_separation(bparams, tepoch_jd)
     ox, oy = orbit_to_rotir_offset(bparams, Float64(tepoch_jd))
@@ -350,12 +335,10 @@ end
 """
     projected_limb_profile(star; nbins=72) -> (r_max, nbins)
 
-Azimuthal profile of a component's projected outline: the maximum projected radius of any
-vertex, binned by position angle about the component's own projected centre.
-
-A tidally distorted lobe is not a circle on the sky, so a single radius would either
-over- or under-occult depending on orientation. `nbins = 72` (5° bins) resolves the ~10%
-tidal elongation of a Spica-like lobe with margin.
+Azimuthal profile of a component's projected outline: the maximum projected radius (mas)
+of any vertex in each of `nbins` position-angle bins about the component's projected
+centre. Empty bins are interpolated from their neighbours. The default 5° bins resolve the
+~10 % tidal elongation of a Spica-like lobe.
 """
 function projected_limb_profile(star; nbins::Int = 72)
     T = float(real(eltype(star.proj_west)))
@@ -395,16 +378,9 @@ end
 Convex hull of a 2-D point set, counter-clockwise, by Andrew's monotone chain
 (O(n log n)).
 
-Used for the exact occultation path: `polygon_convex_clip_area` intersects half-planes,
-which only reproduces the clip polygon if that polygon is genuinely convex. An
-azimuthally-sampled outline is *not* — with a coarse mesh it is spiky, and the half-plane
-intersection then collapses to nothing. The hull of the projected vertices is convex by
-construction and is also the geometrically correct silhouette, since the projection of a
-convex body is convex.
-
-(For a lobe close to filling its Roche surface the true silhouette has an L1 cusp and is
-slightly non-convex; the hull then very slightly over-occults near the tip. Detached
-systems, where the silhouette really is convex, are exact.)
+`occultation_weights(...; method=:exact)` clips against this hull, since
+`polygon_convex_clip_area` requires a convex polygon. For a detached lobe the hull is the
+silhouette; for a lobe near fill-out (L1 cusp) it slightly over-occults near the tip.
 """
 function convex_hull_2d(xs::AbstractVector{<:Real}, ys::AbstractVector{<:Real})
     T = float(promote_type(eltype(xs), eltype(ys)))
@@ -443,17 +419,11 @@ by linear interpolation between the bin centres of [`projected_limb_profile`](@r
 end
 
 """
-    silhouette_polygon(star; nbins=72) -> (sx, sy)
+    silhouette_polygon(star; nbins=72) -> (sx, sy, profile)
 
-The component's projected outline as an explicit closed polygon in `(East, North)`,
-**relative to its own projected centre** and wound counter-clockwise (as
-`polygon_convex_clip_area` requires).
-
-Built from [`projected_limb_profile`](@ref): vertex `k` sits at the bin-centre angle with
-that bin's maximum projected vertex radius. For a detached lobe the true silhouette is
-convex — the projection of a convex body always is — so this is its convex hull sampled
-azimuthally; for a near-fillout lobe with an L1 cusp it degrades gracefully to the
-star-shaped outline rather than over-occulting the way a strict hull would.
+The component's projected outline as a closed counter-clockwise polygon in `(East, North)`,
+relative to its own projected centre, and the [`projected_limb_profile`](@ref) it is built
+from. Vertex `k` is at the centre angle of bin `k`, at that bin's radius.
 """
 function silhouette_polygon(star; nbins::Int = 72)
     prof = projected_limb_profile(star; nbins=nbins)
@@ -469,42 +439,27 @@ end
     occultation_weights(star1, star2; method=:exact, softness=nothing, nbins=72)
         -> (w1, w2, occulting)
 
-Soft mutual-occultation factors in `[0,1]`, one per tessel, to multiply into each
-component's `vis_weights`.
+Mutual-occultation factors in `[0,1]`, one per tessel, to multiply into each component's
+`vis_weights`. `binary_cvis(...; occultation=...)` applies them.
 
-`binary_cvis` otherwise sums the two components unconditionally, so the hidden face of the
-far star keeps contributing flux once the disks overlap on the sky. This supplies the
-missing factor, in the same differentiable sigmoid style as `soft_visibility`.
-
-The two components are treated as disjoint convex bodies (the same assumption the
-radiosity solver makes), so whichever centre has the larger toward-observer coordinate is
-in front *everywhere*: only the far star is occulted, and its returned weights are
-
-    wᵢ = σ( (dᵢ − R_limb(φᵢ)) / width )
-
-with `dᵢ`, `φᵢ` the tessel centre's projected distance and position angle from the near
-star's projected centre. `R_limb` follows the near star's actual (possibly tidally
-distorted) outline via [`projected_limb_profile`](@ref).
+The components are treated as disjoint convex bodies: the one whose centre is nearer the
+observer (larger third `center_offsets` component) is in front everywhere, so only the far
+star's weights differ from 1. The near star's weights are all 1.
 
 `method`:
 
-* `:exact` (default) — the **fraction of each far tessel's projected area** that survives,
-  by clipping its quad against the silhouette polygon
-  ([`polygon_convex_clip_area`](@ref)). No free parameters, and the answer no longer
-  depends on the mesh: a tessel straddling the limb is partially occulted, as it should
-  be. Only tessels that actually straddle pay for the clip — the rest are settled by a
-  cheap per-tessel circle test — so this costs about the same as `:soft`.
-* `:soft` — the tessel *centre* is either in or out, smoothed by a sigmoid of width
-  `softness` (a fraction of the limb radius, defaulting to the mesh scale
-  `√(4π/npix)/2`). Cheaper to differentiate through (C∞ rather than C0), but its accuracy
-  is tied to the tessellation: at Spica's closest approach it gives 2.08 % of the
-  primary's flux occulted at nside 3/2 against a converged 2.33 % (−11 %; `:exact` −6 %),
-  because the straddling band is a large fraction of a coarse mesh.
+* `:exact` (default): the fraction of each far tessel's projected quad outside the near
+  star's convex hull ([`convex_hull_2d`](@ref), [`polygon_convex_clip_area`](@ref)). Only
+  tessels straddling the limb are clipped; the others are classified by a circle test.
+* `:soft`: `wᵢ = σ((dᵢ − R_limb(φᵢ)) / (width·R_limb(φᵢ)))`, with `dᵢ`, `φᵢ` the tessel
+  centre's projected distance and position angle from the near star's centre and `R_limb`
+  from [`projected_limb_profile`](@ref). `width = softness`, default `√(4π/npix)/2`. C∞,
+  but its accuracy depends on the mesh: at Spica's closest approach, nside 3/2, it gives
+  2.08 % of the primary's flux occulted against a converged 2.33 % (`:exact`: 2.18 %).
 
-**Fast path:** an O(1) bounding-circle test on the projected separation against the sum of
-the two maximum projected radii. When the disks are disjoint — the overwhelmingly common
-case — both weight vectors are `nothing`, which callers treat as "no occultation" with no
-allocation. `occulting` is `0` (none), `1` (star 1 occults star 2) or `2`.
+When the bounding circles do not overlap it returns `(nothing, nothing, 0)` without
+allocating; callers treat `nothing` as no occultation. `occulting` is `0` (none), `1`
+(star 1 occults star 2) or `2`.
 """
 function occultation_weights(star1, star2; method::Symbol = :exact,
                              softness = nothing, nbins::Int = 72)
@@ -596,15 +551,12 @@ end
 """
     check_binary_overlap(star1, star2, bparams, tepochs_jd; verbose=true) -> Vector{Bool}
 
-Warn where the two components overlap on the sky.
+Flags the epochs (JD) at which the two components overlap on the sky, and warns for each.
+`R₁`, `R₂` are the maximum projected radii of the meshes; `star1`, `star2` are one geometry
+or one per epoch.
 
-`binary_cvis` adds the two components' visibilities with **no mutual occultation**: the
-hidden part of the far star still contributes flux. That is harmless while the disks are
-well separated and wrong once they overlap. Spica sits right at the limit
-(R₁+R₂ ≈ 0.43 a versus a projected separation of ≈ 0.44 a at conjunction), so this check
-is not academic — any conclusion drawn from a flagged epoch carries the caveat.
-
-Returns one `Bool` per epoch, `true` where `ρ < R₁ + R₂`.
+Returns one `Bool` per epoch, `true` where `ρ < R₁ + R₂`. Without
+`occultation`, [`binary_cvis`](@ref) is wrong at flagged epochs.
 """
 function check_binary_overlap(star1, star2, bparams, tepochs_jd; verbose=true)
     s1 = star1 isa AbstractVector ? star1 : [star1]

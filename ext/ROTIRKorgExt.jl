@@ -59,18 +59,27 @@ _axis(spec::Tuple{<:Real,<:Real,<:Integer}) = collect(range(float(spec[1]), floa
 _axis(v::AbstractVector) = collect(float.(v))
 
 """
-    build_korg_grid(; Teff, logg, μ, λ, linelist, A_X, vmic, continuum_only, verbose)
+    build_korg_grid(; Teff, logg, μ, λ, λ_step, linelist, A_X, vmic, spherical,
+                    continuum_only, verbose) -> RectGrid4
 
-Synthesize a `(Teff, logg, μ, λ)` specific-intensity grid.
+Synthesize a `(Teff, logg, μ, λ)` specific-intensity grid with Korg.
 
-`Teff`, `logg` and `μ` are each either `(lo, hi, n)` or an explicit vector. `λ` is
-`(λ_start_Å, λ_stop_Å)` plus an optional step in Å.
+- `Teff`, `logg`, `μ`: each `(lo, hi, n)` or a vector. Defaults: `Teff = (4000, 7500, 8)`,
+  `logg = (2.5, 4.5, 5)`, `μ` = 10 values from 0.001 to 1 (μ must start above 0).
+- `λ = (start, stop)` in Å (default `(6540, 6580)`), `λ_step = 0.05` Å.
+- `linelist`: default `nothing` uses Korg's VALD solar line list. `A_X = Korg.format_A_X(0)`,
+  `vmic = 1.0` km/s.
+- `spherical = false`: plane-parallel MARCS models. `true` uses spherical models.
+- `continuum_only = false`: `true` uses an empty line list and no hydrogen lines, giving the
+  continuum intensity on the same axes.
 
-## `spherical`: plane-parallel or extended, and why it is your choice
+Returns a [`RectGrid4`](@ref) with `λ` in metres and intensity in erg/s/cm²/Å/sr.
 
-`interpolate_marcs` switches geometry at `logg = 3.5` on its own. This never uses that
-default, because the two give qualitatively different μ dependence and a grid must not mix
-them inside one interpolation:
+## `spherical`
+
+`interpolate_marcs` switches between plane-parallel and spherical models at `logg = 3.5`;
+this function uses the one chosen by `spherical` at every `logg`. The two have different μ
+dependence:
 
 | logg | spherical `I(μ)/I(1)` at μ = .001, .1, .3, .6, .9, 1 | planar `I(1)/I(.001)` |
 |---|---|---|
@@ -78,36 +87,17 @@ them inside one interpolation:
 | 1.0 | 0, 0.0002, 0.44, 0.78, 0.96, 1 | 6.4 |
 | 0.5 | 0, 0, 0.07, 0.70, 0.94, 1 | 12.2 |
 
-A spherical model's intensity **genuinely vanishes** below a μ_min that moves with
-(Teff, logg): those rays pass outside the extended photosphere altogether. That is the sharp
-spherical limb, and it is real — it is what makes spherical limb-darkening tables differ
-from plane-parallel ones at all.
+A spherical model's intensity is zero below a μ_min that depends on (Teff, logg): those rays
+miss the extended photosphere.
 
-`spherical = false` (the default) is what is **self-consistent with a tessellated Roche
-surface**. ROTIR's mesh already carries the global geometry: each tessel is a local patch
-with its own `(Teff, logg, μ)`, and what belongs there is the intensity emerging at angle
-`acos(μ)` from a locally plane-parallel atmosphere. A 1-D *spherical* structure cannot be
-pasted onto a rotationally distorted surface without double-counting extension — its
-extension is spherical, the surface is not. This is also, in effect, what PMOIRED does:
-`rotastar.py:271-273` rescales `newMu = (μ − μ₀)/(1 − μ₀)` with
-`μ₀ = √(1 − (d_inner/d_outer)²)`, which strips the spherical extension back out of a SATLAS
-model to recover a plane-parallel-like law.
+`spherical = false` matches a tessellated Roche surface, where each tessel is a locally
+plane-parallel patch with its own `(Teff, logg, μ)`. PMOIRED (`rotastar.py:271-273`) rescales
+μ to remove the spherical extension from SATLAS models for the same reason.
 
-`spherical = true` is the right choice for a single, genuinely extended star — a ρ Cas or
-RW Cep near `logg = 0.5`, where plane-parallel misses the extension that interferometry can
-actually see. Two things then matter. The μ zero-region is data, not padding, so keep the
-`logg` axis fine enough that interpolation does not smear the edge (it moves with `logg`);
-and ROTIR's μ is measured at the Roche photosphere while the model's is at the outermost
-shell radius, so the two reference radii differ by the atmospheric extension.
-
-`continuum_only = true` runs with an empty linelist and `hydrogen_lines = false`, giving
-the continuum intensity on the same axes — that is Korg's only route to a per-μ continuum,
-since `result.cntm` is a disk-integrated flux rather than an intensity. Useful for
-normalising a line profile; not needed for interferometry, which wants the absolute
-intensity.
-
-Returns a [`RectGrid4`](@ref) with `λ` in **metres** and intensity in Korg's units
-(erg/s/cm²/Å/sr).
+`spherical = true` suits a single extended star (e.g. ρ Cas or RW Cep, `logg ≈ 0.5`). Keep
+the `logg` axis fine enough to resolve the μ_min edge. ROTIR's μ is defined at the Roche
+photosphere and the model's at its outermost shell, so the two differ by the atmospheric
+extension.
 """
 function build_korg_grid(; Teff = (4000.0, 7500.0, 8),
                            logg = (2.5, 4.5, 5),

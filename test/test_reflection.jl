@@ -749,3 +749,46 @@ end
     f1, f2 = create_binary_geometry_multiepochs(tes1, SP1, tes2, SP2, bp_far, ts[1:5])
     @test !any(check_binary_overlap(f1, f2, bp_far, ts[1:5]; verbose = false))
 end
+
+@testset "the secondary's Roche lobe" begin
+    # A component's `q` is M_companion/M_self; the potentials take M₂/M₁ for both components
+    # (`roche_q`). The secondary is checked against the primary through the mass-ratio
+    # symmetry: centred on the secondary and mirrored in x, its potential is q times the
+    # primary's at 1/q, plus a constant.
+    q, D, F = 0.5, 1.0, 1.0
+    let pp = ROTIR.compute_potential_primary, ps = ROTIR.compute_potential_secondary
+        c = ps(0.2, D, 1.0, 0.3, q, F)[1] - q * pp(0.2, D, 1.0, 0.3 + pi, 1/q, F)[1]
+        for r in (0.1, 0.25, 0.35), (θ, φ) in ((pi/2, 0.0), (0.4, 1.0), (2.0, 2.5))
+            @test ps(r, D, θ, φ, q, F)[1] - q * pp(r, D, θ, φ + pi, 1/q, F)[1] ≈ c atol = 1e-12
+        end
+    end
+
+    @test roche_q((q = 0.5,)) == 0.5
+    @test roche_q((q = 2.0,); secondary = true) == 0.5
+
+    # Lobe radii: the secondary at q equals the primary at 1/q.
+    @test ROTIR.fillout_to_rpole(1.0, D, q, F; secondary = true) ≈
+          ROTIR.fillout_to_rpole(1.0, D, 1/q, F) rtol = 1e-8
+    for f in (0.6, 0.9, 1.0)
+        r = ROTIR.fillout_to_rpole(f, D, q, F; secondary = true)
+        @test ROTIR.rpole_to_fillout(r, D, q, F; secondary = true) ≈ f rtol = 1e-6
+    end
+
+    base = merge(default_star_params(3), (rotation_period = default_star_params(3).P,
+                                          fillout_factor_primary = 1.0,
+                                          fillout_factor_secondary = 1.0))
+    p1 = merge(base, (q = q,))
+    p2 = merge(base, (q = 1/q,))
+    a = base.a
+    @test (rl1(p1) + rl1(p2; secondary = true)) / a ≈ D rtol = 1e-6
+    @test max_rpole(D, p2; secondary = true) / a ≈ ROTIR.fillout_to_rpole(1.0, D, 1/q, F) rtol = 1e-8
+
+    # Two lobe-filling components touch at L1.
+    tes = tessellation_healpix(4)
+    r1 = update_roche_radii(tes, p1, D; use_fillout_factor = true, T = Float64)
+    r2 = update_roche_radii(tes, p2, D; use_fillout_factor = true, secondary = true, T = Float64)
+    x1 = maximum(r1 .* tes.unit_xyz[:, :, 1]) / a
+    x2 = maximum(-r2 .* tes.unit_xyz[:, :, 1]) / a
+    @test x1 + x2 ≈ D atol = 2e-3
+    @test x2 < x1                                   # the lighter star has the smaller lobe
+end

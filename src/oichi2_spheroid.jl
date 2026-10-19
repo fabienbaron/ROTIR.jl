@@ -8,13 +8,13 @@ end
 """
     poly_to_cvis(x, star; intensity_model=:linear, band=nothing)
 
-Normalized complex visibilities of a single component.
+Flux-normalised complex visibilities of one component, from the `polyft` that `setup_oi!`
+stored in `star`.
 
-`x` is the per-tessel map. With `intensity_model = :linear` (the historical default) it is
-used directly as surface brightness — the Rayleigh–Jeans proxy, adequate in H and K.
-With `:planck` it is treated as a *temperature* map and converted to band intensity by
-[`intensity`](@ref); `band` is the wavelength in metres (see [`band_of`](@ref)). Use the
-Planck form for R/V-band data, where the proxy misstates flux ratios by >10 %.
+With `intensity_model = :linear` (default) `x` is the surface brightness (Rayleigh–Jeans
+proxy, adequate in H and K). With `:planck`, `x` is a temperature map converted to intensity
+by [`intensity`](@ref) at wavelength `band` (metres; see [`band_of`](@ref)). In R and V the
+linear proxy misstates flux ratios by more than 10 %.
 """
 function poly_to_cvis(x, star; intensity_model::Symbol = :linear, band = nothing)
    indx = star.index_quads_visible
@@ -57,18 +57,12 @@ end
 """
     setup_oi!(data, stars)
 
-Precompute the polygon flux and Fourier transform each epoch's geometry needs.
+Compute and store in each `stars[i]` the projected tessel areas (`polyflux`) and the polygon
+Fourier transform matrix (`polyft`, Nuv × visible tessels) for `data[i]`. Threaded over
+epochs, or within the single epoch when there is one.
 
-TWO METHODS, and the parametric one is the one that matters. `T` used to be computed as
-`eltype(stars[1].vertices_xyz)` — a type derived at RUN TIME and passed on as a value, so
-`_setup_oi_epoch!` received `::Type` rather than `::Type{Float32}` and the polygon-FT kernel
-below it was inferred at `Any`. Taking `T` from the container's element type makes it a real
-type parameter: JET reports 173 runtime dispatches inside one call on the old signature and 5
-on this one.
-
-The second method is the fallback for a container Julia cannot read a `T` off — a
-`Vector{stellar_geometry}` built by hand, or a mixed-precision one. It still works; it is just
-inferred the way the old one was.
+The precision is the element type of `stars` (`stellar_geometry{T}`), or of
+`stars[1].vertices_xyz` for an untyped container.
 """
 function setup_oi!(data, stars::AbstractVector{stellar_geometry{T}}) where {T}
   _setup_oi_dispatch!(data, stars, T)
@@ -210,6 +204,10 @@ end
 "V², T3amp, T3phi on; visamp, visphi, flux, differential phase off."
 const OI_DEFAULT_WEIGHTS = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]
 
+# Pass the visibilities through at whatever complex float type they already are — do NOT
+# force ComplexF64. OITOOLS accepts `AbstractVector{<:Complex}` and (in recent versions)
+# derives its working eltype from the inputs, so widening here would throw away the point
+# of carrying Float32 through the forward model.
 """
     cvis_chi2(cvis, data, weights = OI_DEFAULT_WEIGHTS) -> chi2
 
@@ -237,10 +235,6 @@ it leaves flux-like parameters nearly right (they move `V` along the real direct
 making phase-like parameters — separation, position angle, T0 — wrong by ~100%. Verified
 against finite differences to 1e-11 in both directions; `test_reflection.jl` pins it.
 """
-# Pass the visibilities through at whatever complex float type they already are — do NOT
-# force ComplexF64. OITOOLS accepts `AbstractVector{<:Complex}` and (in recent versions)
-# derives its working eltype from the inputs, so widening here would throw away the point
-# of carrying Float32 through the forward model.
 @inline _ascomplexfloat(v::AbstractVector{<:Complex{<:AbstractFloat}}) = v
 @inline _ascomplexfloat(v::AbstractVector) = complex.(float.(v))
 
@@ -285,23 +279,15 @@ end
     chi2_breakdown(x, star, data; intensity_model=:linear, band=nothing) -> NamedTuple
     chi2_breakdown(x, stars, data::AbstractVector; ...) -> NamedTuple
 
-The χ² breakdown as DATA rather than as printed output.
-
-[`chi2s`](@ref) returns the three ABSOLUTE χ² but prints the three REDUCED ones, so a caller
-that wants what it saw on screen has to fetch `data.nv2`, `data.nt3amp` and `data.nt3phi` and
-divide — three chances to pair the wrong count with the wrong sum, silently. This returns
-both, with the counts that produced them:
+χ² of a map, per observable, as a NamedTuple:
 
     (; v2, t3amp, t3phi, total,            # absolute
        nv2, nt3amp, nt3phi, ndata,         # counts
        v2r, t3ampr, t3phir, totalr)        # reduced
 
-`totalr` divides by the total number of data points, NOT by the number of free parameters:
-this is a goodness-of-fit summary of a fixed map, not a fitted-model χ²ᵥ. Empty observables
-give `NaN` rather than a division error, which is what an OIFITS with no T3 should show.
-
-The multi-epoch method sums over epochs and additionally returns `epochs`, the per-epoch
-breakdowns, which is what a per-epoch table wants.
+`totalr` divides by the number of data points, not by the degrees of freedom. An observable
+with no data gives `NaN`. The multi-epoch method sums over epochs and adds `epochs`, the
+per-epoch breakdowns. [`chi2s`](@ref) returns the absolute values only.
 """
 function chi2_breakdown(x, star, data; intensity_model::Symbol = :linear, band = nothing)
   chi2_v2, chi2_t3amp, chi2_t3phi = chi2s(x, star, data; verbose = false,
@@ -614,33 +600,21 @@ end
 """
     max_entropy_fg(x, g; verbose=false, ϵ=1e-9) -> f
 
-Maximum entropy on the map normalised by its own mean:
+Maximum entropy of the map normalised by its mean (`"mem"`):
 
 ```
 f = Σᵢ xmᵢ log(xmᵢ + ϵ),      xm = x / mean(x)
 ```
 
-Scale-invariant by construction — `x → c·x` leaves `xm` untouched — so the weight is
-dimensionless and transfers between targets. Note `"tv2"` is *not* scale-invariant, and χ²
-is (the visibilities are flux-normalised), so `"mem"` and `"tv2"` weights do not behave
-alike when the map level changes.
-
-Being **pointwise**, it suppresses spikes through the cost of large per-pixel deviations
-rather than by correlating neighbours, so it imposes no spatial correlation length.
+Invariant under `x → c·x`, as χ² is. Pointwise: it imposes no spatial correlation.
 
 # Gradient
 
 With `m = mean(x)`, `n = length(x)` and `dᵢ = log(xmᵢ + ϵ) + xmᵢ/(xmᵢ + ϵ)`,
-`∂xmᵢ/∂xⱼ = δᵢⱼ/m − xᵢ/(n m²)` gives
 
 ```
 ∂f/∂xⱼ = dⱼ/m − (1/(n m²)) Σᵢ dᵢ xᵢ
 ```
-
-the second term being a global coupling shared by every pixel — it is what makes the
-regularizer blind to a pure rescaling of the map. Replacing it with a per-pixel term leaves
-a gradient nearly orthogonal to the true one; `test/test_radial_regularizers.jl` pins this
-against `FiniteDifferences`.
 """
 function max_entropy_fg(x, g; verbose=false, ϵ=1e-9)
   n = length(x)
@@ -658,16 +632,17 @@ end
 """
     radflat_bins(star; nbins=6, subset=nothing) -> NamedTuple
 
-Precompute the projected-radial binning that [`spheroid_radflat_fg`](@ref) needs. Pass the
-result as the third element of a `"radflat"` entry in `regularizers`.
+Bin the visible tessels (or `subset`) by projected radius, for `"radflat"` and
+`"radialvar"`. Pass the result as the third element of the regulariser entry and its `idx`
+as the fourth.
 
-Patches are binned by the projected radius `ρ` of their centre (mean of the four projected
-corners), normalised so the outermost visible patch sits at `ρ = 1`. Returns the per-patch
-bin index, the per-bin weight `w_b = ρ_b² · Σ polyflux`, and the patch counts.
+`ρ` is the distance of each tessel's centre (mean of its four projected corners) from the
+disk centre, normalised to 1 at the outermost tessel; the `nbins` bins are equal in `ρ`. Each
+bin's weight is `w_b = ρ_b² · Σ polyflux` over the bin, with `ρ_b` the bin centre.
 
-`ρ_b²` weights the limb, which is the whole point: that is where a spot is degenerate with
-the limb-darkening coefficient. `flux_weight_b` (the projected area) stops a bin containing
-a handful of slivers from carrying the same force as one containing half the disk.
+Returns `(idx, bin, nbins, w, count, rho)`. Warns when a bin is empty or holds fewer than 3
+tessels; the innermost bin empties first, and nside ≥ 8 (`tessellation_healpix(3)`) is
+stable to about 1 %.
 """
 function radflat_bins(star; nbins::Int = 6, subset = nothing)
     idx = subset === nothing ? star.index_quads_visible : subset
@@ -708,55 +683,28 @@ end
 """
     spheroid_radflat_fg(x, g, bins; scale=1e5, verbose=false) -> f
 
-RADFLAT (J. Monnier, priv. comm. 2026-07-01): force the *azimuthally averaged* radial
-brightness profile of the visible disk to be flat.
+RADFLAT (J. Monnier, priv. comm. 2026-07-01): penalise departures of the azimuthally averaged
+radial brightness profile from flat.
 
 ```
 f = scale · Σ_b w_b · (I_b/I_mean − 1)²
 ```
 
-with `I_b` the mean patch brightness in projected radial bin `b` and `I_mean` the mean over
-the whole visible disk. `x` is the patch brightness **without** limb darkening — that is
-deliberate, since the point is to stop the reconstruction from smuggling limb structure into
-the surface map where it trades off against the LD coefficient.
+`I_b` is the mean of `x` in radial bin `b`, `I_mean` the mean over all binned tessels, and
+`bins` comes from [`radflat_bins`](@ref). `x` is the map without limb darkening, so the
+radial profile is left to the limb-darkening law. An empty bin contributes zero. Raises if
+`x` and `bins` have different lengths.
 
-# Why it exists
-
-On a **non-rotating** star reconstructed from few epochs, the surface regularizer is weak
-enough that dark or bright spots drift to the limb and become degenerate with the
-limb-darkening parameter: χ² barely moves while the LD coefficient wanders. Monnier's test
-gave `α = 1.07 ± 0.19` uncontrolled against `α = 0.49 ± 0.02` at strong RADFLAT, with χ²
-only slightly worse and the image essentially unchanged.
-
-!!! warning "Which star those numbers describe is not settled"
-    They were passed on in the context of RW Cep, but the only figure we have — the one
-    the progression comes from — is titled "XX Per 2025 Sep 09", and its table runs
-    LD 1.101 (control) → 0.482 (α=1000) with χ²/dof 2.264 → 2.371. Close to the quoted
-    pair but not equal to it, so this is either a different reduction of the same star or
-    a different star entirely. Worth confirming with him before either number is cited.
-
-    Note also that his LD is FITTED jointly at each RADFLAT weight, not scanned: his χ²
-    rises monotonically as LD falls, which is a prior moving the answer, not a degeneracy
-    being resolved. `demos/rwcep_radflat.jl` measures the curvature of χ²(ld1) instead,
-    which is the complementary test.
-
-!!! note "Not for rotators"
-    A rotating star observed over several epochs already breaks that degeneracy — spots move
-    and the limb is resampled. RADFLAT would then be fighting real structure. Use it for the
-    single-epoch / non-rotating case it was designed for.
+Intended for a non-rotating star observed at one epoch.
 
 # Gradient
 
-With `n_b` patches in bin `b` and `N` visible patches, `∂I_b/∂x_j = [j∈b]/n_b` and
-`∂I_mean/∂x_j = 1/N`, so
+With `n_b` tessels in bin `b`, `N` in total and `r_b = I_b/I_mean`,
 
 ```
 ∂f/∂x_j = 2·scale·[ w_{b(j)}(r_{b(j)} − 1)/(n_{b(j)}·I_mean)
-                    − (1/(N·I_mean))·Σ_b w_b (r_b − 1) r_b ],    r_b ≡ I_b/I_mean
+                    − (1/(N·I_mean))·Σ_b w_b (r_b − 1) r_b ]
 ```
-
-the second term being a global coupling shared by every visible patch — it is what stops the
-regularizer from simply rescaling the whole map.
 """
 function spheroid_radflat_fg(x, g, bins; scale = 1e5, verbose = false, ϵ = 1e-12)
     nb = bins.nbins; b = bins.bin; w = bins.w; cnt = bins.count
@@ -783,56 +731,29 @@ end
 """
     spheroid_radialvar_fg(x, g, bins; scale=1e5, normalize=true, verbose=false) -> f
 
-RADIALVAR: penalise the AZIMUTHAL scatter of the map within each projected radial annulus,
-i.e. push the visible disk toward circular symmetry.
+RADIALVAR: penalise the azimuthal scatter of the map within each projected radial bin.
 
 ```
 f = scale · Σ_b var_b / I_mean²,        var_b = (1/(n_b−1)) Σ_{j∈b} (x_j − x̄_b)²
 ```
 
-Uses the same `radflat_bins` binning as [`spheroid_radflat_fg`](@ref), and like it acts on
-the map **without** limb darkening.
+Uses the binning of [`radflat_bins`](@ref) and, like [`spheroid_radflat_fg`](@ref), the map
+without limb darkening. A bin with one tessel contributes zero. RADFLAT and RADIALVAR are the
+between-bin and within-bin terms of the variance of the map (one-way ANOVA decomposition).
 
-# The relationship to RADFLAT is exact, not merely thematic
-
-Split the variance of the visible disk over the radial bins and the two regularizers are the
-two terms — this is a one-way ANOVA decomposition:
-
-```
-Σ_j (x_j − x̄)²  =  Σ_b n_b (x̄_b − x̄)²   +   Σ_b Σ_{j∈b} (x_j − x̄_b)²
-                   └──── RADFLAT ────┘       └──── RADIALVAR ────┘
-                    between annuli               within annuli
-```
-
-RADFLAT flattens the radial profile and constrains nothing about structure at fixed radius;
-RADIALVAR removes structure at fixed radius and constrains nothing about the profile. Using
-one alone leaves the other half of the map's freedom untouched — on α Cen A, RADFLAT drives
-the profile rms to 2e-4 while the reconstruction still covers a famously featureless star in
-spurious spots. Together they approach "the map is a constant", which for a star with no
-resolved surface structure is the correct prior.
-
-# Relation to OITOOLS' `"radialvar"`
-
-Same quantity, different geometry and normalisation. OITOOLS (`radial_variance`,
-`src/oichi2.jl`) works on an nx×nx image grid with elliptical annuli built from a
-position-angle/inclination pair, and precomputes sparse `H`, `G` so that `f = ‖Hx‖²` with a
-constant Hessian. Here the annuli come from the projected tessellation, so no operator is
-needed. OITOOLS sums raw variances; this divides by `I_mean²` (`normalize = true`, the
-default) so the penalty is dimensionless and its weight does not have to be retuned when the
-map's units or total flux change — matching RADFLAT's convention. Pass `normalize = false`
-to reproduce OITOOLS' scaling exactly.
+This is the tessellated counterpart of OITOOLS' `"radialvar"` (`radial_variance`), which
+works on an image grid with elliptical annuli and sums raw variances. `normalize = true`
+divides by `I_mean²`; `normalize = false` gives OITOOLS' scaling.
 
 # Gradient
 
-With `T = Σ_b c_b Q_b`, `c_b = 1/(n_b−1)`, `Q_b = Σ_{j∈b}(x_j − x̄_b)²`, and noting that
-`∂Q_b/∂x_j = 2(x_j − x̄_b)` for `j ∈ b` (the `x̄_b` terms cancel because `Σ_{j∈b}(x_j−x̄_b) = 0`),
+With `c_b = 1/(n_b−1)` and `T = Σ_b c_b Σ_{j∈b}(x_j − x̄_b)²`,
 
 ```
 ∂f/∂x_j = (2·scale / I_mean²) · [ c_{b(j)}(x_j − x̄_{b(j)}) − T/(N·I_mean) ]
 ```
 
-the second term being the same global coupling RADFLAT carries, from differentiating the
-`I_mean` normalisation; it vanishes when `normalize = false`.
+The second term vanishes when `normalize = false` (and `I_mean²` is replaced by 1).
 """
 function spheroid_radialvar_fg(x, g, bins; scale = 1e5, normalize::Bool = true,
                                verbose = false, ϵ = 1e-12)
@@ -868,70 +789,24 @@ end
 """
     orthold_direction(star, x0, star_params; subset=nothing) -> NamedTuple
 
-Precompute the map direction that is exactly degenerate with the limb-darkening
-coefficient. Pass the result as the third element of an `"orthold"` regularizer entry, with
-`.idx` as the fourth.
+The map direction that is degenerate with the limb-darkening coefficient `ld1`, for an
+`"orthold"` regulariser entry (third element; `.idx` is the fourth).
 
-# What the degenerate direction is
-
-The forward model weights each tessel by `w = vis_weights · ldmap`, so perturbing `ld1`
-changes the WEIGHTED map by
+Each tessel enters the forward model weighted by `vis_weights · ldmap`. A change `δ` in `ld1`
+changes the weighted map by `x₀ ∘ vis_weights ∘ ∂ldmap/∂ld1 · δ`, so a map change along
 
 ```
-δ(x∘w) = x ∘ ∂w/∂ld1 · δ = x ∘ w ∘ ∂ln(ldmap)/∂ld1 · δ
+v = x₀ ∘ vis_weights ∘ (∂ldmap/∂ld1),   v̂ = v/‖v‖
 ```
 
-A map perturbation `δx` produces `δx ∘ w`. The two are indistinguishable when
-`δx ∝ x ∘ ∂ln(ldmap)/∂ld1`, which for the Hestroffer law `ldmap = μ^α` collapses to
+is indistinguishable from it in the data. For the Hestroffer law (`ldmap = μ^α`) this is
+`δx ∝ x₀ ln μ`, which grows toward the limb; its weight in the data,
+`∝ μ^{2·ld1} |ln μ|`, peaks at `μ = exp(−1/(2·ld1))` (0.73 for ld1 = 1.6).
 
-```
-u  ∝  x · ln μ
-```
-
-That is worth reading twice, because it *derives* the empirical observation RADFLAT was
-built to fix. `ln μ` diverges as μ → 0, so mimicking a change in `ld1` demands ever-larger
-brightness excursions near the limb: dark or bright patches parked on the limb are not one
-symptom among several, they ARE the degeneracy expressed in pixel space.
-
-Where that mode has *leverage on the data* is a different question, and the answer is not
-the limb. Weighting by `w` gives `|c| ∝ vis² · μ^{2·ld1} · |ln μ|` for the Hestroffer law,
-which peaks at
-
-```
-μ = exp(−1/(2·ld1))          (0.73 for ld1 = 1.6)
-```
-
-because `μ^{2·ld1}` extinguishes the limb faster than `ln μ` diverges. So the artifact
-appears at the limb while the information sits at intermediate μ — which is exactly why a
-penalty binned on projected radius is a blunt instrument for this, and why the projection
-below is taken in model space rather than pixel space.
-
-# Why this is a better target than a radial profile
-
-RADFLAT forbids all radial structure (≈ `nbins − 1` degrees of freedom) and so hands the
-entire centre-to-limb profile to the LD law. This removes **exactly one** direction — the
-one the data genuinely cannot separate from `ld1` — and leaves every other radial mode free
-for real astrophysics. It also needs no bins, hence no bin count, no bin edges, and no
-under-populated-bin failure mode; and because `μ` comes from the actual surface normals it
-stays correct on a Roche lobe or rapid rotator, where "projected radial bins" is already
-the wrong coordinate.
-
-# Numerical form
-
-The projection is taken in MODEL space rather than pixel space. In pixel space the
-direction is `x₀ ∘ L` with `L = ∂ln(ldmap)/∂ld1`, which diverges at the limb where
-`ldmap → 0`; weighting by `w` cancels that divergence exactly, and is also the statistically
-meaningful metric — it asks how much of a map change looks like an LD change *in the data*,
-not in pixel counts. Note `w ∘ L = vis_weights ∘ ldmap ∘ (∂ldmap/∂ld1)/ldmap =
-vis_weights ∘ ∂ldmap/∂ld1`, so no division is ever performed:
-
-```
-v = x₀ ∘ vis_weights ∘ (∂ldmap/∂ld1),   v̂ = v/‖v‖,   c = vis_weights ∘ ldmap ∘ v̂
-```
-
-`x0` is the reference map (normally the parametric starting map): the penalty is on
-DEPARTURE from it along `ĉ`, so the reference itself costs nothing and the reconstruction
-stays free in all other directions.
+Returns `(idx, c, x0, m0)` with `c = vis_weights ∘ ldmap ∘ v̂` and `m0 = mean(x₀)`. `x0` is
+the reference map, normally the parametric starting map. The direction uses the surface
+normals, so it applies to any surface type. Raises if `ld1` has no effect on the map or if
+`x0` has zero mean.
 """
 function orthold_direction(star, x0, star_params; subset = nothing)
     idx = subset === nothing ? star.index_quads_visible : subset
@@ -957,16 +832,14 @@ end
 """
     spheroid_orthold_fg(x, g, od; scale=1e5, verbose=false) -> f
 
-orthoLD: penalise the component of the map along the direction that is exactly degenerate
-with the limb-darkening coefficient. `od` comes from [`orthold_direction`](@ref).
+orthoLD: penalise the component of `x − x₀` along the limb-darkening-degenerate direction
+from [`orthold_direction`](@ref).
 
 ```
-f = scale · ⟨x − x₀, ĉ⟩² / m₀²,     ∂f/∂x = 2·scale·⟨x − x₀, ĉ⟩/m₀² · ĉ
+f = scale · ⟨x − x₀, c⟩² / m₀²,     ∂f/∂x = 2·scale·⟨x − x₀, c⟩/m₀² · c
 ```
 
-Rank one, so it removes a single degree of freedom. `m₀` is the reference map's mean and is
-a CONSTANT, which keeps the penalty dimensionless without introducing the global coupling
-term that `1/I_mean` normalisation forces on RADFLAT and RADIALVAR.
+Rank one: it removes one degree of freedom. `m₀` is the mean of the reference map.
 """
 function spheroid_orthold_fg(x, g, od; scale = 1e5, verbose = false)
     length(x) == length(od.c) ||
@@ -985,41 +858,29 @@ end
 """
     spheroid_sobel2_fg(x, g, S; scale=1.0, verbose=false, ϵ=1e-12) -> f
 
-Quadratic gradient regularizer built on the spherical Sobel operator
-`sobel_gradient_healpix`:
+Quadratic gradient penalty (`"sobel2"`) on the operator `S = sobel_gradient_healpix(n)`:
 
 ```
-f = scale · (4π/npix) · Σᵢ (|∇x|ᵢ² ) / mean(x)²
+f = scale · (4π/npix) · ‖D x‖² / mean(x)²   ≈   scale · ∫|∇x|²dΩ / x̄²
 ```
 
-a consistent discretisation of `∫|∇x|²dΩ / x̄²`. Contrast with `"tv2"`, which is
-`‖Lx‖²` for the graph Laplacian `L` and therefore penalises **curvature**:
+Invariant under `x → c·x`, as χ² is, and independent of `nside` for a smooth map, so a
+weight carries over between resolutions. Typical weights are O(1–10²).
+
+Compared with `"tv2"` (`‖Lx‖²`, `L` the graph Laplacian):
 
 | | penalises | Fourier response | scale-invariant | nside-stable (smooth map) |
 |---|---|---|---|---|
 | `"tv2"` | `∇²x` | `k⁴` | no | no (×0.36 per doubling) |
 | `"sobel2"` | `∇x` | `k²` | yes | yes |
 
-The `k⁴` response is why `"tv2"` has so little usable middle ground — it barely touches
-large scales and crushes small ones, so the map goes from pixel spikes to a near-constant
-with little in between. `k²` rolls off gently enough to suppress tessel-scale noise while
-leaving genuine structure.
-
-Both normalisations matter. `mean(x)²` makes the weight dimensionless, matching χ² — which
-is *exactly* invariant under `x → c·x` because the visibilities are flux-normalised, so
-without it the effective strength would ride on the map's arbitrary overall level. The
-`4π/npix` solid angle (HEALPix is equal-area) makes a weight tuned at one `nside` mean the
-same thing at another.
-
 # Gradient
 
-With `S = Σᵢ|∇x|ᵢ²`, `m = mean(x)`, `n = length(x)` and `A = 4π/npix`,
+With `Q = ‖D x‖²`, `m = mean(x)`, `n = length(x)` and `A = 4π/npix`,
 
 ```
-∂f/∂xⱼ = scale·A·[ 2(Dᵀ(D x))ⱼ / m² − 2S/(n m³) ]          (S = ‖D x‖²)
+∂f/∂xⱼ = scale·A·[ 2(Dᵀ D x)ⱼ / m² − 2Q/(n m³) ]
 ```
-
-the second term being the global coupling that makes it blind to a pure rescaling.
 """
 function spheroid_sobel2_fg(x, g, S; scale = 1.0, verbose = false, ϵ = 1e-12)
     n = length(x)
@@ -1039,23 +900,19 @@ end
 """
     spheroid_sobel_fg(x, g, S; scale=1.0, verbose=false, ϵ=1e-8) -> f
 
-**Isotropic edge-preserving** total variation on the spherical Sobel gradient:
+Isotropic, edge-preserving total variation (`"sobel"`) on the operator
+`S = sobel_gradient_healpix(n)`:
 
 ```
-f = scale · (4π/npix) · Σᵢ √(|∇x|ᵢ² + ϵ) / mean(x)
+f = scale · (4π/npix) · Σᵢ √(|∇x|ᵢ² + ϵ) / mean(x)   ≈   scale · ∫|∇x|dΩ / x̄
 ```
 
-a discretisation of `∫|∇x|dΩ / x̄`. This is the genuine L1 total variation — the `√` is taken
-per tessel over the two gradient components, so the cost of an edge grows linearly with its
-height rather than quadratically, and sharp features survive while noise is suppressed.
+The square root is taken per tessel, so an edge costs in proportion to its height. ROTIR's
+`"tv"` is a different quantity, `‖Lx‖` (a global norm of the graph Laplacian, `k⁴` response).
+Use `"sobel"` to keep edges such as spot boundaries, `"sobel2"` for a smooth map.
 
-Note ROTIR's `"tv"` is **not** this: on HEALPix it evaluates `‖Lx‖`, a single global norm of
-the Laplacian, which is a monotone transform of `"tv2"` and shares its `k⁴` response. Use
-`"sobel"` when edges must be preserved (a spot boundary, a limb feature) and `"sobel2"` when
-a smooth map is wanted.
-
-`ϵ` keeps the `√` differentiable at `∇x = 0`; it is in units of `|∇x|²`, so with a
-mean-normalised map `1e-8` is well below any real gradient.
+`ϵ` (in units of `|∇x|²` of the mean-normalised map) keeps the square root differentiable
+at `∇x = 0`.
 
 # Gradient
 
@@ -1086,15 +943,15 @@ end
 """
     spheroid_laplace_beltrami_fg(x, g, S; scale=1.0, verbose=false, ϵ=1e-12) -> f
 
-The cotangent Laplace–Beltrami (Dirichlet) energy of [`laplace_beltrami_healpix`](@ref),
-mean-normalised like `"sobel2"`:
+Dirichlet energy (`"laplace_beltrami"`) of the cotangent Laplace–Beltrami operator
+`S = laplace_beltrami_healpix(n)`, normalised like `"sobel2"`:
 
 ```
-f = scale · Σₑ wₑ (x_j − x_i)² / mean(x)²  ≈  scale · ∫|∇x|²dΩ / x̄²
+f = scale · Σₑ wₑ (x_j − x_i)² / mean(x)²   ≈   scale · ∫|∇x|²dΩ / x̄²
 ```
 
-so a weight carries over between the two and across resolutions. Scale-invariant (as χ² is),
-and with no null space beyond the constant map.
+Weights carry over from `"sobel2"` and between resolutions. Invariant under `x → c·x`; the
+only null mode is the constant map.
 
 # Gradient
 
@@ -1144,7 +1001,8 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
           # An unrecognised name must RAISE. Falling through would contribute exactly
           # zero, so a typo would look like a regularizer that simply does nothing.
           error("spheroid_regularization: unknown regularizer \"$(regularizers[ireg][1])\"; " *
-                "known: mem, tv, tv2, mean, bias, radflat, radialvar, orthold, sobel, sobel2")
+                "known: mem, tv, tv2, mean, bias, radflat, radialvar, orthold, sobel, sobel2, " *
+                "laplace_beltrami")
       end
       g[regularizers[ireg][4]] += regularizers[ireg][2]*temp_g
   end
@@ -1158,30 +1016,22 @@ end
 using OptimPackNextGen
 
 """
-    image_reconstruct_oi(x_start, data, stars; maxiter, regularizers, callback, callback_every, ...)
+    image_reconstruct_oi(x_start, data, stars; maxiter=100, regularizers=[], lower=0,
+                         upper=Inf, epochs_weights=[], weights=(1, 1, 1),
+                         intensity_model=:linear, band=nothing, callback=nothing,
+                         callback_every=25, verbose=true) -> x
 
-Reconstruct a surface map by VMLMB.
+Reconstruct a surface map by VMLMB (OptimPackNextGen), minimising χ² over all epochs plus
+`regularizers` within the bounds `[lower, upper]`. Uses the matrix path: run `setup_oi!`
+first.
 
 `weights = (w_V², w_T3amp, w_T3φ)` scales each observable's χ²; `(1, 1, 0)` reconstructs from
-V² and T3amp alone.
+V² and T3amp. `epochs_weights` scales each epoch's χ².
 
-`callback`, when given, is called as `callback(x, nevals, f)` every `callback_every`
-evaluations (and once on the first), which is what lets a caller show the map WHILE the engine
-runs instead of only when it stops. A twenty-minute reconstruction otherwise reports nothing
-but a scrolling trace.
-
-Two things the callback must respect:
-
-  * **`x` belongs to the optimiser.** It is the working vector VMLMB is about to overwrite, so
-    a callback that keeps it must `copy` it. Passing it uncopied is deliberate: the common case
-    reads a summary off it and copying every time would charge the whole run for that.
-  * **The count is EVALUATIONS, not iterations.** VMLMB evaluates the criterion more often than
-    it iterates, because a rejected line-search step re-evaluates. There is no iteration number
-    to report from here; `printer` at `OptimPackNextGen`'s own level has one, and does not
-    have `x`.
-
-No throttling policy is imposed beyond the count: at roughly 60 µs per likelihood a callback
-every 25 evaluations is not measurable, and a caller that wants every one can say so.
+`callback(x, nevals, f)` is called on the first evaluation and every `callback_every`
+evaluations. `x` is the optimiser's working vector: copy it to keep it. `nevals` counts
+criterion evaluations, which exceed iterations when a line search re-evaluates. A callback
+that throws is dropped with a warning and the reconstruction continues.
 """
 function image_reconstruct_oi(x_start, data, stars; epochs_weights =[], printcolor= [], verbose = true, lower=0, upper=Inf, maxiter = 100, regularizers =[],
                               intensity_model::Symbol = :linear, band = nothing,
@@ -1241,21 +1091,16 @@ end
 """
     multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4, maxiter=500,
                             reg_weight=10.0, reg_type="sobel2", verbose=true, kwargs...)
+                            -> (tmap, stars)
 
-Reconstruct on a ladder of HEALPix resolutions, each level initialised by upsampling the
-previous one.
+Reconstruct at HEALPix levels `n_start` to `n_end`, starting from the parametric temperature
+map and initialising each level by upsampling the previous result. Other keywords go to
+[`image_reconstruct_oi`](@ref).
 
-`reg_type` defaults to `"sobel2"` here for a reason specific to this routine: the smoothing
-weight is held fixed while `nside` quadruples the pixel count at every level, and only the
-gradient-based regularizers carry the `4π/npix` solid angle that makes a weight mean the
-same thing at each level. With `"tv2"` the same `reg_weight` is progressively weaker as the
-ladder climbs (its value on a smooth map falls by ~×0.4 per doubling), so the final level is
-regularized far less than intended.
-
-Weights are **not** comparable between the two families: `"sobel2"` is normalised by
-`mean(x)²` and by solid angle, so its natural range is O(1–10²) against χ², whereas a
-`"tv2"` weight rides on the map's absolute level and is typically O(10⁻⁵–10⁻⁴). See the
-regularizer table in the reconstruction guide.
+The same `reg_weight` is used at every level. `"sobel"` and `"sobel2"` are normalised by
+solid angle and by `mean(x)`, so the weight means the same at each level; their weights are
+O(1–10²). A `"tv2"` weight depends on the map's level and is O(10⁻⁵–10⁻⁴); its effect on a
+smooth map falls by about ×0.4 per level.
 """
 function multires_reconstruct_oi(data, star_params, tepochs; n_start=2, n_end=4, maxiter=500, reg_weight=10.0, reg_type="sobel2", verbose=true, kwargs...)
   tmap = nothing

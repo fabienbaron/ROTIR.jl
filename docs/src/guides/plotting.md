@@ -1,42 +1,43 @@
 # Plotting
 
-ROTIR provides several visualization functions for temperature maps and stellar
-geometry. All plotting uses PythonPlot (Matplotlib).
+The functions on this page draw with matplotlib and need `using PythonPlot`. Makie versions
+(`plot2d_makie`, `plot3d_makie`, `plot_mollweide_makie`) need `using CairoMakie` or `GLMakie`.
 
 ## 2D projection
 
-Plot the temperature map as seen by the observer at a single epoch:
+The temperature map as seen by the observer at one epoch:
 
 ```julia
 plot2d(tmap, stars[1])
 ```
 
-Options:
+Keywords, with their defaults:
 
 ```julia
 plot2d(tmap, stars[1];
-    intensity      = false,       # multiply by limb-darkening map
-    plotmesh       = false,       # show pixel edges
-    colormap       = "gist_heat", # matplotlib colormap
-    figtitle       = "Epoch 1",
+    intensity      = false,       # plot intensity (temperature × limb darkening)
+    plotmesh       = false,       # pixel edges
+    colormap       = "gist_heat",
+    figtitle       = "",
     flipx          = false,       # flip East-West
-    background     = "black",
-    compass        = false,       # draw N/E compass arrows
-    graticules     = false,       # draw lat/lon grid lines on the surface
-    rotation_axis  = false,       # draw dashed line through poles
-    rotation_arrow = false,       # draw spin direction arrow at north pole
-    star_params    = nothing,     # pass star_params for exact graticules
-    graticule_kwargs = (;),       # graticule style overrides (see below)
+    background     = "white",     # or "black"
+    vmin           = nothing,
+    vmax           = nothing,
+    compass        = true,        # N/E arrows
+    graticules     = false,       # lat/lon lines on the surface
+    rotation_axis  = false,       # dashed line through the poles
+    rotation_arrow = false,       # spin-direction arrow at the north pole
+    star_params    = nothing,     # exact surface for the graticules
+    graticule_kwargs = (;),       # graticule style (below)
 )
 ```
 
-The projection shows the sky plane in milliarcseconds (East left, North up).
-Only pixels with positive soft visibility weight are rendered.
+The axes are the sky plane in milliarcseconds, East left, North up. Only pixels with positive
+visibility weight are drawn.
 
 ### Temperature contours
 
-Draw temperature contour lines on the projected surface by passing an array of
-temperature values:
+Contour lines at the given temperatures:
 
 ```julia
 plot2d(tmap, stars[1];
@@ -51,17 +52,17 @@ plot2d(tmap, stars[1];
 
 ### Graticules
 
-When `graticules = true`, latitude/longitude grid lines are drawn on the stellar
-surface. Pass `star_params` to use the exact surface geometry:
+`graticules = true` draws latitude/longitude lines on the surface. With `star_params` they
+follow the exact surface:
 
-- **Sphere** (type 0): uses `radius` directly
-- **Triaxial ellipsoid** (type 1): uses `radius_x`, `radius_y`, `radius_z` — latitude circles are ellipses when the equatorial radii differ
-- **Rapid rotator** (type 2): uses `rpole` and `frac_escapevel` — longitude lines follow the exact Roche meridional profile via `f_rapid_rot`
+- Sphere (type 0): `radius`
+- Triaxial ellipsoid (type 1): `radius_x`, `radius_y`, `radius_z`
+- Rapid rotator (type 2): `rpole` and `frac_escapevel`; meridians follow the Roche profile
+  (`f_rapid_rot`)
 
-Without `star_params`, graticules fall back to an oblate spheroid approximation
-estimated from the tessellation vertices.
+Otherwise they use an oblate spheroid fitted to the mesh vertices.
 
-Customize the graticule appearance via `graticule_kwargs`:
+Style, through `graticule_kwargs`:
 
 ```julia
 plot2d(tmap, star;
@@ -77,20 +78,21 @@ plot2d(tmap, star;
 )
 ```
 
-The rotation angle is computed automatically from `star.t` and
-`star_params.rotation_period`, so graticules stay aligned with the surface at
-any rotational phase.
+The rotation angle is `360 · star.t / star_params.rotation_period`, so the graticules turn
+with the surface.
 
 ![Graticule styles](../assets/graticule_styles.png)
 
 ### Decorations
 
-Four annotation overlays are available on top of the surface plot:
-
-- **Limb** (`limb = true`, the default) — outline of the projected stellar disc. Worth keeping: a surface whose values sit at the pale end of the colormap is indistinguishable from a white background, and without the outline the disc — and any decoration drawn on it — appears to float in empty space.
-- **Pole line** (`rotation_axis = true`) — dashed line through the projected rotation axis (north to south pole), with an arrow at the north pole
-- **Spin arrow** (`rotation_arrow = true`) — curved arrow just beyond the north pole showing the sense of rotation, reversed when `rotation_period < 0`. The near-side arc is solid and the far side dashed, though for a pole tipped towards the observer the whole loop lies in front.
-- **Compass** (`compass = true`, the default) — E/N compass arrows in the lower-right corner (East points left, following astronomical convention). Sized to stay legible in a small multi-panel subplot.
+- Limb (`limb = true`, default): outline of the projected disc (`limb_color`,
+  `limb_linewidth`). It keeps a pale surface visible on a white background.
+- Pole line (`rotation_axis = true`): dashed line through the projected rotation axis, with
+  an arrow at the north pole.
+- Spin arrow (`rotation_arrow = true`): curved arrow beyond the north pole showing the sense
+  of rotation, reversed when `rotation_period < 0`. The near-side arc is solid, the far side
+  dashed.
+- Compass (`compass = true`, default): E/N arrows in the lower-right corner, East left.
 
 ```julia
 plot2d(tmap, star;
@@ -101,9 +103,8 @@ plot2d(tmap, star;
 )
 ```
 
-The decorations take their orientation from the **mesh** unless you override it, so they
-follow whatever built the star. Pass `inclination` / `position_angle` only to force a
-different orientation:
+The decorations take their orientation from the mesh. `inclination` and `position_angle`
+override it:
 
 ```julia
 plot2d(tmap, star; rotation_axis = true,
@@ -111,10 +112,8 @@ plot2d(tmap, star; rotation_axis = true,
 ```
 
 !!! warning "Not for binary components"
-    A component built by `create_binary_geometry` is oriented by the shared `binary_frame`
-    from the ORBIT, not by its own `inclination` / `position_angle`. Passing the
-    single-star angles to `plot2d_binary` therefore decorates a differently-oriented star.
-    Leave them unset.
+    A component built by `create_binary_geometry` is oriented by the orbit's `binary_frame`,
+    not by its own `inclination` / `position_angle`. Do not pass those to `plot2d_binary`.
 
 | Pole line | Spin arrow | Compass | All three |
 |:---------:|:----------:|:-------:|:---------:|
@@ -122,111 +121,95 @@ plot2d(tmap, star; rotation_axis = true,
 
 ## Multi-epoch 2D
 
-Plot all epochs side by side with a shared color scale:
+All epochs side by side, on one colour scale:
 
 ```julia
 plot2d_allepochs(tmap, stars)
 ```
-
-Options:
 
 ```julia
 plot2d_allepochs(tmap, stars;
     plotmesh = false,
     tepochs  = tepochs,       # epoch labels
     colormap = "gist_heat",
-    ncols    = 3,             # columns; the row count and figure size follow
+    ncols    = 3,             # columns; rows and figure size follow
+    compass  = true,
 )
 ```
 
-The grid and figure size are derived from the number of epochs (up to four across), so
-three epochs give a 1×3 row rather than a half-empty 2×3 block. `arr_box` is still accepted
-in its old two-digit `<rows><cols>` form, e.g. `arr_box = 23`.
+Without `ncols`, the layout is chosen from the number of epochs, up to four across.
+`arr_box = 23` gives 2 rows × 3 columns.
 
 ## Wireframe
 
-Draw the tessellation on its own, with no colour fill:
+The tessellation alone, without colour fill:
 
 ```julia
 plot2d_wireframe(stars[1])
 ```
 
-By default the far-side tessels are drawn too, in a lighter colour behind the near side,
-so the mesh reads as a transparent globe:
+By default the far side is drawn too, in a lighter colour:
 
 ```julia
 plot2d_wireframe(stars[1];
-    hidden       = true,          # draw the far hemisphere as well (default)
+    hidden       = true,          # far side as well
     front_color  = "black",       # near side
     hidden_color = "lightgrey",   # far side
     linewidth    = 0.5,
 )
 ```
 
-`hidden = false` restores the opaque near-side-only view.
+`hidden = false` draws the near side only.
 
 ![Wireframe mesh](../assets/tess_healpix_mesh.png)
 
 ## 3D surface
 
-Render the star as a 3D surface with colored temperature patches:
+The star as a 3-D surface coloured by temperature:
 
 ```julia
 plot3d(tmap, stars[1])
 ```
 
-## 3D vertices (debug)
-
-Show the quad vertices (blue) and centers (red) in 3D:
-
-```julia
-plot3d_vertices(stars[1])
-```
-
 ## Mollweide projection
 
-Show the full-surface temperature map in a Mollweide (equal-area) projection:
+The whole surface in Mollweide (equal-area) projection:
 
 ```julia
 plot_mollweide(tmap, stars[1])
 ```
 
-This automatically selects the HEALPix or lon/lat variant based on the
-tessellation type. Options:
+HEALPix and lon/lat meshes are both handled. Keywords:
 
 ```julia
 plot_mollweide(tmap, stars[1];
-    visible_pixels  = [],            # pixels observed at any epoch
-    mask_unobserved = true,          # gray out unobserved pixels (default true)
-    bad_color       = "lightgray",   # color for unobserved pixels (default "lightgray")
-    vmin            = 4000.0,        # color scale minimum
-    vmax            = 5000.0,        # color scale maximum
+    visible_pixels  = [],            # pixels observed at some epoch
+    mask_unobserved = true,          # grey out the others
+    bad_color       = "lightgray",   # their colour
+    vmin            = 4000.0,
+    vmax            = 5000.0,
     colormap        = "gist_heat",
-    incl            = 78.0,          # draw inclination line
-    figtitle        = "Mollweide",
-    lon_color       = "white",       # meridians + their tick labels (default "white")
-    lat_color       = "black",       # parallels + their tick labels (default "black")
+    incl            = 78.0,          # dash-dot line at latitude −incl (none at 90)
+    title           = "Mollweide",   # axes title
+    lon_color       = "white",       # meridians and their labels
+    lat_color       = "black",       # parallels and their labels
 )
 ```
 
-Every piece of furniture — the graticule, its spacing and linestyle, the degree labels, the
-colourbar and its label and tick count, and a solid equator and central meridian — can be
-turned off or restyled. That is what makes a ROTIR figure directly comparable with a published
-one, and the full list with a worked healpy-style example is under
-[Controlling the furniture](@ref) in the plotting API reference. Note that `figtitle` names the
-FIGURE WINDOW and never appears in a saved file; `title` is the axes title you want.
+The graticule (spacing, line style), degree labels, colourbar (label, tick count), and a
+solid equator and central meridian can each be turned off or restyled; see
+[Controlling the furniture](@ref). `title` is the axes title. On a HEALPix mesh `figtitle` names
+only the figure window; on a lat/long mesh it is also the axes title.
 
-When `visible_pixels` is provided and `mask_unobserved = true` (the default),
-pixels that were never observed are rendered in `bad_color`. Use
-`sometimes_visible(stars)` to get the list of pixels visible at any epoch:
+With `visible_pixels` and `mask_unobserved = true`, pixels never observed are drawn in
+`bad_color`. `sometimes_visible(stars)` lists the pixels visible at some epoch:
 
 ```julia
 vis = sometimes_visible(stars)
 plot_mollweide(tmap, stars[1], visible_pixels=vis)
 ```
 
-The Mollweide projection shows longitude on the x-axis (-180 to 180 degrees)
-and latitude on the y-axis (-90 to 90 degrees), with a graticule at 20-degree
-intervals.
+Longitude runs from −180° to 180° and latitude from −90° to 90°. Meridians are every 20°
+(`lon_spacing`), parallels every 15° (`lat_spacing`).
 
 ![Mollweide projection](../assets/plot_mollweide.png)

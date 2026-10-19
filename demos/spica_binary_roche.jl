@@ -69,7 +69,7 @@ roche_params_1 = (
 )
 
 # Secondary Roche parameters
-# For compute_potential_secondary: q = M_companion/M_self = M1/M2 = 1/q_binary
+# A component's q is M_companion/M_self: M1/M2 = 1/q_binary for the secondary
 roche_params_2 = (
     surface_type             = 3,
     rpole                    = 0.57/2,      # mas
@@ -82,7 +82,7 @@ roche_params_2 = (
     rotation_period          = P_orb,       # tidally locked
     beta                     = 0.25,
     d                        = 77.0,
-    q                        = 1.0/q_binary, # M1/M2 (inverted for secondary potential)
+    q                        = 1.0/q_binary, # M1/M2: the secondary's own M_companion/M_self
     fillout_factor_primary   = -1,
     fillout_factor_secondary = -1,
     i = i_orb, Ω = Omega, ω = omega,

@@ -60,11 +60,9 @@ end
 
 """
     f_rapid_rot_and_deriv(x)
-Compute f(x) = 3cos((π+acos(x))/3)/x and its derivative f'(x).
-This is the rapid rotator radius function: r = rpole * f(ω * sin(θ)).
-
-f'(x) = d/dx [3cos(α)/x] where α = (π + acos(x))/3
-      = [sin(α)/√(1-x²) - 3cos(α)/x] / x
+`f(x) = 3cos((π+acos x)/3)/x` and `f'(x)`: the rapid-rotator radius is
+`r = rpole·f(ω sinθ)`. Computed as `3sin(asin(x)/3)/x`; below `|x| = eps^(1/4)` the series
+`f = 1 + 4x²/27`, `f' = 8x/27` is used.
 """
 function f_rapid_rot_and_deriv(x::T) where T
     # The textbook form 3cos((π + acos x)/3)/x is CATASTROPHICALLY CANCELLING for small x:
@@ -101,7 +99,8 @@ end
 """
     projected_vertices_and_derivs(tessels, star_params, t; nparams)
 
-Compute projected quad vertices and their analytical derivatives w.r.t. shape parameters.
+Projected quad vertices and their analytic derivatives with respect to the shape
+parameters. `derivs = false` skips the derivatives.
 
 Surface type 0 (Sphere):    θ = [radius, inc (deg), PA (deg)]         → nparams=3
 Surface type 1 (Ellipsoid): θ = [rx, ry, rz, inc (deg), PA (deg)]    → nparams=5
@@ -323,37 +322,31 @@ end
 
 """
     shape_chi2_fg!(grad_θ, grad_xmap, xmap, θ, data_epochs, tessels, star_params_base, tepochs;
-                    κ=50.0, verbose=false)
+                    κ=50, verbose=false, parametric_map=false, fit_v0=false, weights=(1,1,1))
 
-Compute chi2 and gradients w.r.t. both shape parameters θ and surface map xmap,
-using the fused two-pass approach (no polyft matrix).
+χ² and its gradients with respect to the shape parameters θ and the map `xmap`, without a
+polyft matrix.
 
-Each tessel is weighted by w = soft visibility σ(κ nz) × limb darkening ld(nz), with the
-LD law/coefficients taken from `star_params_base` (`ldtype`, `ld1`, `ld2`) — identical to
-`create_star`/`compute_ldmap`. Because ld depends on nz, its derivative contributes to
-∂χ²/∂θ; the LD coefficients themselves are held fixed (they are not part of θ) — with a
-free per-tessel `xmap` the map can reabsorb a radial darkening profile, so ld1/ld2 are
-largely degenerate with it. They are fittable in the parametric path
-(`build_parametric_logπ`), where the map is pinned by the von Zeipel model instead.
+Each tessel is weighted by σ(κ nz) × ld(nz), with `ldtype`, `ld1`, `ld2` from
+`star_params_base` as in `create_star`/`compute_ldmap`. The derivative of ld with respect to
+nz enters ∂χ²/∂θ; the LD coefficients are held fixed (with a free map they are largely
+degenerate with it; `build_parametric_logπ` fits them).
 
 θ layout depends on surface_type:
   0 (Sphere):    θ = [radius, inc, PA]
   1 (Ellipsoid): θ = [rx, ry, rz, inc, PA]
   2 (Rapid Rot): θ = [rpole, ω, inc, PA]
 
-`parametric_map = true` makes the map a FUNCTION of θ rather than a free field: it is
-recomputed from θ on entry (overwriting `xmap`) and its derivative is contracted into
-`grad_θ`. That is what a parametric shape fit needs and what a joint reconstruction must not
-have — there the map is an independent variable, which is why the default is `false`.
+`parametric_map = true` recomputes the map from θ (overwriting `xmap`) and adds its
+derivative to `grad_θ`, for parametric shape fits. Surface types 0 and 1 only (see
+`shape_map_and_derivs`); for a sphere it changes nothing.
 
-Only surface types 0 and 1 support it: a sphere's uniform map depends on nothing in θ (so the
-flag is a no-op, and holding the map fixed was always exact there), an ellipsoid's depends on
-its three radii but not on its orientation, and a rapid rotator's is differentiated by Zygote
-in the parametric path instead. See `shape_map_and_derivs`.
+`fit_v0 = true` reads the visibility scale `V0` from the last entry of θ (see
+`interferometric_chi2`).
 
-`weights = (w_V², w_T3amp, w_T3φ)` scales each observable's χ² and its share of both gradients.
+`weights = (w_V², w_T3amp, w_T3φ)` scales each observable's χ² and its gradients.
 
-Returns chi2 (scalar). Modifies grad_θ and grad_xmap in place.
+Returns χ²; fills `grad_θ` and `grad_xmap`.
 """
 function shape_chi2_fg!(grad_θ::Vector{T}, grad_xmap::Vector{T},
                          xmap::Vector{T}, θ::Vector{T},
@@ -589,14 +582,15 @@ end
 
 """
     joint_reconstruct_oi(xmap_start, θ_start, data, tessels_base, star_params_base, tepochs;
-                          maxiter_xmap=200, maxiter_θ=50, nouter=5, reg_weight=1e-5, κ=50.0)
+                          maxiter_xmap=200, maxiter_θ=50, nouter=5, reg_weight=10,
+                          regularizer="sobel", θ_lower=nothing, θ_upper=nothing,
+                          fit_v0=false, κ=50, verbose=true) -> (xmap, θ)
 
-Alternating optimization of surface map and shape parameters.
-Outer loop alternates between:
-  1. xmap step: optimize surface map with fixed shape (VMLMB)
-  2. θ step: optimize shape parameters with fixed map (VMLMB with bounds)
+Alternate, `nouter` times, between
+  1. the map, with the shape fixed (VMLMB, `regularizer` with weight `reg_weight`);
+  2. the shape parameters θ, with the map fixed (VMLMB within `θ_lower`/`θ_upper`).
 
-θ layout depends on surface_type (see shape_chi2_fg!).
+θ layout by `surface_type` as in `shape_chi2_fg!`; type 3 (Roche) is refused.
 """
 function joint_reconstruct_oi(xmap_start::Vector{T}, θ_start::Vector{T},
                                data, tessels_base, star_params_base, tepochs;

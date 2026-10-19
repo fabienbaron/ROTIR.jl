@@ -19,11 +19,7 @@ import ROTIR: fit_parametric, bootstrap_parametric, default_parametric_bounds,
 """
     fit_parametric(data_epochs, tessels, tepochs, base_params; kwargs...) -> (θ̂, chi2r, info)
 
-See the docstring in ROTIR core. Minimizes `-logπ` with `OptimPackNextGen.vmlmb` under box
-bounds, using a Zygote gradient.
-
-Bounds replace the exp/sigmoid reparametrization of the NUTS demo: a sampler needs an
-unconstrained space, a bounded optimizer does not.
+Minimise `-logπ` with `OptimPackNextGen.vmlmb` under box bounds, with a Zygote gradient.
 
 # Keywords
 - `θ0` — starting point; required (full length, including the frozen entries)
@@ -31,17 +27,15 @@ unconstrained space, a bounded optimizer does not.
   `["rpole", "ld1"]`. Frozen entries keep their `θ0` value. See
   [`parametric_free_indices`](@ref)
 - `lb`, `ub` — box bounds (default [`default_parametric_bounds`](@ref))
-- `intensity_model`, `band`, `κ`, `GM`, `tpole_free`, `weights` — passed to
-  `build_parametric_logπ`; `weights = (w_V², w_T3amp, w_T3φ)`
-- `logprior` — optional `θ -> log p(θ)` added to the objective. The reported χ²ᵣ is always
-  the likelihood part alone
-- `maxiter`, `gtol`, `mem`, `verb` — optimizer settings
+- `intensity_model`, `band`, `κ`, `GM`, `tpole_free`, `gravity_law`, `provider`, `layout`,
+  `weights` — passed to [`build_parametric_logπ`](@ref); `weights = (w_V², w_T3amp, w_T3φ)`
+- `logprior` — optional `θ -> log p(θ)` added to the objective; the reported χ²ᵣ excludes it
+- `maxiter` (200), `gtol`, `xtol`, `ftol`, `mem` (7), `verb` — optimiser settings
 
-Returns `(θ̂, chi2r, info)` — `θ̂` at full length including frozen entries — where `info`
-holds `evaluations`, `gnorm`, `gratio` (‖g‖ relative to the start), `ndof`, `free` and
-`hit_maxiter`. There is deliberately no `converged` flag: vmlmb prints its stop reason
-without returning it, and ‖g‖ is not a usable substitute (a highly resolved star has a
-χ² steep enough that ‖g‖ stays O(10) at a minimum whose σ is ~1e-3 mas).
+Returns `(θ̂, chi2r, info)`. `θ̂` has full length, frozen entries included. `info` holds
+`evaluations`, `gnorm`, `gratio` (‖g‖ relative to the start), `ndof`, `free` and
+`hit_maxiter`. There is no convergence flag: vmlmb does not return its stop reason, and ‖g‖
+can stay O(10) at the minimum of a well-resolved star.
 """
 function fit_parametric(data_epochs::AbstractVector, tessels, tepochs, base_params;
     θ0,
@@ -143,14 +137,12 @@ end
         -> ParametricBootstrap
 
 Block bootstrap of the parametric fit: fit the full dataset, then refit `nboot` resampled
-replicates and summarise the parameter scatter.
+replicates, each started at the full-data θ̂, and summarise the parameter scatter.
 
-Every replicate is warm-started at the full-data θ̂ and run to convergence, so the spread
-measures the data rather than the optimizer's stopping rule.
-
-Fit keywords (`lb`, `ub`, `intensity_model`, `band`, `κ`, `GM`, `tpole_free`, `logprior`,
-`maxiter`, `gtol`, `mem`) go to [`fit_parametric`](@ref); the rest go to the core
-[`bootstrap_parametric`](@ref) method.
+Fit keywords (`free`, `lb`, `ub`, `intensity_model`, `band`, `κ`, `GM`, `tpole_free`,
+`gravity_law`, `logprior`, `provider`, `layout`, `maxiter`, `gtol`, `mem`) go to
+[`fit_parametric`](@ref). `refit_full = false` uses `θ0` as the full-data fit. Other keywords
+go to the core [`bootstrap_parametric`](@ref) method.
 """
 function bootstrap_parametric(data_epochs::AbstractVector, tessels, tepochs, base_params;
     θ0,

@@ -2,133 +2,150 @@
 
 ## Two forward-model paths
 
-ROTIR provides two ways to compute complex visibilities from a
-temperature map.  Both produce identical results; the choice depends on
-what is being optimized.
+ROTIR computes complex visibilities from a surface map in two ways. They agree to rounding.
 
-### Matrix path (precomputed polyft)
+### Matrix path
 
-`setup_oi!()` precomputes a dense complex matrix `polyft` (Nuv x Npix)
-and a flux vector `polyflux` (Npix) for each epoch, stored inside the
-`stellar_geometry` struct.  Complex visibilities are then a single
-matrix-vector multiply: `cvis = polyft * xw / flux`.  The gradient is
-the transpose multiply.
+`setup_oi!` stores in each `stellar_geometry` a dense complex matrix `polyft`
+(Nuv × visible tessels) and the projected tessel areas `polyflux`. The visibilities are one
+matrix-vector product, `cvis = polyft * xw / dot(polyflux, xw)`, with `xw` the visible map
+multiplied by `vis_weights` and `ldmap`; the gradient is the transposed product.
 
-This is the default path used by `spheroid_chi2_fg`,
-`image_reconstruct_oi`, and the standard reconstruction pipeline.
+`spheroid_chi2_fg`, `image_reconstruct_oi` and `binary_reconstruct_oi` use this path and
+require `setup_oi!`. `observables`, `chi2s` and `chi2_breakdown` use it when `polyft` is set
+and the fused path otherwise.
 
-### Fused matrix-free path
+### Fused path
 
-`fused_spheroid_chi2_fg` (in `fused_polyft.jl`) computes visibilities
-on-the-fly in a loop over pixels and UV points, without ever forming the
-dense polyft matrix.  A second adjoint pass computes the gradient.  This
-path also supports `compute_adjoint_vertices!`, which backpropagates
-through the vertex positions — needed for joint shape + map optimization
-(`shape_chi2_fg!`).
-
-### When to use which
+`fused_spheroid_chi2_fg` computes the visibilities without forming `polyft`, with the kernel
+selected by `POLYFT_BACKEND` (see [Fused polygon Fourier transform](fused_polyft.md)); a
+second, adjoint pass gives the gradient. `compute_adjoint_vertices!` also gives the gradient
+with respect to the vertex positions, which the joint shape and map fit (`shape_chi2_fg!`,
+`joint_reconstruct_oi`) uses.
 
 |                     | Matrix path          | Fused path                  |
 |---------------------|----------------------|-----------------------------|
-| Memory              | O(Nuv x Npix) dense  | O(Nuv + Npix)               |
-| Setup cost          | One-time `setup_oi!` | None                        |
-| Per-iteration cost  | Mat-vec multiply     | Loop over pixels x UV pts   |
-| Gradient            | Transpose multiply   | Adjoint loop                |
-| Vertex gradients    | No                   | Yes                         |
+| Memory              | O(Nuv × Npix)        | O(Nuv + Npix)               |
+| Setup               | `setup_oi!` per geometry | none                    |
+| Per evaluation      | matrix-vector product | transform kernel           |
+| Vertex gradients    | no                   | yes                         |
 | Used by             | `image_reconstruct_oi`, `spheroid_chi2_fg` | `shape_chi2_fg!`, `joint_reconstruct_oi` |
-| Best when           | Map-only optimization (fixed geometry) | Shape optimization, or large Nuv x Npix |
-
-For most reconstructions where only the temperature map is optimized,
-the matrix path is simpler and fast (a single BLAS call per epoch).
-Switch to the fused path when optimizing shape parameters (inclination,
-radii, position angle) jointly with the map, or when the polyft matrix
-is too large to fit in memory.
+| Suited to           | fixed geometry, map only | geometry that changes, or a matrix too large for memory |
 
 !!! note
-    For producing real-space images (visualization, image-plane fitting),
-    ROTIR also provides **rasterization** and **NFFT** methods that avoid
-    the dense polyft matrix entirely. See [Rasterization & NFFT](@ref)
-    for the API and [Direct imaging methods](@ref) for a usage guide.
+    For real-space images, see [Rasterization & NFFT](@ref) and
+    [Direct imaging methods](@ref).
 
 ## Setup (matrix path)
 
 | Function | Description |
 |----------|-------------|
-| `setup_oi!(data, stars)` | Precompute polyflux and polyft matrices for all epochs (threaded) |
-| `setup_polygon_ft(data, star)` | Return `(polyflux, polyft)` arrays for all epochs |
-| `setup_polyflux_single(proj_west, proj_north)` | Shoelace polygon areas for one epoch |
-| `setup_polyft_single(uv, proj_west, proj_north)` | Complex visibility matrix (nuv x npix) for one epoch |
+| `setup_oi!(data, stars)` | `polyflux` and `polyft` for every epoch, stored in `stars` (threaded over epochs) |
+| `setup_polygon_ft(data, stars)` | the same arrays, returned as `(polyflux, polyft)` vectors |
+| `setup_polyflux_single(proj_west, proj_north)` | projected tessel areas (shoelace formula), one epoch |
+| `setup_polyft_single(uv, proj_west, proj_north)` | `polyft` (Nuv × tessels), one epoch |
 
 ## Forward model
 
 | Function | Description |
 |----------|-------------|
-| `poly_to_cvis(x, star)` | Temperature map to flux-normalized complex visibilities |
-| `poly_to_flux(x, star)` | Temperature map to total flux |
-| `observables(x, star, data)` | Returns `(v2_model, t3amp_model, t3phi_model)` |
-| `cvis_to_v2(cvis, indx)` | Complex visibilities to squared visibilities |
-| `cvis_to_t3(cvis, i1, i2, i3)` | Complex visibilities to triple product, T3amp, T3phi |
-| `mod360(x)` | Wrap angle to [-180, 180] |
+| `poly_to_cvis(x, star; intensity_model, band)` | map → flux-normalised complex visibilities |
+| `poly_to_flux(x, star; intensity_model, band)` | map → total flux |
+| `observables(x, star, data)` | `(v2, t3amp, t3phi)` |
+| `cvis_to_v2(cvis, indx)` | complex visibilities → V² |
+| `cvis_to_t3(cvis, i1, i2, i3)` | complex visibilities → `(t3, t3amp, t3phi)`, phase in degrees |
+| `mod360(x)` | wrap an angle (degrees) to [−180, 180) |
+
+`intensity_model = :linear` (default) uses the map as surface brightness; `:planck` treats it
+as a temperature and converts it with `intensity` at wavelength `band` (metres).
 
 ## Chi-squared
 
 | Function | Description |
 |----------|-------------|
-| `chi2s(x, star, data; verbose)` | Per-observable chi2: returns `(chi2_v2, chi2_t3amp, chi2_t3phi)` |
-| `spheroid_chi2_f(x, star, data)` | Single-epoch chi2 (value only) |
-| `spheroid_chi2_fg(x, g, star, data)` | Single-epoch chi2 + gradient (matrix-based) |
-| `spheroid_chi2_allepochs_f(x, stars, data)` | Multi-epoch chi2 (value only) |
-| `spheroid_crit_multiepochs_fg(x, g, stars, data; regularizers)` | Multi-epoch chi2 + regularization + gradient |
+| `chi2s(x, star, data; verbose)` | `(chi2_v2, chi2_t3amp, chi2_t3phi)`; prints the reduced values |
+| `chi2_breakdown(x, stars, data)` | absolute, counts and reduced χ², total and per epoch, as a NamedTuple |
+| `spheroid_chi2_f(x, star, data; weights)` | one epoch, value |
+| `spheroid_chi2_fg(x, g, star, data; weights)` | one epoch, value and gradient (matrix path) |
+| `spheroid_chi2_allepochs_f(x, stars, data; epochs_weights, weights)` | all epochs, value |
+| `ROTIR.spheroid_crit_allepochs_fg(x, g, stars, data; regularizers, epochs_weights, weights)` | all epochs, χ² + regularisation, value and gradient |
+
+`weights = (w_V², w_T3amp, w_T3φ)`, default `(1, 1, 1)`, scales each observable's χ² and its
+gradient. `epochs_weights` scales each epoch's χ²; it must have one finite, non-negative entry
+per epoch.
 
 ## Reconstruction
 
 | Function | Description |
 |----------|-------------|
-| `image_reconstruct_oi(x, data, stars; kwargs...)` | Main reconstruction: VMLMB optimizer with bounds and regularization |
-| `image_reconstruct_oi_crit(x, data, stars; regularizers)` | Evaluate criterion at fixed point |
-| `image_reconstruct_oi_chi2(x, data, stars)` | Evaluate chi2 at fixed point |
-| `image_reconstruct_oi_chi2_fg(x, data, stars)` | Evaluate chi2 + gradient at fixed point |
-| `multires_reconstruct_oi(data, star_params, tepochs; n_start, n_end, kwargs...)` | Multi-resolution HEALPix pyramid reconstruction |
+| `image_reconstruct_oi(x, data, stars; kwargs...)` | VMLMB with bounds and regularisation |
+| `image_reconstruct_oi_crit(x, data, stars; regularizers)` | criterion at `x` |
+| `image_reconstruct_oi_chi2(x, data, stars)` | χ² at `x` |
+| `image_reconstruct_oi_chi2_fg(x, data, stars)` | `(χ², gradient)` at `x` |
+| `multires_reconstruct_oi(data, star_params, tepochs; kwargs...)` | coarse-to-fine HEALPix reconstruction; returns `(tmap, stars)` |
 
 ### `image_reconstruct_oi` keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `maxiter` | `200` | Maximum VMLMB iterations |
-| `lower` | `0` | Lower bound on pixel values |
-| `upper` | `Inf` | Upper bound on pixel values |
-| `regularizers` | `[]` | List of regularization terms |
-| `epochs_weights` | `[]` | Per-epoch weights (empty = uniform) |
-| `verbose` | `true` | Print per-iteration diagnostics |
+| `maxiter` | `100` | maximum VMLMB iterations |
+| `lower` | `0` | lower bound on pixel values |
+| `upper` | `Inf` | upper bound on pixel values |
+| `regularizers` | `[]` | regularisation terms |
+| `epochs_weights` | `[]` | per-epoch weights (empty: uniform) |
+| `weights` | `(1, 1, 1)` | `(w_V², w_T3amp, w_T3φ)` |
+| `intensity_model`, `band` | `:linear`, `nothing` | see [Forward model](@ref) |
+| `callback` | `nothing` | `callback(x, nevals, f)`, called on the first evaluation and every `callback_every` |
+| `callback_every` | `25` | evaluations between callbacks |
+| `verbose` | `true` | print per-iteration diagnostics |
+
+`callback` receives VMLMB's working vector (copy it to keep it) and counts evaluations, not
+iterations. A callback that throws is dropped with a warning; the reconstruction continues.
 
 ### `multires_reconstruct_oi` keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `n_start` | `2` | Starting HEALPix level |
-| `n_end` | `4` | Final HEALPix level |
-| `maxiter` | `500` | Max iterations per level |
-| `reg_weight` | `1e-5` | TV regularization weight |
-| `reg_type` | `"sobel2"` | Regularization type |
-| `verbose` | `true` | Print diagnostics |
+| `n_start` | `2` | first HEALPix level |
+| `n_end` | `4` | last HEALPix level |
+| `maxiter` | `500` | iterations per level |
+| `reg_weight` | `10.0` | regularisation weight, the same at every level |
+| `reg_type` | `"sobel2"` | `"sobel"` or `"sobel2"` (`sobel_gradient_healpix`); any other name uses `tv_neighbors_healpix` |
+| `verbose` | `true` | print diagnostics |
 
-## Regularization
+Other keywords go to `image_reconstruct_oi`.
+
+## Regularisation
+
+Each regulariser is an entry `[name, weight, aux, pixel_subset]`:
+
+| Name | Penalty | `aux` |
+|------|---------|-------|
+| `"sobel"` | `∫|∇x|dΩ / x̄` (edge-preserving) | `sobel_gradient_healpix(n)` |
+| `"sobel2"` | `∫|∇x|²dΩ / x̄²` | `sobel_gradient_healpix(n)` |
+| `"laplace_beltrami"` | `∫|∇x|²dΩ / x̄²` (cotangent Laplacian) | `laplace_beltrami_healpix(n)` |
+| `"tv"` | `‖Lx‖`, `L` the graph Laplacian | `tv_neighbors_healpix(n)` |
+| `"tv2"` | `‖Lx‖²` | `tv_neighbors_healpix(n)` |
+| `"mem"` | `Σ xm log xm`, `xm = x/x̄` | `nothing` |
+| `"mean"` | `Σ |x − x̄|` | `nothing` |
+| `"bias"` | weighted variance about the mean, weight `B` above the mean | `B` |
+| `"radflat"` | flat radial profile | `radflat_bins(star)` |
+| `"radialvar"` | no azimuthal scatter | `radflat_bins(star)` |
+| `"orthold"` | no component along the limb-darkening-degenerate direction | `orthold_direction(star, x0, params)` |
+
+`pixel_subset` (e.g. `1:npix`) selects the pixels the term acts on; `aux` must be built for
+the same subset. An unknown name raises an error.
 
 | Function | Description |
 |----------|-------------|
-| `spheroid_regularization(x, g; regularizers, verbose)` | Dispatch to regularization functions, accumulates into gradient `g` |
-| `spheroid_total_variation(x, g, tvinfo)` | L1 total variation |
-| `spheroid_l2_fg(x, g, tvinfo)` | Quadratic total variation (TV2) |
-| `spheroid_harmon_bias_fg(x, g, B)` | Harmonic bias regularization |
-| `spheroid_radflat_fg(x, g, bins)` | RADFLAT — flatten the azimuthally averaged radial profile |
-| `spheroid_radialvar_fg(x, g, bins)` | RADIALVAR — remove azimuthal scatter within each annulus |
-| `radflat_bins(star; nbins)` | Projected-radius binning both of the above need |
-
-Regularizers are passed as `["name", weight, aux, pixel_subset]`. Recognised names:
-`sobel`, `sobel2`, `laplace_beltrami`, `mem`, `tv`, `tv2`, `mean`, `bias`, `radflat`,
-`radialvar`, `orthold` — an unknown name raises rather than silently contributing zero.
-
-The smoothing priors and the operators they take:
+| `spheroid_regularization(x, g; regularizers, verbose)` | sum of the terms; adds their gradient into `g` |
+| `ROTIR.spheroid_total_variation_fg(x, g, tvinfo)` | `"tv"` |
+| `ROTIR.spheroid_total_variation2_fg(x, g, tvinfo)` | `"tv2"` |
+| `max_entropy_fg(x, g)` | `"mem"` |
+| `spheroid_harmon_bias_fg(x, g, B)` | `"bias"` |
+| `spheroid_radflat_fg(x, g, bins)` | `"radflat"` |
+| `spheroid_radialvar_fg(x, g, bins)` | `"radialvar"` |
+| `spheroid_orthold_fg(x, g, od)` | `"orthold"` |
 
 ```@docs
 sobel_gradient_healpix
@@ -138,38 +155,36 @@ spheroid_sobel2_fg
 spheroid_laplace_beltrami_fg
 ```
 
-The two radial regularizers have their own page, including when they help and when they
-destroy real structure: [Radial Regularizers](radial_regularizers.md).
+`"radflat"`, `"radialvar"` and `"orthold"` are described in
+[Radial Regularizers](radial_regularizers.md).
 
 ## Binary forward model
 
 | Function | Description |
 |----------|-------------|
-| `orbit_to_rotir_offset(bparams, tepoch_jd)` | Convert orbital position to ROTIR's (West, North) projected frame; returns `(offset_x, offset_y)` in mas |
-| `binary_phase_shift(uv, offset_x, offset_y)` | Per-baseline phase shift from binary separation |
-| `binary_cvis(x1, star1, x2, star2, phase_shift)` | Combined complex visibilities for both stars, flux-normalized |
-| `binary_observables(x1, star1, x2, star2, data, phase_shift)` | Returns `(v2, t3amp, t3phi)` for a binary model |
-| `binary_chi2_f(x1, star1, x2, star2, data, phase_shift; verbose)` | Binary chi-squared (value only) |
+| `orbit_to_rotir_offset(bparams, tepoch_jd)` | orbital position as ROTIR's `(West, North)` offset, mas |
+| `binary_phase_shift(uv, offset_x, offset_y)` | per-baseline phase factor for that offset |
+| `binary_cvis(x1, star1, x2, star2, phase_shift)` | combined, flux-normalised complex visibilities |
+| `binary_observables(x1, star1, x2, star2, data, phase_shift)` | `(v2, t3amp, t3phi)` |
+| `binary_chi2_f(x1, star1, x2, star2, data, phase_shift)` | χ², value |
 
 ## Binary imaging
 
-Both surfaces of a binary, reconstructed at a separation the orbit (or a fitted offset)
-already fixes. The unknown is the two maps **concatenated**, `[x1; x2]`, split at
-`stars1[1].npix`; `split_binary_map` takes them apart again.
+Both surfaces of a binary, reconstructed at a fixed separation (from the orbit or a fitted
+offset). The unknown is the two maps concatenated, `[x1; x2]`, split at `stars1[1].npix`.
 
 | Function | Description |
 |----------|-------------|
-| `binary_chi2_fg(x1, g1, star1, x2, g2, star2, data, phase_shift)` | One epoch's chi-squared and the gradient w.r.t. **both** maps |
-| `binary_crit_allepochs_fg(x, g, stars1, stars2, data, phase_shifts; regularizers1, regularizers2, epochs_weights)` | The criterion a binary reconstruction minimises |
-| `binary_reconstruct_oi(x_start, data, stars1, stars2, phase_shifts; maxiter, regularizers1, regularizers2, callback)` | VMLMB over both maps |
-| `split_binary_map(x, stars1)` | Views of the two halves |
+| `binary_chi2_fg(x1, g1, star1, x2, g2, star2, data, phase_shift)` | one epoch's χ² and the gradient with respect to both maps |
+| `binary_crit_allepochs_fg(x, g, stars1, stars2, data, phase_shifts; regularizers1, regularizers2, epochs_weights, weights)` | the criterion `binary_reconstruct_oi` minimises |
+| `binary_reconstruct_oi(x_start, data, stars1, stars2, phase_shifts; maxiter, regularizers1, regularizers2, weights, callback)` | VMLMB over both maps |
+| `split_binary_map(x, stars1)` | views of the two halves |
 
 ```julia
 stars1 = create_star_multiepochs(tess, p1, tepochs; secondary = false)
 stars2 = create_star_multiepochs(tess, p2, tepochs; secondary = true)
-setup_oi!(data, stars1); setup_oi!(data, stars2)      # both: the dense route is what runs
-# The separation is fixed through the run — it comes from the orbit, it is not fitted here.
-shifts = [binary_phase_shift(data[i].uv, offs[i]...) for i in eachindex(data)]
+setup_oi!(data, stars1); setup_oi!(data, stars2)      # matrix path
+shifts = [binary_phase_shift(data[i].uv, offs[i]...) for i in eachindex(data)]  # fixed
 x0 = vcat(parametric_temperature_map(p1, stars1[1]),
           parametric_temperature_map(p2, stars2[1]; secondary = true))
 x  = binary_reconstruct_oi(x0, data, stars1, stars2, shifts;
@@ -177,36 +192,29 @@ x  = binary_reconstruct_oi(x0, data, stars1, stars2, shifts;
 map1, map2 = split_binary_map(x, stars1)
 ```
 
-Two regularizer lists, and neither defaults to the other: an entry carries a structure built
-from *its* star (`radflat_bins` bins that component's radii, `orthold_direction` is that
-component's degenerate direction), so the primary's list applied to the secondary regularizes
-it against the wrong shape. A subset in element 4 indexes its own component's map, not the
-concatenated vector.
+Each component has its own regulariser list. Structures in an entry (`radflat_bins`,
+`orthold_direction`) are built from that component's star, and a pixel subset in element 4
+indexes that component's map, not the concatenated vector.
 
-`intensity_model = :planck` is not available on this path: it makes the map a temperature and
-the brightness a nonlinear function of it, while this derivative is the linear one — the same
-restriction `spheroid_chi2_fg` carries.
+`binary_cvis`, `binary_observables` and `binary_chi2_f` take `intensity_model`, `band` and
+`occultation` (default `false`). `binary_chi2_fg` takes `occultation` only;
+`binary_crit_allepochs_fg` and `binary_reconstruct_oi` take neither, so a binary
+reconstruction uses the map as surface brightness and has no mutual occultation.
 
-The GUI's Imaging tab does not drive this yet; it reconstructs a single component and refuses
-a model with a companion rather than silently imaging the primary alone.
+The GUI's Imaging tab reconstructs one component and refuses a model with a companion.
 
-## Parametric fitting
+## Parametric model
 
 | Function | Description |
 |----------|-------------|
-| `parametric_temperature_map(params, star)` | Generate von Zeipel temperature map for any surface type |
-| `spheroid_parametric_f(params, tessels, data, tepochs)` | End-to-end: parameters to chi2 |
+| `parametric_temperature_map(params, star; secondary)` | gravity-darkened temperature map for any `surface_type` |
+| `spheroid_parametric_f(params, tessels, data, tepochs)` | parameters → χ² over all epochs |
 
 ## Saving a surface map
 
-A ROTIR map is a bare `Vector` of per-tessel values: on its own it does not record which
-tessellation it belongs to, whether it is a temperature or an intensity, or what geometry it
-was fitted against — so it cannot be turned back into a chi-squared a week later. These write
-it to FITS together with everything needed to reproduce that, and read it back with the
-parameter types it was saved with (`surface_type` and `ldtype` stay `Int`, which matters
-because the code branches on them with `==`).
-
-See [Saving a reconstruction](../guides/reconstruction.md) for the round trip.
+`save_surface_map` writes a map to FITS with its tessellation, the `star_params` it was
+computed with (integer fields stay `Int`), and optionally the epochs, so its χ² can be
+reproduced. See [Saving a reconstruction](../guides/reconstruction.md).
 
 ```@docs
 save_surface_map
@@ -215,21 +223,16 @@ load_surface_map
 
 ## Saving a model geometry
 
-The companion to the pair above, and for the other half of the model: this writes the SURFACE —
-the tessellated mesh, the stellar parameters it was built from, the surface type, and for a
-binary the second component and how the two are placed — with none of the map values in it.
-
-Keep the two apart the way the physics does. A map belongs to one reconstruction; a geometry
-belongs to the star, and the same geometry carries every map ever fitted on it. The mesh itself
-is stored, not just the parameters, so a surface can be reproduced exactly rather than rebuilt
-and assumed identical — which matters for a Roche component, whose shape comes from a root
-solve on the instantaneous separation.
+`save_star_geometry` writes the surface instead of the map: the tessellated mesh, the
+parameters it was built from, and for a binary the second component and its placement. The
+mesh is stored, so it is reproduced exactly, including a Roche component whose shape comes
+from a root solve at the instantaneous separation.
 
 ```julia
 g = load_star_geometry("spica_primary.fits")
-g.star                       # the mesh as it was, ready to draw or to set up a chi-squared
-g.params                     # and the parameters that produced it
-setup_oi!(data, [g.star])    # the Fourier setup is rebuilt against your data, not stored
+g.star                       # the mesh as saved
+g.params                     # the parameters that built it
+setup_oi!(data, [g.star])    # the Fourier setup is not stored
 ```
 
 ```@docs

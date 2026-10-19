@@ -336,71 +336,55 @@ end
 """
     fit_ellipsoid_ld(data, tessels; kwargs...) -> NamedTuple
 
-Fit a **triaxial ellipsoid with a uniform surface**, limb darkening only — the next model up
-from [`fit_sphere_ld`](@ref) when a star is measurably non-circular on the sky but you do not
-want to commit to a gravity-darkening law.
+Fit a triaxial ellipsoid with a uniform surface and limb darkening: the model after
+[`fit_sphere_ld`](@ref) for a star that is non-circular on the sky, without a
+gravity-darkening law.
 
-Free parameters: the three body-frame semi-axes `radius_x`, `radius_y`, `radius_z` (mas),
-inclination and position angle (degrees), and `ld1`. That is the model's own parameterization —
-`surface_type = 1` carries three independent radii and
-[`ellipsoid_param_names`](@ref) lists them — so nothing here is a reparameterization of it.
+Free parameters: the body-frame semi-axes `radius_x`, `radius_y`, `radius_z` (mas),
+inclination and position angle (degrees), and `ld1`; the layout of
+[`ellipsoid_param_names`](@ref). The keywords `req0`, `f0`, `req_bounds` and `f_bounds` are
+refused.
 
-!!! warning "This function used to fit an oblate spheroid, and that was wrong"
-    Until this change it imposed `radius_x = radius_y = req` and `radius_z = req*(1 - f)`,
-    fitting a 5-parameter OBLATE figure: a two-dimensional slice of the model's three-radius
-    shape space, with the symmetry axis pinned to the spin axis. A tidally distorted star —
-    the usual reason a giant is non-circular — is elongated TOWARDS ITS COMPANION, i.e.
-    `radius_x > radius_y ≈ radius_z`, which that slice cannot represent at any parameter value.
-    Asked for such a figure it drives `f` to its bound and reports a shape that is not the
-    star's. The old `req0`, `f0`, `req_bounds` and `f_bounds` keywords are refused rather than
-    silently reinterpreted.
+# Keywords
+- `tepochs` (zeros), `rotation_period`, `t0` (0): the phase is `ψ = 2π(t - t0)/P`.
+  `rotation_period` is required when the epochs differ. For a synchronised binary, set `t0`
+  to conjunction so phase 0 faces the companion; otherwise only the axis ratios are
+  meaningful.
+- `ldtype` (3), `tpole` (5000)
+- `r0`, `inc0`, `pa0` (45), `ld0`, `seed_from_sphere` (`true`): starting point
+- `r_bounds` ((0.05, 20)), `inc_bounds` ((0, 90)), `pa_bounds` ((0, 180)), `ld_bounds`
+  ((0, 4) for `ldtype = 3`, else (0, 1))
+- `weights` (`[1, 1, 0]`): V², T3amp, T3φ
+- `method`: `:neldermead` (default), `:ultranest` or `:nautilus`
+- `algorithm` (`:LN_NELDERMEAD`), `restarts` (6), `maxeval` (6000), `xtol_rel`, `ftol_rel`
+- `min_num_live_points` (400), `use_stepsampler` (`true`), `threaded` (`true`): samplers
+- `verbose` (`false`)
 
-!!! note "The spin phase is now load-bearing"
-    An oblate figure is axisymmetric, so `rotation_period` and the epoch times did not affect
-    it and the old code hardcoded `rotation_period = 1.0`. A triaxial figure presents a
-    DIFFERENT projected ellipse at every rotation phase — which is exactly what makes the three
-    radii separately identifiable — so the period is required whenever the epochs differ, and
-    there is no default. `t0` sets the phase zero (`rotate_star` uses `ψ = 2π(t - t0)/P` and the
-    schema has no phase-offset parameter). For a synchronised binary, set `t0` to the
-    conjunction epoch so that phase 0 is the companion-facing orientation; otherwise the fitted
-    axes are labelled against an arbitrary zero and only their RATIOS are meaningful.
+Returns a NamedTuple: `radius_x`, `radius_y`, `radius_z`, `inclination`, `position_angle`,
+`ld1`, `equatorial_elongation` (`radius_x/radius_y`), `polar_flattening`
+(`1 - 2radius_z/(radius_x + radius_y)`), `mean_radius` (geometric mean), `rotation_period`,
+`phases`, `chi2`, `chi2_per_datum`, `chi2_sphere`, `params`, `status`; with a sampler also
+`logz`, `logzerr`, `samples`, `q16`, `q84` (the point values are then posterior medians).
 
-    From a single rotation phase the projected outline is one ellipse — three numbers — against
-    five shape-and-orientation parameters, so the radii are NOT separately identifiable. The
-    fit still runs (the best-fitting projected ellipse is well defined) and warns.
+`restarts` starts from several orientations and keeps the lowest χ²; this objective has
+several minima (three on ζ And at HEALPix 3). `restarts = 1` runs once from `inc0`/`pa0`.
 
-!!! note "Uniform surface on purpose"
-    The surface is held uniform (`uniform = true` in [`parametric_chi2`](@ref)), NOT
-    gravity-darkened. `temperature_map_vonZeipel_ellipsoid` is a placeholder — `g ∝ 1/r²`
-    with an unverified `rpole = radius_x` and a `# to check` in the source — so folding it
-    into a shape fit would attribute its errors to the shape. If you want a physical
-    gravity-darkened oblate star, use `surface_type = 2` (rapid rotator) and `fit_parametric`,
-    which solves the Roche problem properly; for a tidally distorted star in a close binary the
-    physically correct figure is `surface_type = 3` (Roche lobe), which has ONE shape parameter
-    rather than three free radii.
+From a single rotation phase the projected outline is one ellipse (three numbers) against
+five shape and orientation parameters: the fit runs and warns.
 
-!!! warning "Degeneracies"
-    Pole-on (`inc → 0`) the projection is circular whatever the shape, so the radii, `inc` and
-    `PA` become jointly unidentifiable; and a nearly spherical star leaves `PA` free. `inc` is
-    bounded to [0°, 90°] and `PA` to [0°, 180°] because a figure at `180° − inc` and at
-    `PA + 180°` are all but indistinguishable — all but, rather than exactly, because for a
-    triaxial body flipping the inclination reverses the direction the long axis sweeps with
-    phase, which a long enough phase baseline can in principle tell apart. Check every fitted
-    radius against its uncertainty before believing an orientation.
+The surface is uniform (`uniform = true` in [`parametric_chi2`](@ref)), not gravity-darkened.
+For a gravity-darkened rotating star use `surface_type = 2` and `fit_parametric`; for a
+tidally distorted star in a close binary, `surface_type = 3` (Roche lobe).
 
-`restarts` (default 6) sweeps the starting orientation and keeps the best χ², because this
-objective has several basins and the bad ones look converged — see the comment at the optimiser
-for the ζ And measurement that sets the default. Pass `restarts = 1` to reproduce a single run
-from `inc0`/`pa0`.
+Near pole-on (`inc → 0`) the projection is circular for any shape, and the radii, `inc` and
+`PA` are not separately constrained; a nearly spherical star leaves `PA` free. A figure at
+`180° − inc` or `PA + 180°` is nearly indistinguishable, hence the bounds. Compare each radius
+with its uncertainty before quoting an orientation.
 
-A uniform ellipsoid is still centrosymmetric in projection, so it predicts closure phases of
-0° or 180° only — hence the same `weights = [1, 1, 0]` default as [`fit_sphere_ld`](@ref). On a
-spotted star the T3φ residual is the spot signal, and it is usually far larger than the shape
-signal: ζ And is reconstructed as ~6 % distorted (0.14 mas, a third of a resolution element at
-CHARA/H) against a ~20 % surface brightness contrast, and that contrast biases the fitted axis
-ratio by ~1 % (measured on a synthetic spotted star in `demos/zetand_triaxial.jl`). So a shape
-at the few-percent level survives the spots here and one at the tens-of-percent level does not
-— and either way a joint model + imaging fit, not a tighter bound, is what should absorb them.
+A uniform ellipsoid predicts closure phases of 0° or 180° only, hence `weights = [1, 1, 0]`.
+On a spotted star the T3φ residual is the spot signal. On a synthetic spotted star like ζ And
+(6 % distortion, 0.14 mas; 20 % surface contrast), the spots bias the fitted axis ratio by
+about 1 % (`demos/zetand_triaxial.jl`).
 """
 function fit_ellipsoid_ld(data, tessels;
                           tepochs = zeros(length(data)),

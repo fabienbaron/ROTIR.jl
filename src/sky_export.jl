@@ -34,10 +34,9 @@
 """
     sky_layout(img_north_west) -> Matrix
 
-The `(north, west)` image `polyft_nfft_image` returns, as OITOOLS's `(east, north)` array with
-the centre at `nx÷2+1`. A transpose, a reflection of the first axis, and a one-pixel shift: the
-reflection of an even-length axis by `reverse` moves the centre pixel by one, and putting it
-back is what turns closure-phase agreement into complex-visibility agreement.
+Convert the `(north, west)` image of `polyft_nfft_image` to OITOOLS' `(east, north)` layout,
+centre at pixel `nx÷2+1`: a transpose, a reflection of the first axis, and a one-pixel shift
+that puts the centre back after the reflection.
 """
 sky_layout(img) = circshift(reverse(permutedims(img); dims = 1), (1, 0))
 
@@ -71,22 +70,19 @@ _offset(c, it) = c.offsets === nothing ? (0.0, 0.0) : (Float64(c.offsets[it][1])
 
 A pixel size and image size for a sky cube, with the reason for each.
 
-**Pixel size**: `1/(2ρmax)/oversample`, `ρmax` the longest baseline in the data (cycles per
-radian) — Nyquist with room to spare. Without data, 1/64 of the largest stellar diameter.
+**Pixel size** (mas): `1/(2ρmax)/oversample`, with `ρmax` the longest baseline in `data`
+(cycles per radian). Without data, 1/64 of the largest projected stellar diameter.
 
-**Image size**: the whole system plus a margin of `(fov_factor − 1)` diameters of the largest
-star — for one star, `fov_factor` diameters — rounded up to an even 2·3·5-smooth size. Six
-diameters, not two, MEASURED: a band-limited image rings beyond the limb and a tight field
-folds that back in, so OITOOLS's agreement with ROTIR on the ζ And coverage goes 1.3e-4 → 3e-5
-(closure phases 0.28° → 0.05° rms) from 2× to 4× the diameter, and on to ~5e-6 at ~12×.
+**Image size**: the whole system plus `(fov_factor − 1)` diameters of the largest star (for one
+star, `fov_factor` diameters), at least `min_nx`, rounded up to an even 2·3·5-smooth size.
 
-`min_nx = 256` FLOORS the size: images that size are routine in interferometry, cost a fraction
-of a second per plane, and a bigger field only helps — at the ζ And pixel, 256 px is ~11
-diameters and brings OITOOLS within ~5e-6 of ROTIR. The `fov_factor` margin is what governs
-once the system itself is large.
+On the ζ And coverage, OITOOLS reproduces ROTIR's visibilities to 1.3e-4 with a field of 2
+diameters, 3e-5 with 4 (closure phases 0.28° → 0.05° rms) and about 5e-6 with 12; 256 pixels
+is about 11 diameters there.
 
-A BINARY'S FIELD GROWS WITH ITS SEPARATION while the pixel stays fixed by the baselines, so a
-wide pair costs `nx²` per plane: `mb_per_plane` says how much (Float32), and the caller decides.
+A binary's field grows with its separation while the pixel size is set by the baselines;
+`mb_per_plane` gives the memory per Float32 plane. `pixsize` or `nx` given explicitly are
+used as is.
 """
 sky_grid(params, tess, tepochs; kw...) = sky_grid([(; params, x = Float64[], tess)], tepochs; kw...)
 
@@ -140,23 +136,29 @@ _lambda_factor(model::Symbol, λ) = model === :planck ? λ^-5 : λ^-4
     render_sky_cube(params, xmap, tess; tepochs, wavelengths, pixsize, nx,
                     rendering = :bandlimited, intensity_model = :linear,
                     normalize = :plane, secondary = nothing, mjd = nothing,
-                    T = Float32) -> (cube, meta)
+                    bandwidths = nothing, T = Float32) -> (cube, meta)
     render_sky_cube(components; tepochs, wavelengths, ...) -> (cube, meta)
 
-The surface `xmap` (on `tess`, with geometry `params`) — or several components, see above —
-as sky images: an `(nx, nx, nλ, nt)` array in OITOOLS's layout (see [`sky_layout`](@ref)),
-one plane per wavelength and epoch.
+Render the surface `xmap` (on `tess`, with geometry `params`), or several components, as sky
+images: an `(nx, nx, nλ, nt)` array in OITOOLS' layout (see [`sky_layout`](@ref)), one plane
+per wavelength and epoch. `nx` must be even.
+
+Each component is a NamedTuple `(; params, x, tess, secondary = false, offsets = nothing)`;
+`offsets` holds one `(west, north)` displacement in mas per epoch (`nothing`: at the origin).
+A binary is two components, the companion offset by its orbit. Mutual occultation is not drawn.
 
   * `tepochs` are ROTIR epoch times (the same numbers `create_star_multiepochs` takes); `mjd`,
     when given, is recorded alongside them.
   * `wavelengths` in metres. With `intensity_model = :linear` (Rayleigh–Jeans) every channel
     has the same SHAPE; with `:planck` the contrast — and a binary's flux ratio — change with λ.
-  * `rendering`: `:bandlimited` (default; reproduces ROTIR's visibilities in OITOOLS to ~1e-5)
-    or `:area` (positive, flux-conserving, for display). See the file header.
-  * `normalize`: `:plane` — every plane sums to 1, what OITOOLS imaging expects; or
-    `:relative` — physical relative flux across channels and epochs (the λ⁻⁵ or λ⁻⁴ the
-    dimensionless conversions drop is put back), scaled so the brightest plane sums to 1. Keeps
-    the SED and the light curve.
+  * `rendering`: `:bandlimited` (default) is the exact polygon Fourier transform on the FFT
+    grid, inverse-transformed; OITOOLS reproduces ROTIR's visibilities from it to about 1e-5,
+    and it has small negative pixels near the limb. `:area` gives each pixel the exact facet
+    overlap times intensity: positive and flux-conserving, for display, with visibilities
+    attenuated by the pixel's sinc (2.7e-3 measured).
+  * `normalize`: `:plane`, every plane sums to 1 (as OITOOLS imaging expects); or `:relative`,
+    relative flux across channels and epochs (the λ⁻⁵ or λ⁻⁴ factor of the intensity is
+    restored), scaled so the brightest plane sums to 1.
   * `bandwidths` (m), optional: recorded as `EFF_BAND` in the `CHANNELS` table, like
     `OI_WAVELENGTH`. The planes themselves are monochromatic at `wavelengths`.
 
@@ -238,15 +240,13 @@ end
 Write a cube from [`render_sky_cube`](@ref) as FITS: the `(nx, nx, nλ, nt)` primary array with
 a celestial WCS, plus `CHANNELS` and `EPOCHS` tables and the model's parameters (`PARAMS`).
 
-THE HEADER DESCRIBES THE ARRAY OITOOLS ACTUALLY USES, which is not quite what OITOOLS's own
-`writefits` says about it: the first axis increases EAST, so `CDELT1 > 0` (RA increasing with
-index), and the reference pixel is `nx÷2+1`, the NFFT phase centre (`writefits` writes a
-negative `CDELT1` and `CRPIX = nx/2`). Degrees, per the FITS standard, with `CUNIT` stated;
-OITOOLS's `fits_pixsize` reads it back in mas.
+The first axis increases East (`CDELT1 > 0`) and the reference pixel is `nx÷2+1`, the layout
+OITOOLS uses (OITOOLS' own `writefits` writes `CDELT1 < 0` and `CRPIX = nx/2`). Pixel scales
+are in degrees with `CUNIT` set; OITOOLS' `fits_pixsize` reads them in mas.
 
-Axes 3 and 4 get a linear WCS (`WAVE` in metres, `TIME` as MJD) only when the channels or
-epochs are evenly spaced to 1 %; otherwise the header says so and the tables are the
-authority, because FITS cannot express an irregular axis without the `-TAB` convention.
+Axes 3 and 4 get a linear WCS (`WAVE` in metres, `TIME` as MJD) when the channels or epochs are
+evenly spaced to 1 %; otherwise `WAVEIRR`/`TIMEIRR` are set and the `CHANNELS`/`EPOCHS` tables
+give the values.
 """
 function write_sky_cube(path::AbstractString, cube::AbstractArray{<:Real,4}, meta;
                         comment::AbstractString = "")
@@ -353,19 +353,18 @@ end
     check_sky_cube(cube, meta, xmap, tess, data) -> NamedTuple
     check_sky_cube(cube, meta, components, data) -> NamedTuple
 
-How faithfully OITOOLS, given this cube, reproduces ROTIR's own visibilities — measured on the
-data's uv coverage, in units of the data's error bars.
+Compare the visibilities OITOOLS computes from the cube with ROTIR's own, on the uv coverage
+of `data` and in units of its error bars.
 
 `data` is one `OIdata` per epoch (a vector, matched to the cube's epochs in order) or a
 `(nλ, nt)` matrix as `readoifits_multiepochs(...; polychromatic = true)` returns. For each
 plane, OITOOLS's `setup_nfft`/`image_to_vis` and ROTIR's exact model are both evaluated at the
-same uv with the same intensity at the plane's λ, so the comparison isolates the IMAGE, not the
-physics. For several components the exact model is ROTIR's binary one,
+same uv with the same intensity at the plane's λ. For several components the exact model is ROTIR's binary one,
 `(Σ F_k · binary_phase_shift(uv, offset_k)) / Σ flux_k`. With a vector of single-band epochs
 the plane whose λ is closest to the data's mean wavelength is used.
 
-Returns `chi2dist` — Σ(Δ/σ)²/n over V², T3amp and T3φ, the χ² the image itself would add — and
-`rel_dV`, `max_dV2`, `rms_dT3phi_deg`, per plane and worst over all planes.
+Returns `chi2dist`, Σ(Δ/σ)²/n over V², T3amp and T3φ (the χ² the image adds), and `rel_dV`,
+`max_dV2` and `rms_dT3phi_deg`, per plane and the worst over all planes.
 """
 check_sky_cube(cube::AbstractArray{<:Real,4}, meta, xmap, tess, data) =
     check_sky_cube(cube, meta, [(; params = meta.params, x = xmap, tess,

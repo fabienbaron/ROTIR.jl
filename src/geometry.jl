@@ -340,14 +340,10 @@ end
 """
     finish_star(xyz, r, tessels, star_params, t; T=eltype(tessels), κ=T(50)) -> stellar_geometry
 
-Common tail of the geometry pipeline: everything that follows the choice of vertex
-positions. Given already-deformed, already-rotated sky-frame vertices `xyz` (npix,5,3)
-and their radii `r` (npix,5), compute face normals, soft visibility, the orthographic
-projection and the limb-darkening map, and package them into a `stellar_geometry`.
-
-Split out of [`create_star`](@ref) so that alternative orientations — notably
-`create_binary_star`, which rotates into the *orbital* frame instead of spinning about
-a fixed spin axis — reuse this verbatim rather than duplicating it.
+From deformed and rotated sky-frame vertices `xyz` (npix,5,3) and their radii `r` (npix,5),
+computes face normals, soft visibility (sharpness `κ`), the orthographic projection and the
+limb-darkening map, and returns a `stellar_geometry`. Used by [`create_star`](@ref) and
+[`create_binary_star`](@ref).
 """
 @views function finish_star(xyz, r, tessels::tessellation, star_params, t;
                             T = eltype(tessels), κ = T(50))

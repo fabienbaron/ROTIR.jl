@@ -106,28 +106,19 @@ function ChainRulesCore.rrule(::typeof(kepler_E_vec), M::AbstractArray, e::Real)
     return E, kepler_E_vec_pullback
 end
 
+# `T` is accepted and ignored: kepler_E derives its working type from M and e, which is
+# strictly better than being told. Kept in the signature so existing callers do not break.
 """
     compute_E_NR(M, e) -> E
 
-Eccentric anomaly from the mean anomaly, elementwise over `M` (scalar or vector). The
-result takes the float type of `M` and `e`.
+Eccentric anomaly from the mean anomaly, solving `E − e·sin(E) = M` to machine precision,
+elementwise over `M` (scalar or array). The result takes the float type of `M` and `e`; the
+`T` keyword is accepted and ignored.
 
-!!! note "The `T` keyword is accepted and ignored"
-    The working precision is derived from `M` and `e`, not dictated by a keyword. `T`
-    survives only so existing call sites keep working.
-
-
-Dispatches to [`kepler_E`](@ref) for a scalar and [`kepler_E_vec`](@ref) for an array — the
-latter so that reverse-mode AD gets one array pullback rather than one per element. Kept as
-a separate name because it is the historical entry point.
-
-!!! note "Converges to machine precision"
-    Results are not bitwise comparable with codes that stop at a fixed `1e-6` rad tolerance
-    on the whole vector; expect differences up to ~1e-6 rad of eccentric anomaly, far below
-    any measurement error.
+Calls [`kepler_E`](@ref) for a scalar and [`kepler_E_vec`](@ref) for an array (one
+pullback for the whole array under reverse-mode AD). Codes that stop at a `1e-6` rad
+tolerance differ by up to ~1e-6 rad.
 """
-# `T` is accepted and ignored: kepler_E derives its working type from M and e, which is
-# strictly better than being told. Kept in the signature so existing callers do not break.
 compute_E_NR(M::Real, e; T = nothing)          = kepler_E(M, e)
 compute_E_NR(M::AbstractArray, e; T = nothing) = kepler_E_vec(M, e)
 
@@ -138,20 +129,13 @@ Argument of periapsis at `tepoch`, including apsidal motion:
 
     ω(t) = ω₀ + dω·(t − T0)
 
-with `bparameters.dω` in **degrees per day** and `tepoch`, `T0` in JD. Returns `ω₀` when
-`dω = 0`, so circular / non-precessing systems are unaffected.
+with `bparameters.ω` in degrees, `bparameters.dω` in degrees per day (optional, default
+0) and `tepoch`, `T0` in JD. Positive `dω` advances the periapsis in the direction of
+orbital motion. `tepoch` is a scalar or a vector; with `dω = 0` the scalar `ω₀` is returned.
 
-Apsidal motion is not a small correction for a system observed over years: Spica's apsidal period is U ≈ 139 yr
-(Robinette & Aufdenberg 2015; 105 yr in Wages & Aufdenberg, ~110 yr in Aufdenberg+2015),
-i.e. dω/dt ≈ 2.6°/yr, so ω advances ~21° across the 2007–2015 CHARA campaigns. Ignoring
-it displaces the predicted secondary position by up to 0.44 mas — ten to forty times the
-MIRC astrometric precision.
-
-Sign convention: positive `dω` advances the periapsis in the direction of orbital motion,
-matching the standard definition of the apsidal period.
-
-Accepts a scalar or a vector of epochs. With `dω = 0` it returns the scalar `ω₀`
-regardless, so downstream broadcasting is unchanged for non-precessing systems.
+Spica's apsidal period is U ≈ 139 yr (Robinette & Aufdenberg 2015; 105 yr in Wages &
+Aufdenberg, ~110 yr in Aufdenberg et al. 2015), dω/dt ≈ 2.6°/yr: ω advances ~21° over the
+2007–2015 CHARA observations, which moves the predicted secondary by up to 0.44 mas.
 """
 @inline function omega_at(bparameters, tepoch)
     ω0 = bparameters.ω * pi / 180.0
@@ -200,11 +184,12 @@ end
 """
     binary_orbit_abs(bparameters, tepoch) -> (x1, y1, z1, x2, y2, z2)
 
-Compute absolute positions of both stars in the observer's sky frame.
+Positions (mas) of both stars about the centre of mass, with x = North, y = East,
+z = receding. `tepoch` is a `Float64` JD.
 
-Convention: `bparameters.ω` is the argument of periapsis of the **relative orbit**
-(= secondary's orbit around the primary), the standard astrometric convention.
-At periastron (υ=0), the secondary is in the ω-direction from the center of mass.
+`bparameters.ω` is the argument of periapsis of the relative orbit (the secondary's orbit
+around the primary). At periastron the secondary is in the ω direction from the centre of
+mass.
 """
 function binary_orbit_abs(bparameters,tepoch::Float64)
     Ω = bparameters.Ω*pi/180.0; # longitude of ascending node
@@ -296,35 +281,27 @@ function compute_separation(bparameters, tepoch)
 end
 
 # Calculate eccentric anomaly
-"""
-    compute_eccentric_anomaly(bparameters, tepoch; T=<derived>) -> E
-
-Eccentric anomaly at `tepoch` (JD; scalar or vector).
-
-`T` defaults to the float type promoted from `bparameters.P`, `.T0`, `.e` and `eltype(tepoch)`
-rather than to `Float64`, so a Float32 parameter set stays Float32 through the orbit. Note
-that `tepoch` is an ABSOLUTE JD and should stay `Float64` — see `binary_orbit_abs`, which
-annotates it as such: `eps(Float32(2.45e6))` is 0.25 d.
-
-
-`bparameters.dP` is the period derivative Ṗ in **days per day**, applied through the
-standard quadratic ephemeris — the nth periastron falls at
-
-    t_n = T0 + P·n + ½·(Ṗ·P)·n²
-
-whose exact inversion is the `M` below (verified against solving the quadratic directly to
-1e-10). Systems whose period drifts are common in interacting binaries: β Lyrae's is
-*lengthening* at Ṗ ≈ +19 s/yr ≈ 6e-7 d/d from mass transfer, while orbits shrinking to
-gravitational-wave or magnetic-braking losses have Ṗ < 0.
-
-Both signs are handled: the guard is on `|Ṗ|`, since a one-sided `Ṗ > tol` test drops
-*negative* Ṗ back onto a constant period — worth 0.6° of orbital phase after 1000 d and 65°
-after 10⁴ d at β Lyr's rate. Note the sign convention: Ṗ > 0 is a LENGTHENING period.
-"""
 # `T` defaults to the float type the INPUTS already carry rather than to Float64. Hardcoding
 # Float64 here silently widened every downstream quantity, so a Float32 parameter set came
 # back Float64 from orbit_to_rotir_offset — which defeats carrying Float32 through the
 # forward model at all. Float64 inputs are unaffected (the promotion returns Float64).
+"""
+    compute_eccentric_anomaly(bparameters, tepoch; T=<derived>) -> E
+
+Eccentric anomaly at `tepoch` (JD; scalar or vector), in `[0, 2π)`.
+
+`T` defaults to the float type promoted from `bparameters.P`, `.T0`, `.e` and
+`eltype(tepoch)`. Keep `tepoch` in `Float64`: `eps(Float32(2.45e6))` is 0.25 d.
+
+`bparameters.dP` (required) is the period derivative Ṗ in days per day, positive for a
+lengthening period, applied through the quadratic ephemeris: the nth periastron is at
+
+    t_n = T0 + P·n + ½·(Ṗ·P)·n²
+
+Either sign of Ṗ is applied when `|Ṗ| > 1e-12`. β Lyrae's period lengthens at
+Ṗ ≈ +19 s/yr ≈ 6e-7 d/d; over 10⁴ d that is 65° of orbital phase. If the extrapolated
+period would reach zero within the epochs, it warns and uses a constant period.
+"""
 function compute_eccentric_anomaly(bparameters, tepoch;
                                    T = float(promote_type(typeof(bparameters.P),
                                                           typeof(bparameters.T0),
@@ -389,11 +366,11 @@ end
 """
     binary_RV(bparameters, tepoch; K1, K2, γ) -> (Vrad1, Vrad2)
 
-Compute radial velocities for both stars of a binary system.
-Positive = receding (redshift), following the standard spectroscopic convention.
+Radial velocities of both stars, in the units of `K1`, `K2` and `γ`; positive is receding.
+`tepoch` is a JD or a vector of JDs.
 
-Convention: `bparameters.ω` is the argument of periapsis of the **relative orbit**
-(= secondary's). The primary's argument of periapsis is ω + π.
+`bparameters.ω` is the argument of periapsis of the relative orbit (the secondary's); the
+primary's is ω + π.
 """
 function binary_RV(bparameters, tepoch::Union{Float64, Vector{Float64}}; K1::Float64, K2::Float64, γ::Float64)
     ω = omega_at(bparameters, tepoch); # argument of periapsis, advanced by apsidal motion

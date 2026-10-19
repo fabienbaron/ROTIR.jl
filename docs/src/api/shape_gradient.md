@@ -1,42 +1,40 @@
 # Shape gradients
 
-Analytical gradients of the chi-squared with respect to shape parameters
-(radii, inclination, position angle). Enables joint optimization of the surface
-map and stellar geometry.
+Analytic gradients of χ² with respect to the shape parameters (radii, inclination, position
+angle), for joint fits of the surface map and the geometry.
 
 ## Rotation matrix
 
 | Function | Description |
 |----------|-------------|
-| `rotation_matrix(psi, inc, PA)` | 3x3 rotation matrix R(psi, inc, PA), all angles in radians. Same as `rot_vertex` in geometry.jl |
-| `dR_dinc(psi, inc, PA)` | Derivative of R w.r.t. inclination |
-| `dR_dPA(psi, inc, PA)` | Derivative of R w.r.t. position angle |
+| `rotation_matrix(psi, inc, PA)` | 3×3 rotation matrix R(psi, inc, PA), angles in radians; same as `rot_vertex` |
+| `dR_dinc(psi, inc, PA)` | ∂R/∂inc |
+| `dR_dPA(psi, inc, PA)` | ∂R/∂PA |
 
-Convention: `xyz = su * R` (right-multiply), where `su` are the scaled
-unit-sphere vertices.
+`xyz = su * R` (right multiplication), where `su` are the scaled unit-sphere vertices.
 
 ## Rapid rotator derivative
 
 | Function | Description |
 |----------|-------------|
-| `f_rapid_rot_and_deriv(x)` | Returns `(f(x), f'(x))` where `f(x) = 3*cos((pi+acos(x))/3)/x`. Near x=0, returns `(1, 0)` |
+| `f_rapid_rot_and_deriv(x)` | `(f(x), f'(x))` with `f(x) = 3cos((π+acos x)/3)/x = 3sin(asin(x)/3)/x`; below `|x| = eps^(1/4)` the series `(1 + 4x²/27, 8x/27)` |
 
 ## Projected vertices and derivatives
 
 | Function | Description |
 |----------|-------------|
-| `projected_vertices_and_derivs(tessels, star_params, t; nparams)` | Compute projected vertices and their analytical derivatives w.r.t. shape parameters |
+| `projected_vertices_and_derivs(tessels, star_params, t; nparams, derivs=true)` | projected vertices and their derivatives with respect to the shape parameters |
 
 Returns `(proj_west, proj_north, dproj_west_dtheta, dproj_north_dtheta, normals_z, dnz_dtheta)`:
 
 | Output | Shape | Description |
 |--------|-------|-------------|
-| `proj_west`, `proj_north` | (npix, 4) | Projected quad vertex coordinates |
-| `dproj_west_dtheta`, `dproj_north_dtheta` | (npix, 4, nparams) | Vertex derivatives w.r.t. shape parameters |
-| `normals_z` | (npix,) | Normalized z-component of face normals |
-| `dnz_dtheta` | (npix, nparams) | Normal z-component derivatives |
+| `proj_west`, `proj_north` | (npix, 4) | projected quad vertices |
+| `dproj_west_dtheta`, `dproj_north_dtheta` | (npix, 4, nparams) | vertex derivatives |
+| `normals_z` | (npix,) | z-component of the unit face normals |
+| `dnz_dtheta` | (npix, nparams) | its derivatives |
 
-The derivative computation is surface-type-specific:
+Per surface type:
 
 | Surface | Parameter | Derivative |
 |---------|-----------|------------|
@@ -47,13 +45,19 @@ The derivative computation is surface-type-specific:
 | All | inc | `d(xyz)/d(inc) = su * dR_dinc` |
 | All | PA | `d(xyz)/d(PA) = su * dR_dPA` |
 
-## Shape chi2 + gradient
+## Shape χ² and gradient
 
-| Function | Description |
-|----------|-------------|
-| `shape_chi2_fg!(grad_θ, grad_xmap, xmap, θ, data, tessels, star_params_base, tepochs; κ, verbose)` | Chi2 and gradients w.r.t. both shape and map parameters |
+`shape_chi2_fg!(grad_θ, grad_xmap, xmap, θ, data, tessels, star_params_base, tepochs; κ=50,
+verbose=false, parametric_map=false, fit_v0=false, weights=(1,1,1))` returns χ² and fills
+the gradients with respect to the shape parameters and the map.
 
-The gradient chain has three components:
+- `parametric_map = true` recomputes the map from θ (overwriting `xmap`) and adds its
+  derivative to `grad_θ`. Surface types 0 and 1 only.
+- `fit_v0 = true` reads a visibility scale `V0` from the last entry of θ (see
+  `interferometric_chi2` in [Parametric model and AD](parametric_gradient.md)).
+- `weights = (w_V², w_T3amp, w_T3φ)` scale each χ² term and its gradients.
+
+The gradient has three parts:
 
 1. **Vertex positions**: `d(chi2)/d(theta) = sum_p sum_v (d(chi2)/d(proj_west) * d(proj_west)/d(theta) + ...)`
 2. **Flux normalization**: shoelace area derivatives for the flux correction term
@@ -61,12 +65,9 @@ The gradient chain has three components:
    `d(chi2)/d(theta) += d(chi2)/d(w) * d(w)/d(nz) * d(nz)/d(theta)`, with
    `d(w)/d(nz) = d(sigmoid)/d(kappa*nz) * kappa * ld + sigmoid * d(ld)/d(nz)`
 
-Limb darkening uses the `ldtype`, `ld1`, `ld2` of `star_params_base` and the same
-`mu = max(nz, 0)` convention as `create_star`/`compute_ldmap`, so the map step and the
-shape step of `joint_reconstruct_oi` optimize the same model. The LD coefficients
-themselves are held fixed — with a free per-tessel map they are largely degenerate with
-it; they *are* fitted in the [parametric model](parametric_gradient.md), where the map is
-pinned by von Zeipel.
+Limb darkening uses `ldtype`, `ld1`, `ld2` from `star_params_base` and `mu = max(nz, 0)`, as
+`create_star`/`compute_ldmap` do. The LD coefficients are held fixed: with a free map they
+are largely degenerate with it. The [parametric model](parametric_gradient.md) fits them.
 
 ### Shape parameter vector layout
 
@@ -74,25 +75,30 @@ pinned by von Zeipel.
 |-------------|-------------|---------|
 | 0 (Sphere) | `[radius, inclination, PA]` | 3 |
 | 1 (Ellipsoid) | `[rx, ry, rz, inclination, PA]` | 5 |
-| 2 (Rapid Rotator) | `[rpole, omega, inclination, PA]` | 4 |
+| 2 (Rapid Rotator) | `[rpole, frac_escapevel, inclination, PA]` | 4 |
 
-Inclination and PA are in **degrees** (converted internally).
+Inclination and PA are in degrees. With `fit_v0 = true`, `V0` is appended. Surface type 3
+(Roche) has no shape gradient.
 
 ## Joint reconstruction
 
 | Function | Description |
 |----------|-------------|
-| `joint_reconstruct_oi(xmap, θ, data, tessels, star_params, tepochs; kwargs...)` | Alternating optimization of map and shape parameters |
+| `joint_reconstruct_oi(xmap, θ, data, tessels, star_params, tepochs; kwargs...)` | returns `(xmap, θ)`; alternates VMLMB on the map (shape fixed) and on θ (map fixed, bounded) |
 
 ### Keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `maxiter_xmap` | `200` | Max iterations for map optimization |
-| `maxiter_θ` | `50` | Max iterations for shape optimization |
-| `nouter` | `5` | Number of alternating cycles |
-| `reg_weight` | `1e-5` | TV2 regularization weight for map step |
-| `κ` | `50.0` | Sigmoid sharpness for soft visibility |
-| `θ_lower` | `nothing` | Lower bounds on shape parameters |
-| `θ_upper` | `nothing` | Upper bounds on shape parameters |
-| `verbose` | `true` | Print diagnostics |
+| `maxiter_xmap` | `200` | iterations per map step |
+| `maxiter_θ` | `50` | iterations per shape step |
+| `nouter` | `5` | alternating cycles |
+| `regularizer` | `"sobel"` | regulariser of the map step |
+| `reg_weight` | `10` | its weight |
+| `κ` | `50` | soft-visibility sharpness |
+| `θ_lower`, `θ_upper` | `nothing` | bounds on the shape parameters |
+| `fit_v0` | `false` | also fit the visibility scale `V0` (last entry of θ) |
+| `verbose` | `true` | print progress |
+
+Surface type 3 (Roche) is refused; reconstruct at a fixed Roche geometry with
+`image_reconstruct_oi`.

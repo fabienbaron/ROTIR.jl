@@ -8,6 +8,9 @@
 #
 # Figure-generating tests (test_spot_euclidean.jl, ~5 PNGs into test/figures/) are opt-in:
 #     ROTIR_TEST_FIGURES=1 julia --project=. -e 'using Pkg; Pkg.test()'
+#
+# One group of sections (CI runs one job per group; see `GROUPS` below):
+#     ROTIR_TEST_GROUP=forward julia --project=. -e 'using Pkg; Pkg.test()'
 
 # Headless-safe matplotlib: must be set before ROTIR (hence PyPlot) is loaded anywhere.
 get!(ENV, "MPLBACKEND", "Agg")
@@ -17,6 +20,11 @@ using Test
 const TESTDIR = @__DIR__
 const PKGDIR  = dirname(TESTDIR)
 const PKGROOT = dirname(TESTDIR)
+
+# A global of a module `run_script` just created, read in the newest world: the section's
+# closure was compiled before the script defined it, and Julia 1.12+ will not see a binding
+# from an older world ("the binding may be too new").
+latest(m::Module, name::Symbol) = Base.invokelatest(getproperty, m, name)
 
 """
     run_script(file) -> Module
@@ -32,18 +40,44 @@ function run_script(file)
     return m
 end
 
+# SECTIONS AND GROUPS. CI runs the suite as several jobs, one per group, because the whole of
+# it does not fit in one job's time limit on a 4-core runner; `ROTIR_TEST_GROUP` picks the
+# group, and unset (or `all`) runs everything, as a local `Pkg.test()` always has. Each section
+# reports its wall time, so a job that runs out of time says which section it was in.
+const GROUP = lowercase(get(ENV, "ROTIR_TEST_GROUP", "all"))
+const GROUPS = ("core", "forward", "gradients", "sampling")
+GROUP == "all" || GROUP in GROUPS ||
+    error("ROTIR_TEST_GROUP = $(repr(GROUP)): use one of $(join(GROUPS, ", ")) or all")
+const SECTION_TIMES = Tuple{String,String,Float64}[]
+
+function section(f, name::AbstractString, group::AbstractString)
+    group in GROUPS || error("section $(repr(name)): unknown group $(repr(group))")
+    (GROUP == "all" || GROUP == group) || return nothing
+    t0 = time()
+    f()
+    dt = time() - t0
+    push!(SECTION_TIMES, (String(name), String(group), dt))
+    @info "test section done" section = name group seconds = round(dt; digits = 1)
+    return nothing
+end
+
+try
 @testset "ROTIR" begin
-    @testset "parametric gradient" begin
-        m = run_script("test_parametric_gradient.jl")
-        # The script skips its Zygote section with a @warn if the AD load fails; require
-        # that the section actually ran, otherwise a silent skip would look like success.
-        @test m.zygote_ran[]
-        @test m.nfail[] == 0
+    section("parametric gradient", "gradients") do
+        @testset "parametric gradient" begin
+            m = run_script("test_parametric_gradient.jl")
+            # The script skips its Zygote section with a @warn if the AD load fails; require
+            # that the section actually ran, otherwise a silent skip would look like success.
+            @test latest(m, :zygote_ran)[]
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
-    @testset "bootstrap" begin
-        m = run_script("test_bootstrap.jl")
-        @test m.zygote_ran[]     # the extension section must run, not silently skip
+    section("bootstrap", "gradients") do
+        @testset "bootstrap" begin
+            m = run_script("test_bootstrap.jl")
+            @test latest(m, :zygote_ran)[]     # the extension section must run, not silently skip
+        end
     end
 
     # Absolute mass / radius / logg, and the ldtype = 0 identity on both the forward and
@@ -51,9 +85,11 @@ end
     # `fd_ran[]` is NOT asserted — FiniteDifferences is a demos-environment dependency, so
     # requiring it would fail the suite under `--project=.`, where every other section of
     # this file still runs and still checks the closed forms and the symmetries.
-    @testset "stellar physics" begin
-        m = run_script("test_stellar_physics.jl")
-        @test m.nfail[] == 0
+    section("stellar physics", "core") do
+        @testset "stellar physics" begin
+            m = run_script("test_stellar_physics.jl")
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
     # HEALPix resolution changes, the pixel-space surface prior and its bounded-temperature link,
@@ -63,9 +99,11 @@ end
     # mistakes that returned plausible output rather than an error: a chain flattened sweep-major
     # makes any autocorrelation estimator report tau = 1, and a fixed red/blue split returned a
     # 40 %-under-dispersed chain while reporting R-hat = 1.000.
-    @testset "surface tools" begin
-        m = run_script("test_surface_tools.jl")
-        @test m.nfail[] == 0
+    section("surface tools", "core") do
+        @testset "surface tools" begin
+            m = run_script("test_surface_tools.jl")
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
     # Forward mode for the exact polygon FT (src/fused_polyft_jvp.jl). The strongest of its three
@@ -73,139 +111,189 @@ end
     # finite-difference-checked VJP: it ties the two directions together, so a sign or index slip
     # in either one fails here. Variational inference needs both directions, so this is load
     # bearing for every MGVI/GeoVI result.
-    @testset "polygon FT forward mode" begin
-        m = run_script("test_polyft_jvp.jl")
-        @test m.nfail[] == 0
+    section("polygon FT forward mode", "core") do
+        @testset "polygon FT forward mode" begin
+            m = run_script("test_polyft_jvp.jl")
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
     # Sky cubes for OITOOLS: fed to OITOOLS, the cube must reproduce ROTIR's own visibilities
     # (complex, V², closure phases) on real uv coverage, and its layout must be the one OITOOLS
     # uses rather than one of the seven transposes/reflections that give the same V².
-    @testset "sky export (OITOOLS cubes)" begin
-        run_script("test_sky_export.jl")
+    section("sky export (OITOOLS cubes)", "core") do
+        @testset "sky export (OITOOLS cubes)" begin
+            run_script("test_sky_export.jl")
+        end
     end
 
     # I(Teff, logg, mu, lambda): the interpolant, its four exact partials, the rrule, and
     # the guard that refuses to count limb darkening twice. Zygote and FiniteDifferences
     # sections self-skip, so this runs under `--project=.` too (32 of 37 checks).
-    @testset "intensity provider" begin
-        m = run_script("test_intensity_provider.jl")
-        @test m.nfail[] == 0
+    section("intensity provider", "core") do
+        @testset "intensity provider" begin
+            m = run_script("test_intensity_provider.jl")
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
     # Line-of-sight velocity. Cross-checked against `projected_veq`, which is derived by a
     # different route, and against R_eq/R_p — the check that the field follows the Roche
     # shape rather than the surface normals.
-    @testset "velocity field" begin
-        m = run_script("test_velocity_field.jl")
-        @test m.nfail[] == 0
+    section("velocity field", "core") do
+        @testset "velocity field" begin
+            m = run_script("test_velocity_field.jl")
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
     # Velocity-resolved observables: Doppler sign, rotational broadening against the
     # analytic elliptical kernel, equivalent-width conservation, differential visibilities,
     # and the identity that one channel of the cube equals `fused_cvis`.
-    @testset "spectral cube" begin
-        m = run_script("test_spectral_cube.jl")
-        @test m.nfail[] == 0
+    section("spectral cube", "core") do
+        @testset "spectral cube" begin
+            m = run_script("test_spectral_cube.jl")
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
     # Kurucz ATLAS9 intensity packs — the hot-star grids Korg cannot reach. Runs on
     # synthetic fixtures written in-test, so it needs no 67 MB download; the two distributed
     # packs differ by one column and both layouts are covered.
-    @testset "Kurucz intensity" begin
-        m = run_script("test_kurucz_intensity.jl")
-        @test m.nfail[] == 0
+    section("Kurucz intensity", "core") do
+        @testset "Kurucz intensity" begin
+            m = run_script("test_kurucz_intensity.jl")
+            @test latest(m, :nfail)[] == 0
+        end
     end
 
     # Korg-synthesised grids. OPT-IN via ROTIR_TEST_KORG=1: Korg pulls a MARCS artifact and
     # a 42k-line VALD linelist and costs ~40 s, so it is deliberately not in [targets] test.
     # The script self-skips, so this testset is a no-op without the flag.
-    @testset "Korg grid (opt-in)" begin
-        m = run_script("test_korg_grid.jl")
-        @test m.nfail[] == 0
-        if get(ENV, "ROTIR_TEST_KORG", "0") == "1"
-            @test m.korg_ran[]
+    section("Korg grid (opt-in)", "core") do
+        @testset "Korg grid (opt-in)" begin
+            m = run_script("test_korg_grid.jl")
+            @test latest(m, :nfail)[] == 0
+            if get(ENV, "ROTIR_TEST_KORG", "0") == "1"
+                @test latest(m, :korg_ran)[]
+            end
         end
     end
 
     # Binary frame + mutual irradiation. Self-contained @test assertions (analytic limits
     # and conservation laws, no recorded reference values), so it is included directly
     # rather than through run_script.
-    include(joinpath(TESTDIR, "test_reflection.jl"))
+    section("reflection", "core") do
+        include(joinpath(TESTDIR, "test_reflection.jl"))
+    end
 
     # Every plotting entry point with every decoration, asserting on artist structure
     # rather than pixels. Headless (Agg) and a few seconds, so it runs by default —
     # structural checks are what catch a corrupted Julia->Python array conversion.
-    include(joinpath(TESTDIR, "test_plotting.jl"))
+    section("plotting", "core") do
+        include(joinpath(TESTDIR, "test_plotting.jl"))
+    end
 
     # Generic orbit fitter: component library, spec assembly, and a synthetic round trip.
-    include(joinpath(TESTDIR, "test_orbit_fit.jl"))
+    section("orbit_fit", "forward") do
+        include(joinpath(TESTDIR, "test_orbit_fit.jl"))
+    end
 
     # RADFLAT / RADIALVAR / orthoLD: hand-written gradients against FiniteDifferences, plus
     # the ANOVA identity that makes RADFLAT and RADIALVAR complementary.
-    include(joinpath(TESTDIR, "test_radial_regularizers.jl"))
+    section("radial_regularizers", "forward") do
+        include(joinpath(TESTDIR, "test_radial_regularizers.jl"))
+    end
 
     # The reconstruction's callable surface: the mid-run callback, per-epoch weights, and the
     # joint fitter's refusal to guess a θ layout it does not have.
-    include(joinpath(TESTDIR, "test_reconstruct_hooks.jl"))
+    section("reconstruct_hooks", "forward") do
+        include(joinpath(TESTDIR, "test_reconstruct_hooks.jl"))
+    end
 
     # Every name the extensions import from the core package, without loading any of them —
     # a phantom import is only a WARNING at load time, and one had been there since the file
     # was written.
-    include(joinpath(TESTDIR, "test_extensions.jl"))
+    section("extensions", "core") do
+        include(joinpath(TESTDIR, "test_extensions.jl"))
+    end
 
     # The @turbo forward kernel against the scalar reference it rewrites — both precisions,
     # three mesh levels, three surface types, three datasets, and the degenerate cases.
-    include(joinpath(TESTDIR, "test_fused_polyft.jl"))
+    section("fused_polyft", "forward") do
+        include(joinpath(TESTDIR, "test_fused_polyft.jl"))
+    end
 
-    include(joinpath(TESTDIR, "test_type3_nufft.jl"))
+    section("type3_nufft", "forward") do
+        include(joinpath(TESTDIR, "test_type3_nufft.jl"))
+    end
 
     # The binary forward model: the matrix-free route against the dense one it replaced.
     # AFTER the file above, which loads LoopVectorization — otherwise the `:turbo` case here
     # skips itself and the backend it is meant to pin goes untested.
-    include(joinpath(TESTDIR, "test_binary_cvis.jl"))
+    section("binary_cvis", "forward") do
+        include(joinpath(TESTDIR, "test_binary_cvis.jl"))
+    end
 
     # The binary IMAGING gradient: finite differences on both components, and the reduction
     # to `spheroid_chi2_fg` when the secondary is dark.
-    include(joinpath(TESTDIR, "test_binary_imaging.jl"))
+    section("binary_imaging", "forward") do
+        include(joinpath(TESTDIR, "test_binary_imaging.jl"))
+    end
 
     # V², T3amp and T3φ weights in the imaging and shape criteria: value and gradient both
     # linear in them, so an unticked observable is out of the descent as well as the number.
-    include(joinpath(TESTDIR, "test_observable_weights.jl"))
+    section("observable_weights", "forward") do
+        include(joinpath(TESTDIR, "test_observable_weights.jl"))
+    end
 
     # The geometry and map FITS files: the mesh back bit-for-bit, and the ASCII aliasing that
     # lets a Roche model's Unicode orbital elements into a FITS string column at all.
-    include(joinpath(TESTDIR, "test_geometry_io.jl"))
+    section("geometry_io", "forward") do
+        include(joinpath(TESTDIR, "test_geometry_io.jl"))
+    end
 
     # The SPHERE's log-posterior, which is what lets NUTS run on a single star: its gradient
     # against FiniteDifferences, and — the part that matters — that every parameter in θ
     # actually moves the posterior. Needs Zygote, so it is guarded like the other AD tests.
-    include(joinpath(TESTDIR, "test_sphere_logpi.jl"))
+    section("sphere_logpi", "gradients") do
+        include(joinpath(TESTDIR, "test_sphere_logpi.jl"))
+    end
 
     # The ELLIPSOID's von Zeipel map differentiated: the piece a consistent gradient fit for
     # surface type 1 was missing, and the proof that its map does not depend on orientation —
     # which is what makes a shape-only gradient exact when only the angles are free.
-    include(joinpath(TESTDIR, "test_ellipsoid_map_derivs.jl"))
+    section("ellipsoid_map_derivs", "gradients") do
+        include(joinpath(TESTDIR, "test_ellipsoid_map_derivs.jl"))
+    end
 
     # The ELLIPSOID's log-posterior: the two analytic rrules composed, and the measurement
     # behind refusing to free `tpole` under a linear intensity law.
-    include(joinpath(TESTDIR, "test_ellipsoid_logpi.jl"))
+    section("ellipsoid_logpi", "gradients") do
+        include(joinpath(TESTDIR, "test_ellipsoid_logpi.jl"))
+    end
 
     # And that `fit_ellipsoid_ld` RECOVERS a figure it is given. The gradient tests above
     # cannot see a wrong shape FAMILY — the function fitted an oblate spheroid while the model
     # carries three radii, and on a tidally distorted star that drives the shape to its bound.
-    include(joinpath(TESTDIR, "test_ellipsoid_recovery.jl"))
+    section("ellipsoid_recovery", "gradients") do
+        include(joinpath(TESTDIR, "test_ellipsoid_recovery.jl"))
+    end
 
     # The two GRAVITY-DARKENING laws and the registry that selects between them: ELR against
     # the closed forms in the paper, the equatorial symmetry a finite-difference check cannot
     # see, and both laws through `build_parametric_logπ`.
-    include(joinpath(TESTDIR, "test_gravity_darkening.jl"))
+    section("gravity_darkening", "forward") do
+        include(joinpath(TESTDIR, "test_gravity_darkening.jl"))
+    end
 
     # NESTED SAMPLERS must run on a multithreaded session: all three public fitters dropped
     # the `threaded` keyword on the way to `_fit_nested`, so `method = :nautilus` died with
     # "`@threads :static` cannot be used concurrently or nested" on any machine with more than
     # one thread. Nothing else in this suite runs a nested sampler.
-    include(joinpath(TESTDIR, "test_nested_threading.jl"))
+    section("nested_threading", "sampling") do
+        include(joinpath(TESTDIR, "test_nested_threading.jl"))
+    end
 
     # EVERY SOURCE FILE PARSES, including the weak-dependency extensions.
     #
@@ -220,29 +308,44 @@ end
     # ships regardless of which extensions this environment can load. It catches syntax only —
     # an unterminated string, an unbalanced block — which is precisely the class that otherwise
     # hides behind a weakdep.
-    @testset "every shipped source file parses" begin
-        roots = [joinpath(PKGDIR, "src"), joinpath(PKGDIR, "ext")]
-        files = String[]
-        for r in roots, (dir, _, fs) in walkdir(r), f in fs
-            endswith(f, ".jl") && push!(files, joinpath(dir, f))
-        end
-        @test length(files) > 40          # the walk found the tree, not an empty directory
-        for f in files
-            ok = try
-                Meta.parseall(read(f, String); filename = f); true
-            catch err
-                @error "source file does not parse" file = relpath(f, PKGDIR) err
-                false
+    section("every shipped source file parses", "core") do
+        @testset "every shipped source file parses" begin
+            roots = [joinpath(PKGDIR, "src"), joinpath(PKGDIR, "ext")]
+            files = String[]
+            for r in roots, (dir, _, fs) in walkdir(r), f in fs
+                endswith(f, ".jl") && push!(files, joinpath(dir, f))
             end
-            @test ok
+            @test length(files) > 40          # the walk found the tree, not an empty directory
+            for f in files
+                ok = try
+                    Meta.parseall(read(f, String); filename = f); true
+                catch err
+                    @error "source file does not parse" file = relpath(f, PKGDIR) err
+                    false
+                end
+                @test ok
+            end
         end
     end
 
-    if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
-        @testset "spot placement (figures)" begin
-            run_script("test_spot_euclidean.jl")   # contains its own @test assertions
+    section("spot placement (figures)", "core") do
+        if get(ENV, "ROTIR_TEST_FIGURES", "0") == "1"
+            @testset "spot placement (figures)" begin
+                run_script("test_spot_euclidean.jl")   # contains its own @test assertions
+            end
+        else
+            @info "Skipping figure tests; set ROTIR_TEST_FIGURES=1 to enable."
         end
-    else
-        @info "Skipping figure tests; set ROTIR_TEST_FIGURES=1 to enable."
     end
+end
+
+finally
+# The time each section took, slowest first: what the CI groups are balanced on. Printed even
+# when a test fails, which is when a slow section is most worth knowing about.
+let total = sum((t[3] for t in SECTION_TIMES); init = 0.0)
+    println("\nsection times (group $(GROUP)), $(round(total / 60; digits = 1)) min in all:")
+    for (name, group, dt) in sort(SECTION_TIMES; by = t -> -t[3])
+        println(rpad(name, 40), rpad(group, 10), lpad(string(round(dt; digits = 1)), 8), " s")
+    end
+end
 end

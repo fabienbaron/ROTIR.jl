@@ -25,14 +25,12 @@ using Random
 Partition each epoch of `data_epochs` into resampling blocks, one `DataBlocks` per epoch
 (see OITOOLS' [`data_blocks`](@ref) for the granularities).
 
-`:config` (default) gives one block per (MJD, telescope configuration) — the baseline for
-V², the triangle for T3. `:epoch` gives one block per MJD, which inside a ROTIR epoch means
-one block per exposure, since `readoifits_multiepochs` groups exposures into an epoch
-without collapsing their individual MJDs. `:point` is the i.i.d. bootstrap and will
-underestimate uncertainties on real (correlated) data.
+- `:config` (default): one block per (MJD, configuration), i.e. per baseline for V² and per
+  triangle for T3.
+- `:epoch`: one block per MJD, i.e. per exposure within a ROTIR epoch.
+- `:point`: one block per data point; underestimates uncertainties on correlated data.
 
-MJDs are stored in `Float64` by `readoifits` whatever `T` is, so the block structure is the
-same for `Float32` and `Float64` data.
+Blocks are the same for `Float32` and `Float64` data (MJDs are always `Float64`).
 """
 function epoch_blocks(data_epochs::AbstractVector; granularity::Symbol=:config,
                       mjd_digits::Int=5)
@@ -58,23 +56,17 @@ end
 """
     resample_epochs(data_epochs, blocks; mode=:replacement, stratify=true, rng) -> Vector{OIdata}
 
-One bootstrap replicate of a multi-epoch dataset: every epoch is resampled and the epochs
-are returned in their original order, so they still line up with the geometry built for
-them.
+One bootstrap replicate of a multi-epoch dataset. Every epoch is resampled, and the epochs
+keep their order so they match their geometry.
 
-# Stratification
-- `stratify=true` (default) draws blocks independently within each epoch, so every epoch
-  keeps roughly its data volume. In ROTIR the epochs *are* the rotational phase coverage
-  that constrains inclination, position angle and ω; a draw that empties one inflates the
-  uncertainties for a reason that has nothing to do with data quality.
-- `stratify=false` draws once over the pooled block set and slices the result per epoch, so
-  an epoch can lose most or all of its data. Statistically the more literal bootstrap of
-  "the dataset I happen to have"; warns when an epoch drops below a tenth of its points.
+- `stratify=true` (default) draws blocks independently within each epoch, so each epoch
+  keeps about its data volume.
+- `stratify=false` draws once over all blocks and slices the result per epoch; an epoch can
+  lose most of its data. Warns when an epoch drops below a tenth of its points.
 
-# Modes
-See OITOOLS' [`block_counts`](@ref) and [`block_weights`](@ref). `:replacement` (default)
-is the textbook nonparametric bootstrap; `:weights` is the multiplier bootstrap, which only
-rescales error bars and therefore never drops a block; `:halfsample` keeps a random half.
+`mode`: `:replacement` (default, nonparametric bootstrap), `:weights` (multiplier bootstrap:
+rescales error bars, never drops a block), `:halfsample` (keeps a random half). See OITOOLS'
+[`block_counts`](@ref) and [`block_weights`](@ref).
 """
 function resample_epochs(data_epochs::AbstractVector, blocks::AbstractVector{DataBlocks};
                          mode::Symbol=:replacement, stratify::Bool=true,
@@ -125,19 +117,16 @@ end
 """
     ParametricBootstrap
 
-Outcome of [`bootstrap_parametric`](@ref): an OITOOLS `BootstrapResult` (median, 16/84
-percentiles, covariance, per-replicate samples, …) plus the diagnostics that matter for a
-*bounded* parametric fit. All fields of the wrapped result are reachable directly, e.g.
-`b.sigma`, `b.median`, `b.samples`.
+Result of [`bootstrap_parametric`](@ref): an OITOOLS `BootstrapResult` (median, 16/84
+percentiles, covariance, samples, …), whose fields are read directly (`b.sigma`,
+`b.median`, `b.samples`), and:
 
-# Extra fields
-- `natbound` — per parameter, how many kept replicates converged onto a box bound. A large
-  count means the percentiles are shaped by the bounds, not by the data.
-- `ndegenerate` — replicates whose resampled dataset lost all closure phases/amplitudes.
-- `nmaxiter` — replicates whose fit stopped on the iteration limit. These are not
-  minimisers, so they widen the distribution with optimiser noise; raise `maxiter` if the
-  count is not near zero.
-- `nblocks_per_epoch`, `stratify` — the resampling setup.
+- `natbound`: per parameter, the number of kept replicates at a box bound. A large count
+  means the bounds shape the percentiles.
+- `ndegenerate`: replicates whose resampled data have no closure quantities left.
+- `nmaxiter`: replicates whose fit stopped at the iteration limit; raise `maxiter` if this is
+  not near zero.
+- `nblocks_per_epoch`, `stratify`: the resampling setup.
 """
 struct ParametricBootstrap
     result            ::BootstrapResult
@@ -202,23 +191,21 @@ end
 """
     bootstrap_parametric(fitfun, data_epochs; kwargs...) -> ParametricBootstrap
 
-Nonparametric block bootstrap of a parametric fit: refit `nboot` replicates in which the
-blocks of data are resampled, and summarise the scatter of the best-fit parameters.
+Block bootstrap of a parametric fit: refit `nboot` replicates of resampled data and
+summarise the scatter of the best-fit parameters.
 
-`fitfun(replicate_data) -> θ̂` is called with a resampled `Vector{OIdata}` and returns the
-best-fit parameters; it may also return `(θ̂, chi2r)` or `(θ̂, chi2r, extra)`. Without a
-`chi2r` the `chi2r_max` rejection is unavailable (the replicate χ²ᵣ is recorded as `NaN`).
-The `using Zygote` method of this function supplies `fitfun` for you from
+`fitfun(replicate_data)` receives a resampled `Vector{OIdata}` and returns `θ̂`,
+`(θ̂, chi2r)` or `(θ̂, chi2r, extra)`. Without `chi2r` the `chi2r_max` rejection is
+unavailable. With Zygote loaded, a second method builds `fitfun` from
 [`fit_parametric`](@ref).
 
-Unlike the analytic or posterior uncertainties, this does not assume the quoted error bars
-are correct or uncorrelated: correlated calibration errors and mis-stated errors appear as
-extra scatter between replicates. It does assume the blocks are numerous and exchangeable.
+The bootstrap does not assume the error bars are correct or uncorrelated. It assumes many
+exchangeable blocks.
 
 # Keywords
 - `nboot` — replicates (default 200; ≥1000 for stable percentiles)
-- `mode` — `:replacement` (default), `:weights` or `:halfsample`. See
-  `OITOOLS/demos/bootstrap_validation` for how each is calibrated against simulated truth
+- `mode` — `:replacement` (default), `:weights` or `:halfsample`; calibrated in
+  `OITOOLS/demos/bootstrap_validation`
 - `granularity`, `mjd_digits` — block definition, see [`epoch_blocks`](@ref)
 - `stratify` — resample within each epoch (default `true`), see [`resample_epochs`](@ref)
 - `lb`, `ub` — box bounds, used only to count replicates that converged onto a bound
@@ -226,14 +213,10 @@ extra scatter between replicates. It does assume the blocks are numerous and exc
 - `x_opt` — full-data fit, if you already have it (otherwise `fitfun` is called once on the
   unresampled data)
 - `parallel` — `:outer` (default) runs replicates on all threads; `:inner` runs them one at
-  a time and leaves the threads to ROTIR's own kernels
-
-  `:outer` REQUIRES a re-entrant `fitfun`. Replicates run under `Threads.@spawn` and OITOOLS'
-  `run_chunk` swallows whatever they throw, so a `fitfun` that is not safe to call concurrently
-  does not fail loudly — it loses replicates, and you get `"fewer than 2 usable replicates"` or,
-  worse, a σ computed from whichever handful happened not to collide. Every in-tree `fitfun` is
-  re-entrant since the `:t3` scratch pool landed; one you write yourself may not be. Use
-  `:inner` if in doubt.
+  a time and leaves the threads to ROTIR's kernels. `:outer` requires a `fitfun` that is safe
+  to call concurrently: a replicate that throws is dropped without an error, which can leave
+  too few replicates or a σ from a subset. ROTIR's own fitters are safe; use `:inner` for
+  one you are unsure of.
 - `sigma_clipping`, `chi2r_max`, `seed`, `verb` — passed to OITOOLS' `bootstrap_driver`
 """
 function bootstrap_parametric(fitfun, data_epochs::AbstractVector;
@@ -313,16 +296,13 @@ end
 """
     fit_parametric(data_epochs, tessels, tepochs, base_params; kwargs...) -> (θ̂, chi2r, info)
 
-Best-fit parameters of the von Zeipel parametric model, by bounded minimization of
+Best-fit parameters of the rapid-rotator parametric model, by bounded minimisation of
 `-logπ` from [`build_parametric_logπ`](@ref).
 
 θ = `[rpole, ω, inc, PA, β, ld1, ld2]`, with `tpole` appended when `tpole_free=true`
-(identifiable only with `intensity_model=:planck`, see [`build_parametric_logπ`](@ref)).
+(constrained only with `intensity_model=:planck`).
 
-!!! note "Requires an AD backend"
-    ROTIR itself carries no AD dependency: the parametric model only defines
-    ChainRulesCore rrules. `using Zygote` alongside ROTIR loads the extension that provides
-    this method.
+Requires `using Zygote`, which loads the extension that defines this method.
 """
 function fit_parametric end
 
@@ -350,12 +330,11 @@ function fit_parametric end
 """
     ParametricLayout
 
-The rapid rotator's parameter vector: what each slot is called, which `star_params` field it
-sets, and its box bounds.
+The rapid rotator's parameter vector: the name of each slot, the `star_params` field it sets,
+and its box bounds.
 
-`names` are the θ aliases (`"omega"`, `"inc"`, `"PA"`), which differ from the schema field
-names in `fields` (`:frac_escapevel`, `:inclination`, `:position_angle`) — the aliases are
-what a caller passes to `free` and what a fit report prints.
+`names` are the θ names passed to `free` (`"omega"`, `"inc"`, `"PA"`); `fields` are the
+schema fields (`:frac_escapevel`, `:inclination`, `:position_angle`).
 """
 struct ParametricLayout
     names::Vector{String}
@@ -386,18 +365,14 @@ const _PARAMETRIC_ENTRIES = (
     parametric_layout(; ldtype = nothing, tpole_free = false,
                         distance_free = false, vgamma_free = false) -> ParametricLayout
 
-Build the parameter vector for a rapid-rotator fit.
+Build the parameter vector for a rapid-rotator fit, in the order `rpole, omega, inc, PA,
+beta, ld1, ld2, tpole, d, vgamma`.
 
-`ldtype = nothing` (the default) keeps `ld1` and `ld2` unconditionally, which is what the
-legacy functions did and what existing callers expect. Passing an actual `ldtype` drops the
-coefficients that law does not read — in particular **`ldtype = 0` drops both**, because the
-intensity provider then carries the limb darkening and a fitted coefficient would be
-perfectly unconstrained. That is the whole point of predicted limb darkening: `ld1` leaves
-the fit rather than absorbing the error in the gravity-darkening law.
+`ldtype = nothing` (default) keeps `ld1` and `ld2`. An `ldtype` drops the coefficients that
+law does not read; `ldtype = 0` (limb darkening from an intensity provider) drops both.
 
-`distance_free` adds `d` [pc], which is what makes absolute `logg` — and therefore a model
-atmosphere — reachable by the fit. It is nearly unconstrained by interferometry on its own
-(it enters only through `logg`), so give it an external prior.
+`distance_free` adds `d` (pc), needed for an absolute `logg` and so for a model atmosphere.
+Interferometry constrains `d` only through `logg`; give it a prior.
 """
 function parametric_layout(; ldtype = nothing, tpole_free::Bool = false,
                            distance_free::Bool = false, vgamma_free::Bool = false)
@@ -415,8 +390,8 @@ end
 """
     layout_theta(L, star_params) -> Vector{Float64}
 
-Read θ out of a `star_params` NamedTuple, in `L`'s order. The inverse of
-[`layout_merge`](@ref). Replaces the hand-written `θfull` literals.
+Read θ from a `star_params` NamedTuple, in `L`'s order. The inverse of
+[`layout_merge`](@ref).
 """
 layout_theta(L::ParametricLayout, p) =
     Float64[Float64(getproperty(p, f)) for f in L.fields]
@@ -460,13 +435,9 @@ end
 Box bounds for [`fit_parametric`](@ref), in the θ order
 `[rpole, ω, inc, PA, β, ld1, ld2]` (+ `tpole`).
 
-`ω` stops at 0.99 rather than 1 — the rapid-rotator radius diverges at break-up — and the
-limb-darkening and gravity-darkening coefficients are held in their physical ranges. These
-are starting points, not physics: override them per target.
-
-`ld1` runs to 2, not 1: for the Hestroffer power law `I ∝ μ^ld1`, cool extended stars sit
-above 1 (ρ Cas fits at α ≈ 1.02), and a bound the solution wants to cross both biases the
-answer and destabilises the bounded line search.
+`ω` stops at 0.99 (the radius diverges at 1), `rpole` starts at 1e-3, `ld1` runs to 2 (the
+Hestroffer exponent of cool extended stars can exceed 1; ρ Cas fits at α ≈ 1.02). Override
+them per target.
 """
 function default_parametric_bounds(; tpole_free::Bool=false)
     # `rpole` is bounded strictly away from 0 (see `_PARAMETRIC_ENTRIES`): the visibilities
@@ -488,16 +459,11 @@ parametric_param_names(; tpole_free::Bool=false) =
 """
     parametric_free_indices(free; tpole_free=false) -> Vector{Int}
 
-Resolve which θ entries are fitted. `free` may be `nothing` (all of them), a vector of
-indices, or a vector of names/symbols drawn from [`parametric_param_names`](@ref).
+Resolve which θ entries are fitted. `free` is `nothing` (all), a vector of indices, or a
+vector of names from [`parametric_param_names`](@ref).
 
-Fitting a subset is the normal case, not an exception. A resolved single star constrains
-its angular size and its limb darkening and nothing else, so
-`free = ["rpole", "ld1"]` with `omega` held at 0 *is* the sphere + limb-darkening model —
-the rapid-rotator radius reduces to `rpole` everywhere at ω = 0, and with a uniform von
-Zeipel map the inclination, position angle, β and tpole have no effect at all. Leaving
-them free would let the optimizer wander in a flat subspace and pile replicates onto the
-bounds, which is what `natbound` is there to reveal.
+`free = ["rpole", "ld1"]` with `omega = 0` fits a limb-darkened sphere: at ω = 0
+inclination, position angle, β and `tpole` have no effect.
 """
 function parametric_free_indices(free; tpole_free::Bool=false)
     return layout_free_indices(parametric_layout(; tpole_free = tpole_free), free)

@@ -133,13 +133,9 @@ end
 """
     add_tessel_collection_makie!(ax, star, values; ...) -> Makie.Poly
 
-Draw the tessels into an existing axis. `values` is one number per drawn tessel, in the order
-`tessel_polygons` produces — i.e. indexed by POSITION WITHIN `index_quads_visible`, not by
-pixel. Getting that wrong scrambles the map with no error.
-
-`plotmesh` strokes the mesh in mid grey rather than each polygon's own face colour. 0.45 grey
-is deliberate: the edge has to read against BOTH ends of the colormap, and a light edge
-vanishes against a pale surface, making `plotmesh=true` silently do nothing.
+Draw the visible tessels into an existing axis. `values` has one number per tessel, indexed
+by position within `index_quads_visible` (the order of `tessel_polygons`), not by pixel.
+`plotmesh = true` strokes the edges in mid grey.
 """
 function add_tessel_collection_makie!(ax, star, values;
                                       colormap = _padded_cmap("gist_heat"),
@@ -166,8 +162,7 @@ end
 """
     draw_limb_makie!(ax, star; ...)
 
-Convex hull of the visible corners. NOT `silhouette_polygon`: azimuthal binning notches
-inward on a coarse mesh, which reads as a dented star.
+Draw the projected limb: the convex hull of the visible vertices.
 """
 function draw_limb_makie!(ax, star; offset_west = 0.0, offset_north = 0.0,
                           color = :black, linewidth = 0.8, alpha = 1.0)
@@ -202,19 +197,15 @@ function style_sky_axis!(ax, amax; flipx = false)
     return ax
 end
 
+# The arrowhead rotation is in screen space: `x = -proj_west` and the reversed x-axis cancel,
+# so the screen direction is `(delta_west, delta_north)`.
 """
     draw_rotation_axis_makie!(ax, star; ...)
 
-The spin axis as three dashed segments — south tip, the interior run at reduced alpha, north
-tip — with an arrowhead at the north end.
-
-The interior segment is faded on purpose: at full alpha a dashed line straight across the disk
-reads as a feature ON the surface rather than an axis passing behind it.
-
-The arrowhead's rotation is computed in SCREEN space. Plot coordinates negate west
-(`x = -proj_west`) and the axis is then reversed for East-left, and those two cancel — so the
-screen direction is `(delta_west, delta_north)`, not its negation. Getting this wrong points
-the arrow at the south pole, which looks plausible enough to miss.
+Draw the rotation axis as a dashed line through both poles, extended by `arrow_frac` of its
+length beyond each, with an arrowhead at the north pole. The part inside the star is drawn at
+`inside_alpha`. The axis comes from `inclination`/`position_angle` (degrees) when given,
+otherwise from the mesh.
 """
 function draw_rotation_axis_makie!(ax, star; arrow_frac = 0.3, color = :black,
                                    linewidth = 1.5, offset_west = 0.0, offset_north = 0.0,
@@ -238,16 +229,8 @@ end
 """
     draw_rotation_arrow_makie!(ax, star; pole="N", ...)
 
-A 300° circular arrow around the pole, showing the sense of rotation.
-
-The arc is split at `z = 0`: the half in front of the star is solid, the half behind it dashed,
-so the arrow reads as encircling the pole rather than lying flat on it. The matplotlib layer
-does this by NaN-masking and two fixed zorders; here it is two `lines!` calls in draw order.
-
-The head is placed on the TANGENT at the endpoint, never on a chord back to an earlier sample:
-over a 300° arc a chord points visibly the wrong way. Makie's screen-space markers also remove
-the `mutation_scale` back-computation the matplotlib version needs to keep the head from
-chording straight across the arc.
+Draw a 300° arrow around the pole showing the sense of rotation: solid in front of the star,
+dashed behind. Same geometry keywords as [`draw_rotation_arrow`](@ref).
 """
 function draw_rotation_arrow_makie!(ax, star; pole = "N", radius_frac = 0.07,
                                     offset_frac = 0.15, color = :black, linewidth = 1.5,
@@ -282,15 +265,12 @@ function draw_rotation_arrow_makie!(ax, star; pole = "N", radius_frac = 0.07,
     return ax
 end
 
+# One `lines!` with NaN separators, so the GUI's fixed plot pool holds the whole graticule.
 """
     draw_graticules_makie!(ax, star; ...)
 
-Parallels and meridians, plus (by default) the limb. The geometry comes from
-`graticule_segments` in the core, shared with the matplotlib layer — this function only draws.
-
-Segments are joined into ONE line plot with NaN separators rather than one `lines!` per run:
-Makie breaks a polyline at NaN, so a graticule with a hundred occlusion-clipped runs stays a
-single plot object. That matters for the GUI, where the plot pool is fixed at construction.
+Draw `nlat` parallels and `nlon` meridians on the visible side, plus the limb when
+`limb = true`. Same surface-shape rules as [`draw_graticules`](@ref).
 """
 function draw_graticules_makie!(ax, star; nlat = 5, nlon = 8, dlat = NaN, dlon = NaN,
                                 color = :black,
@@ -319,18 +299,11 @@ function draw_graticules_makie!(ax, star; nlat = 5, nlon = 8, dlat = NaN, dlon =
     return ax
 end
 
+# Unlike the matplotlib version, the arrow length is in data units, not clamped in points.
 """
-    draw_compass_makie!(ax, amax; size_frac=0.12, fontsize=13, color=:black)
+    draw_compass_makie!(ax, amax; size_frac=0.09, fontsize=12, color=:black)
 
-N/E arrows. Placed at the same data coordinates as the matplotlib version so the two figures
-agree; note that with the reversed x-axis (East-left) increasing x draws to the LEFT, which is
-why the E arrowhead is `:ltriangle` and not `:rtriangle` — Makie markers are screen-space and
-do not flip with the axis.
-
-The matplotlib version derives the arrow length in POINTS and converts back to data units, so
-a compass in a small subplot does not shrink below legibility (`_axes_height_inches`). Makie
-has screen-space markers and per-axis font sizes, so that back-computation is not reproduced
-here; if `plot2d_allepochs_makie` ever needs it, scale `size_frac` per panel instead.
+Draw N/E arrows of length `size_frac * amax` in the lower-right corner (East to the left).
 """
 function draw_compass_makie!(ax, amax; size_frac = 0.09, fontsize = 12, color = :black)
     s      = size_frac * amax
@@ -359,11 +332,8 @@ end
 """
     plot2d_makie(tmap, star; ...) -> (fig, ax)
 
-Sky-plane view of the surface map. The Makie counterpart of [`plot2d`](@ref); same framing,
-same colour treatment, same East-left convention.
-
-`intensity=true` multiplies the limb-darkening map into the colour, giving the physically
-apparent disk; `intensity=false` colours by raw temperature with a hard limb edge.
+Sky-plane view of the map: the Makie version of [`plot2d`](@ref), with the same keywords
+except the contour ones, plus `colorbar` and `figsize`.
 """
 function plot2d_makie(tmap, star; intensity = false, figtitle = "", plotmesh = false,
                       pad = 0.5, colormap = "gist_heat", background = :white, flipx = false,
@@ -491,16 +461,10 @@ end
 """
     plot3d_makie(tmap, star; ...) -> (fig, ax)
 
-The surface as a real 3-D object, rotatable with the mouse under GLMakie.
-
-Unlike [`plot2d_makie`](@ref) this draws EVERY tessel, front and back: occlusion comes from
-the depth buffer instead of from `index_quads_visible`, which is what makes the far side
-appear correctly as the star is turned.
-
-`shading = NoShading` throughout, and that is physics, not economy. The colours already are
-the emergent surface brightness — gravity darkening, spots, limb darkening if `intensity` is
-on — so letting Makie add a light would multiply a second, invented illumination on top of
-the map being displayed.
+The whole surface in 3D, rotatable with the mouse under GLMakie, in orthographic projection
+from the observer's direction (North up, East left). `axistype` is `:lscene` (free rotation,
+no axes) or `:axis3` (box with mas ticks). No lighting is applied: colours are the map values
+(times limb darkening with `intensity = true`).
 """
 function plot3d_makie(tmap, star; colormap = "gist_heat", figtitle = "",
                       intensity = false, intensity_model::Symbol = :linear, band = nothing,
@@ -522,20 +486,12 @@ function plot3d_makie(tmap, star; colormap = "gist_heat", figtitle = "",
     return fig, ax
 end
 
+# `binary_orbit_abs` returns (North, East, receding); the mesh frame is (West, North, toward).
 """
     plot3d_binary_makie(tmap1, tmap2, star1, star2, bparams, tepoch; ...) -> (fig, ax)
 
-Both components in one rotatable 3-D scene, placed at their orbital separation.
-
-The separation is the full 3-D one, not the sky-projected pair `plot2d_binary_makie` uses:
-the line-of-sight term is what makes an eclipse readable as one star passing in FRONT of the
-other once the view is tilted away from the observer's. `binary_orbit_abs` returns
-`(North, East, receding)`, so it is remapped to the mesh frame `(West, North, toward)` —
-mixing the two up puts the secondary on the wrong side and, at conjunction, behind instead
-of in front.
-
-The primary sits at the origin; only the relative vector matters for the picture, and
-holding it fixed keeps the camera from drifting as the epoch is stepped.
+Both components in one rotatable 3D scene at time `tepoch`: the primary at the origin, the
+secondary at its 3D orbital position. `orbit = true` draws the relative orbit over one period.
 """
 function plot3d_binary_makie(tmap1, tmap2, star1, star2, bparams, tepoch;
                              colormap = "gist_heat", figtitle = "", intensity = false,
@@ -603,8 +559,8 @@ end
 """
     plot2d_wireframe_makie(star; ...) -> (fig, ax)
 
-Quad edges only. With `hidden=false` the far hemisphere is drawn too, faintly — the
-"transparent globe" view that shows how the mesh wraps.
+Tessellation edges on the sky plane. `hidden = false` also draws the far side, faintly
+(the opposite of `hidden` in [`plot2d_wireframe`](@ref)).
 """
 function plot2d_wireframe_makie(star; hidden = true, pad = 0.5, figtitle = "",
                                 color = :black, linewidth = 0.4, flipx = false,
@@ -627,17 +583,8 @@ end
 """
     plot2d_binary_makie(tmap1, tmap2, star1, star2, bparams, tepoch; ...) -> (fig, ax)
 
-Both components at their orbital positions on ONE shared colour scale.
-
-The shared scale is why the padding floor is 0.15 here against 0.08 for a single star: the
-hotter component lands at the pale end of the colormap, and against a white background it
-would otherwise vanish — taking its limb and graticules into apparently empty space with it.
-
-Depth comes from the orbit (`binary_orbit_abs` z, `+z` receding), and layering is simply DRAW
-ORDER: far surface, far limb, far graticules, then the near component's three, then the
-compass. The matplotlib layer needs fractional zorders (2, 2.4, 2.5 / 3, 3.4, 3.5) to express
-the same thing, because painting every limb at one fixed z draws the far star's outline over
-the near one.
+Both components at their orbital positions at time `tepoch`, on one colour scale, the
+farther one behind: the Makie version of [`plot2d_binary`](@ref).
 """
 function plot2d_binary_makie(tmap1, tmap2, star1, star2, bparams, tepoch;
                              intensity = false, plotmesh = false, colormap = "gist_heat",
@@ -692,11 +639,8 @@ end
 """
     plot2d_allepochs_makie(tmap, stars; ...) -> fig
 
-One panel per epoch on a shared colour scale.
-
-Note the scale is plain min–max over the WHOLE map with no padding and no colorbar, matching
-the matplotlib version — this view is for comparing epochs against each other, not for reading
-absolute temperatures off a bar.
+One panel per epoch, coloured on the min–max of the whole map, without a colour bar.
+`panelsize` is the panel size in pixels.
 """
 function plot2d_allepochs_makie(tmap, stars; plotmesh = false, tepochs = [],
                                 colormap = "gist_heat", ncols = nothing, compass = true,
@@ -845,17 +789,11 @@ end
 """
     plot_mollweide_makie(tmap, star=nothing; ...) -> (fig, ax)
 
-Whole-surface view in a Mollweide equal-area projection.
+The whole surface in Mollweide equal-area projection, resampled on an `nlon × nlat` grid.
 
-Drawn as a `mesh!` over the projected grid rather than a heatmap: the projected cells are not
-axis-aligned, so no rectangular primitive fits them.
-
-`visible_pixels` is EMPTY by default and nothing is masked, matching `plot_mollweide`. Passing
-`star` selects the tessellation, it does not select a coverage mask — `index_quads_visible` is
-one epoch's front hemisphere, so masking with it would grey out half a map that the other
-epochs constrain perfectly well. To show coverage, pass the union of the epochs' visible sets
-explicitly; those pixels are then painted `bad_color` rather than dropped, so a gap reads as a
-gap instead of as absence.
+`star` selects the tessellation; it does not mask anything. `visible_pixels` (default empty,
+no masking) lists the observed pixels, e.g. `sometimes_visible(stars)`; the others are painted
+`bad_color` when `mask_unobserved = true`.
 """
 function plot_mollweide_makie(tmap, star = nothing; visible_pixels = Int[],
                               vmin = nothing, vmax = nothing, colormap = "gist_heat",

@@ -4,35 +4,27 @@
 stellar surfaces from optical interferometry data, developed by
 Prof. Fabien Baron (Georgia State University) and collaborators.
 
-ROTIR models the stellar surface as a tessellated sphere (or non-spherical
-geometry) and reconstructs temperature maps by fitting interferometric
-observables (V², closure phases, triple amplitudes). It supports:
+ROTIR represents the stellar surface as a tessellated sphere or non-spherical shape and
+reconstructs its temperature map from V², closure phases and triple amplitudes.
 
-- **Multiple surface geometries**: spheres, triaxial ellipsoids, rapid rotators,
-  and Roche-lobe-filling stars
-- **Two tessellation schemes**: HEALPix (equal-area, hierarchical) and
-  longitude/latitude grids
-- **Multi-epoch reconstruction**: simultaneously fit data from multiple rotation
-  phases to recover the full surface map
-- **Multi-resolution imaging**: coarse-to-fine HEALPix pyramid for robust
-  convergence
-- **Joint shape + map optimization**: analytical gradients for shape parameters
-  (radii, inclination, position angle) alongside the surface map
-- **Regularization**: gradient smoothness (spherical Sobel, cotangent
-  Laplace–Beltrami), total variation (L1, quadratic), maximum entropy, mean
-  constraint, harmonic bias, and radial priors
-- **Temperature to intensity**: Rayleigh–Jeans, Planck, or model-atmosphere
-  grids (Kurucz ATLAS9, Korg/MARCS) that predict the limb darkening
-- **Sky images for OITOOLS**: models and reconstructions exported as FITS cubes
-  (channel × epoch, binaries included) that reproduce ROTIR's visibilities
+- Surface geometries: sphere, triaxial ellipsoid, rapid rotator, Roche-lobe-filling star
+- Tessellations: HEALPix and longitude/latitude grids
+- Multi-epoch reconstruction across rotation phases
+- Coarse-to-fine HEALPix reconstruction
+- Joint fit of shape (radii, inclination, position angle) and surface map, with analytic gradients
+- Regularisers: spherical Sobel, Laplace–Beltrami, graph-Laplacian (`tv`, `tv2`), maximum
+  entropy, mean, harmonic bias, radial priors
+- Temperature to intensity: Rayleigh–Jeans, Planck, or model atmospheres (Kurucz ATLAS9,
+  Korg/MARCS) that predict the limb darkening
+- Export to OITOOLS: FITS image cubes (channel × epoch, binaries included) that reproduce
+  ROTIR's visibilities
 
 ROTIR uses [OITOOLS.jl](https://github.com/fabienbaron/OITOOLS.jl) for OIFITS
 I/O and data handling.
 
 ## How it works
 
-The forward model maps a temperature map on the stellar surface to
-interferometric observables:
+The forward model, from surface temperature map to observables:
 
 | Step | Function |
 |------|----------|
@@ -47,12 +39,11 @@ interferometric observables:
 
 ## Visual examples
 
-A rapid rotator with all plotting annotations (graticules, spin axis, rotation
-arrow, compass):
+A rapid rotator with graticules, spin axis, rotation arrow and compass:
 
 ![Rapid rotator with annotations](assets/plot_decorated.png)
 
-The same star in Mollweide projection showing the full-surface temperature map:
+The same star in Mollweide projection:
 
 ![Mollweide projection](assets/plot_mollweide.png)
 

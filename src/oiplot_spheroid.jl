@@ -8,20 +8,9 @@ const _oiplot_initialized = Ref(false)
 """
     set_oiplot_defaults(; compact=<current>)
 
-Apply ROTIR's matplotlib style. This **delegates to `OITOOLS.set_oiplot_defaults`** so a
-figure produced by ROTIR and one produced by OITOOLS look the same in the same document —
-they routinely appear side by side in a paper, and a serif/sans or 12pt/14pt mismatch
-between them is immediately visible.
-
-Delegating to OITOOLS keeps a single source of truth for the rcParams — a private copy
-drifts (font size, minor tick count, `markeredgewidth`) and the two packages' figures stop
-matching. It also picks up OITOOLS' `compact` mode for free, worth passing
-`compact=true` when stacking panels.
-
-Every plotting entry point in this file calls this first. That matters for more than
-style: the rcParams are global, so a function that does *not* set them inherits whatever
-the last caller left behind, and its font then depends on what you happened to plot
-earlier in the session.
+Apply OITOOLS' matplotlib style (`OITOOLS.set_oiplot_defaults`), so ROTIR and OITOOLS
+figures match. `compact=true` suits stacked panels. Every ROTIR plotting function calls this
+first.
 """
 function set_oiplot_defaults(; kwargs...)
     if !_oiplot_initialized[]
@@ -63,12 +52,11 @@ end
 """
     draw_compass(ax, axis_max; size_frac=0.12, fontsize=nothing, color="black")
 
-Draw E/N compass arrows in the lower-right corner of a 2D sky-plane plot.
-East points left (astronomical convention when x-axis is inverted).
+Draw N/E compass arrows in the lower-right corner of a sky-plane plot (East to the left).
+`axis_max` is the plot half-width in data units.
 
-`fontsize=nothing` scales the labels with the axes' physical width, so the compass stays
-legible in a small multi-panel subplot instead of colliding with its own arrows. Pass a
-number to pin it.
+The arrow length follows `size_frac`, clamped to 22–40 points. `fontsize=nothing` scales the
+labels with the arrow length; pass a number to fix it.
 """
 function draw_compass(ax, axis_max; size_frac=0.12, fontsize=nothing, color="black")
     # The compass is a figure annotation, like a scale bar: it should stay a roughly FIXED
@@ -121,24 +109,8 @@ end
     draw_limb!(ax, star; offset_west=0.0, offset_north=0.0, color="black",
                linewidth=0.8, alpha=1.0, zorder=4)
 
-Draw the projected stellar limb — the silhouette of the tessellated surface on the sky.
-
-This is what keeps a star visible regardless of its colours. A surface that maps to the
-pale end of a colormap (a hot component on `gist_heat`) is indistinguishable from a white
-background, so the disk vanishes and any decoration drawn on it — rotation axis, spin
-arrow — appears to float in empty space with nothing to reference it against.
-
-The outline is the CONVEX HULL of the projected vertices, not `silhouette_polygon`. Both
-describe the same boundary, but the latter bins vertices by azimuth and keeps the largest
-radius per bin: wherever no vertex happens to fall near the true edge of its bin the radius
-under-estimates, and the outline notches inward. On a coarse mesh those notches are plainly
-visible. The hull is exact for a convex body and has no resolution parameter at all.
-
-(`silhouette_polygon` remains the right tool for occultation, where a radius-vs-azimuth
-profile is what the calculation needs.)
-
-Vertices are taken in `x = -proj_west`, the same convention as the plots, so only the
-offsets need applying.
+Draw the projected limb of `star`: the convex hull of its visible vertices. `offset_west`
+and `offset_north` (mas) shift it, as for a binary companion.
 """
 function draw_limb!(ax, star; offset_west=0.0, offset_north=0.0, color="black",
                     linewidth=0.8, alpha=1.0, zorder=4)
@@ -150,14 +122,16 @@ function draw_limb!(ax, star; offset_west=0.0, offset_north=0.0, color="black",
 end
 
 """
-    draw_rotation_axis(ax, star; inclination=NaN, position_angle=NaN,
-        arrow_frac=0.3, color="black", linewidth=1.5, offset_west=0.0, offset_north=0.0)
+    draw_rotation_axis(ax, star; inclination=NaN, position_angle=NaN, star_params=nothing,
+        arrow_frac=0.3, color="black", linewidth=1.5, alpha=1.0, inside_alpha=0.5,
+        offset_west=0.0, offset_north=0.0)
 
-Draw the projected stellar rotation axis on a 2D sky-plane plot.
-Shows the pole-to-pole line (dashed) extended beyond the limb, with an arrow at the north pole.
+Draw the projected rotation axis: a dashed pole-to-pole line extended by `arrow_frac` of its
+length beyond each pole, with an arrow at the north pole. The part inside the star is drawn
+at `inside_alpha`.
 
-When `inclination` (degrees from LOS) and `position_angle` (degrees, N through E) are given,
-the axis is computed analytically. Otherwise it is estimated from the tessellation vertices.
+The axis comes from `inclination` (degrees from the line of sight) and `position_angle`
+(degrees, North through East) when given, otherwise from the mesh orientation.
 """
 function draw_rotation_axis(ax, star; arrow_frac=0.3, color="black", linewidth=1.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
@@ -183,13 +157,18 @@ function draw_rotation_axis(ax, star; arrow_frac=0.3, color="black", linewidth=1
 end
 
 """
-    draw_rotation_arrow(ax, star; pole="N", radius_frac=0.15, offset_frac=0.05,
-        color="black", linewidth=1.5, inclination=NaN, position_angle=NaN)
+    draw_rotation_arrow(ax, star; pole="N", radius_frac=0.07, offset_frac=0.15,
+        color="black", linewidth=1.5, npoints=200, inclination=NaN, position_angle=NaN,
+        star_params=nothing, offset_west=0.0, offset_north=0.0)
 
-Draw a curved arrow around the rotation axis showing the sense of rotation.
-A 290° ellipse centered at the pole, solid in front (z>0), dashed behind.
-Prograde rotation = counter-clockwise around north pole.
-When `inclination`/`position_angle` are given, the axis is computed analytically.
+Draw a 300° arrow around the rotation axis showing the sense of rotation: solid in front of
+the star (z > 0), dashed behind. It is centred `offset_frac` of the axis length beyond the
+pole `pole` ("N" or "S"), with radius `radius_frac` of the axis length. Prograde rotation is
+counter-clockwise seen from above the north pole; a negative `star_params.rotation_period`
+reverses it.
+
+The axis comes from `inclination`/`position_angle` (degrees) when given, otherwise from the
+mesh orientation.
 """
 function draw_rotation_arrow(ax, star; pole="N", radius_frac=0.07, offset_frac=0.15,
     color="black", linewidth=1.5, npoints=200, offset_west=0.0, offset_north=0.0,
@@ -262,25 +241,16 @@ end
 """
     draw_graticules(ax, star; star_params=nothing, nlat=5, nlon=8, inclination=NaN, position_angle=NaN, ...)
 
-Draw latitude/longitude graticule lines on the star surface using parametric curves.
-Generates smooth curves in the body frame, rotates them with the same Euler rotation
-as the star (rot_vertex), and clips to the visible side.
-Renders via matplotlib PolyCollection for efficiency.
+Draw `nlat` parallels and `nlon` meridians on the visible side of the star, rotated with the
+star, plus the limb when `limb = true`.
 
-When `star_params` is provided and the surface has a closed form, that form is used:
-- Type 0 (sphere): radius
-- Type 1 (triaxial ellipsoid): radius_x, radius_y, radius_z
-- Type 2 (rapid rotator): rpole, frac_escapevel via f_rapid_rot
+The surface shape is the closed form when `star_params` is given and has one:
+- type 0 (sphere): `radius`
+- type 1 (triaxial ellipsoid): `radius_x`, `radius_y`, `radius_z`
+- type 2 (rapid rotator): `rpole`, `frac_escapevel`
 
-Everything else — Roche lobes (type 3), and any star drawn without `star_params` — is
-interpolated from the MESH's own `r(θ, φ)`; see `_interp_surface`.
-
-That path exists because a Roche lobe has no axisymmetric description. The previous
-fallback fitted a biaxial ellipsoid to the mesh-averaged polar and equatorial radii, which
-is symmetric about the spin axis and therefore structurally unable to show the tidal
-teardrop pointing at the companion — the one feature such a figure is drawn to show. The
-mesh needs no `D`, no `q`, and no potential solve, and stays correct for surface types that
-do not exist yet.
+Otherwise (Roche lobes, type 3, or no `star_params`) it is interpolated from the mesh's
+`r(θ, φ)`.
 """
 function draw_graticules(ax, star; nlat=5, nlon=8, color="black", linewidth=0.8, alpha=0.5,
     offset_west=0.0, offset_north=0.0, inclination=NaN, position_angle=NaN,
@@ -320,26 +290,15 @@ function set_tick_spacing(ax, axis_max)
   ax.yaxis.set_minor_locator(matplotlib.ticker.MultipleLocator(short_tick));
 end
 
+# Not `cmap.(xs)` (a Vector{Py}, which numpy makes an object array) and not a Julia Matrix
+# (PythonCall passes it Fortran-ordered and `to_rgba_array` reads scalars). Nested Vectors
+# convert unambiguously.
 """
     rgba(cmap, x)                 -> NTuple{4,Float64}
     rgba(cmap, xs::AbstractArray) -> Vector{Vector{Float64}}
 
-Evaluate a matplotlib colormap and bring the result back to Julia as something matplotlib
-will accept.
-
-Two PythonCall behaviours bite here:
-
-1. **No automatic conversion.** `cmap(x)` returns a `Py`, so `cmap.(xs)` gives a
-   `Vector{Py}`, which matplotlib turns into a numpy *object* array rather than a float
-   array. Colour lookup then fails, or silently produces a dtype nothing downstream can use.
-2. **A Julia `Matrix` is not an `n × 4` RGBA array.** Passing one gives
-   `ValueError: Invalid RGBA argument: 0.1` — PythonCall hands numpy a Fortran-ordered view
-   and `to_rgba_array` reads it as a sequence of scalars. Transposing does not help.
-
-A `Vector` of length-4 `Vector`s is unambiguous under both conventions, so that is what this
-returns. (`Vector{NTuple{4,Float64}}` also works for colours, but a vector of tuples can
-convert to a numpy *structured* array in other contexts — see the `_xyz_rows` note below —
-so the nested-vector form is the safer habit.)
+Evaluate a matplotlib colormap, returning Julia RGBA values that matplotlib accepts back: a
+tuple for one value, a `Vector` of length-4 `Vector`s for an array.
 """
 rgba(cmap, x::Real) = pyconvert(NTuple{4,Float64}, cmap(x))
 rgba(cmap, xs::AbstractArray) =
@@ -349,14 +308,12 @@ rgba(cmap, xs::AbstractArray) =
     add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
                            offset_west=0.0, offset_north=0.0)
 
-Draw a star's visible tessels as a single `matplotlib.collections.PolyCollection`.
+Draw a star's visible tessels as one `matplotlib.collections.PolyCollection` and return it.
 
-One collection instead of one `add_patch` per tessel: at 3072 tessels that is the
-difference between a plot that takes seconds and one that takes milliseconds, which is
-what makes the per-frame rendering in `animation.jl` practical.
-
-`colours` must be indexed by *position within* `star.index_quads_visible` (i.e. the same
-ordering as `tmap[star.index_quads_visible]`).
+`colours` is indexed by position within `star.index_quads_visible` (the order of
+`tmap[star.index_quads_visible]`). `indices` draws a different set of tessels, e.g. the far
+side. `edgecolors` and `linewidths` override the defaults (mid grey with `plotmesh = true`,
+otherwise each tessel's own colour).
 """
 function add_tessel_collection!(ax, star, colours; plotmesh=false, zorder=2,
                                 offset_west=0.0, offset_north=0.0,
@@ -444,18 +401,14 @@ end
     plot2d(tmap, star; intensity=false, intensity_model=:linear, band=nothing,
            vmin=nothing, vmax=nothing, kwargs...) -> (fig, ax)
 
-Plot a temperature map on the projected sky plane (East left, North up).
+Plot a map on the sky plane (East left, North up).
 
-`intensity = false` colours by temperature. `intensity = true` colours by apparent
-surface brightness, i.e. `I(T) × ldmap`, where `I` is selected by `intensity_model`:
-`:linear` (`I = T`, the Rayleigh–Jeans proxy) or `:planck` at wavelength `band` (metres).
-Note the two keywords are different things — `intensity` decides *whether* limb darkening
-and the brightness conversion are applied at all, `intensity_model` decides *which*
-conversion.
+`intensity = false` colours by temperature. `intensity = true` colours by surface brightness
+`I(T) × ldmap`, with `I` from `intensity_model`: `:linear` (`I = T`) or `:planck` at
+wavelength `band` (metres).
 
-`vmin` / `vmax` pin the colour scale. Leave them `nothing` for the usual per-call
-autoscale; set them when rendering a sequence of frames, or a change of scale between
-frames will masquerade as a change in the star.
+`vmin` / `vmax` fix the colour scale; the default is the range of the visible map. The other
+keywords are listed in the Plotting API page.
 """
 function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad = 0.5,
     colormap="gist_heat", xlim=Float64[], ylim=Float64[], background="white", flipx=false,
@@ -534,19 +487,16 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
                   intensity=false, intensity_model=:linear, band=nothing,
                   vmin=nothing, vmax=nothing, ax=nothing, colorbar_on=true, ...) -> (fig, ax)
 
-Plot a binary system on the 2D sky plane with correct occlusion ordering and orbital
-offset. `tepoch` is the observation time in JD; the secondary's offset relative to the
-primary comes from the orbital elements in `bparams`. The farther star (larger z =
-receding) is drawn behind the nearer one.
+Plot a binary on the sky plane at time `tepoch` (same time system as `bparams.T0`). The
+secondary is offset from the primary by the orbit in `bparams`; the farther component is
+drawn behind.
 
-`intensity`, `intensity_model` and `band` work exactly as in [`plot2d`](@ref). The
-intensity model matters more here than for a single star: it sets the *relative*
-brightness of two components at different temperatures, and the linear proxy misstates
-that ratio by ~4 % in H and ~13 % in V.
+`intensity`, `intensity_model` and `band` are as in [`plot2d`](@ref). With `intensity = true`
+the intensity model sets the brightness ratio of the components: `:linear` misstates it by
+about 4 % in H and 13 % in V.
 
-`vmin` / `vmax` pin the shared colour scale across both components — essential when
-rendering a frame sequence. Pass an existing `ax` (and `colorbar_on=false`) to draw into
-a multi-panel figure instead of creating a new one.
+`vmin` / `vmax` fix the colour scale shared by both components. Pass `ax` (and
+`colorbar_on = false`) to draw into an existing axes.
 """
 function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
     intensity=false, plotmesh=false, colormap="gist_heat", pad=1.0, background="white",
@@ -670,15 +620,10 @@ end
     plot2d_wireframe(star; compass=true, rotation_axis=false, hidden=true,
                      front_color="black", hidden_color="lightgrey", linewidth=0.5)
 
-Wireframe view of the tessellation projected onto the sky plane.
+Tessellation edges projected on the sky plane.
 
-With `hidden=true` the far-side tessels are drawn too, in `hidden_color`, so the mesh reads
-as a transparent globe and the near/far hemispheres are told apart by edge weight rather
-than by one hiding the other. This needs the near side UNFILLED: an opaque white fill looks
-identical on a white background but occludes everything behind it, leaving no back edges to
-see.
-
-`hidden=false` restores the opaque near-side-only view.
+`hidden = true` also draws the far-side edges in `hidden_color`, with the near side unfilled.
+`hidden = false` draws the near side only, filled white.
 """
 function plot2d_wireframe(star; compass=true, rotation_axis=false, hidden=true,
                           front_color="black", hidden_color="lightgrey", linewidth=0.5)
@@ -724,13 +669,10 @@ end
     plot2d_allepochs(tmap, star; plotmesh=false, tepochs=[], colormap="gist_heat",
                      arr_box=nothing, ncols=nothing, compass=true)
 
-Grid of sky-plane maps, one panel per epoch, on a shared colour scale.
-
-The grid and figure size follow the number of epochs, so three epochs give a 1x3 row
-rather than a half-empty 2x3 block with the axis labels floating below it.
-
-`ncols` pins the column count; `arr_box` is also accepted, in the legacy two-digit
-`<rows><cols>` form, for existing scripts.
+Sky-plane maps, one panel per epoch (`star` is a vector of geometries), on a shared colour
+scale. `ncols` sets the number of columns (default: up to 4); `arr_box` sets rows and columns
+as a two-digit number, e.g. `23`. `tepochs` labels the panels; `compass` draws a compass on
+the first.
 """
 function plot2d_allepochs(tmap, star; plotmesh=false, tepochs = [], colormap="gist_heat",
                           arr_box=nothing, ncols=nothing, compass=true)
@@ -798,8 +740,9 @@ end
 """
     plot_rv(bparams; K1, K2, γ=0.0, rv_data1=nothing, rv_data2=nothing, figtitle="Radial Velocities")
 
-Plot radial velocity model curves vs orbital phase, optionally overlaying data.
-`rv_data1`/`rv_data2` should be Nx3 matrices with columns [JD, RV_km/s, error_km/s].
+Plot model radial-velocity curves against orbital phase, with optional data. `rv_data1` and
+`rv_data2` are N×3 matrices `[time, RV, error]` (km/s, time in the system of `bparams.T0`);
+N×2 matrices are drawn without error bars. Returns `(fig, ax)`.
 """
 function plot_rv(bparams; K1::Float64, K2::Float64, γ::Float64=0.0,
     rv_data1=nothing, rv_data2=nothing, figtitle="Radial Velocities")
@@ -852,15 +795,13 @@ function plot_mollweide(tmap, star; ntheta = nothing, nphi = nothing, kwargs...)
   return
 end
 
+# matplotlib's `set_latitude_grid(d)` puts parallels at `arange(-90+d, 90, d)` and labels them
+# with `ThetaFormatter(d)`, which rounds to multiples of `d`: at d = 20 the parallels at ±10,
+# ±30, ±50, ±70 are labelled -80, -40, -20, 0, 0, 20, 40, 80.
 """
     mollplot_temperature_healpix(tmap; kwargs...)
 
-Mollweide plot of a HEALPix map, through PythonPlot. Called by [`plot_mollweide`](@ref), which
-is the entry point most code should use.
-
-The furniture is all optional, because a figure made to be READ and one made to be COMPARED
-against someone else's want different things — labels and seven colourbar ticks help the first
-and get in the way of the second.
+Mollweide plot of a HEALPix map. [`plot_mollweide`](@ref) calls it for a HEALPix mesh.
 
 | keyword | default | what it does |
 |---|---|---|
@@ -872,17 +813,12 @@ and get in the way of the second.
 | `colorbar` | `true` | draw the colourbar |
 | `colorbar_label` | `"Temperature (K)"` | its label — pass `""` for none |
 | `colorbar_ticks` | `7` | how many ticks on it |
-| `title` | `figtitle` | the title; `""` for none |
-| `axis_lines` | `false` | draw the equator and central meridian SOLID over the dotted graticule |
+| `figtitle` | `"Mollweide"` | the figure window name |
+| `title` | `nothing` | the axes title |
+| `axis_lines` | `false` | draw the equator and central meridian as solid lines |
 | `axis_color`, `axis_style`, `axis_width` | `"black"`, `"-"`, `1.0` | how those two are drawn |
 
-`lat_spacing` MUST DIVIDE 90. matplotlib's `GeoAxes.set_latitude_grid(d)` places parallels at
-`arange(-90+d, 90, d)` and labels them with `ThetaFormatter(d)`, which rounds to multiples of
-`d`: at `d = 20` the ticks land at ±10, ±30, ±50, ±70 — none of them multiples of 20 — and come
-out labelled -80, -40, -20, 0, 0, 20, 40, 80, with a duplicated zero and every label wrong by
-10–20°. Verified with a fiducial map (bands at latitude 0 and +60): the DATA is placed
-correctly, so only the labels were wrong. 15 and 30 are safe, 20 is not, and a value that does
-not divide 90 is refused here rather than mislabelled.
+`lat_spacing` must divide 90, otherwise an error is raised.
 """
 function mollplot_temperature_healpix(tmap; visible_pixels = [], vmin = -Inf, vmax = Inf, incl=90.0,
                                       colormap="gist_heat", figtitle="Mollweide", title=nothing,
@@ -1106,12 +1042,10 @@ end
 """
     mollplot_temperature_longlat(tmap, ntheta, nphi; kwargs...)
 
-Mollweide plot of a lat/long mesh, through PythonPlot. Takes the SAME display keywords as
-[`mollplot_temperature_healpix`](@ref) — `graticule`, `labels`, `lon_spacing`, `lat_spacing`,
-`grid_style`, `grid_alpha`, `colorbar`, `colorbar_label`, `colorbar_ticks`, `title`,
-`axis_lines` and friends — because [`plot_mollweide`](@ref) forwards its keywords to whichever
-of the two the mesh calls for, and a keyword that works on one tessellation and throws on the
-other is a trap for the caller, who did not choose the mesh.
+Mollweide plot of a lat/long mesh of `ntheta × nphi` tessels. [`plot_mollweide`](@ref) calls
+it for a lat/long mesh. Takes the same keywords as [`mollplot_temperature_healpix`](@ref);
+`lon_spacing` and `lat_spacing` default to 30, and `figtitle` is also the axes title unless
+`title` is given.
 """
 function mollplot_temperature_longlat(tmap, ntheta, nphi; visible_pixels = [], vmin = -Inf,
                                       vmax = Inf, colormap="gist_heat", figtitle="Mollweide",

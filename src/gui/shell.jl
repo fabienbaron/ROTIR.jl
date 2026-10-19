@@ -580,6 +580,9 @@ function shell_select_model(i)
     return sh.status
 end
 
+# The ORBIT group is dropped once there is a companion: it belongs to the PAIR, and a copy in
+# each component frame is two editable copies of one physical orbit that can disagree. See
+# `shell_binary_orbit_params`, which shows it once, in the Positions frame.
 """
     shell_params() -> String
 
@@ -604,9 +607,6 @@ provider instead. Those four rows are therefore dropped.
 temperature to an emitted intensity is a layer on top of any temperature map, independent of
 whether a μ law is in force. See `_params_table`.
 """
-# The ORBIT group is dropped once there is a companion: it belongs to the PAIR, and a copy in
-# each component frame is two editable copies of one physical orbit that can disagree. See
-# `shell_binary_orbit_params`, which shows it once, in the Positions frame.
 function shell_params()
     sh = _sh()
     m = current_model(sh.session)
@@ -2261,13 +2261,13 @@ function check_mesh!(sh::ShellState, mesh, colors, what::AbstractString)
     return false
 end
 
+# The decoration flags as keywords for `show_map!`. `:spin` expands into the two the drawing
+# layer actually takes.
 """
     refresh_model_tab!(sh)
 
 Redraw the 3-D preview and the Mollweide from the current model. GUI thread only.
 """
-# The decoration flags as keywords for `show_map!`. `:spin` expands into the two the drawing
-# layer actually takes.
 function _decor(sh::ShellState)
     d = sh.decor
     # DEGREES STRAIGHT THROUGH. This used to convert to line COUNTS
@@ -3456,6 +3456,13 @@ const SHAPE_THETA = Dict(
               :inclination => 4, :position_angle => 5),
     2 => Dict(:rpole => 1, :frac_escapevel => 2, :inclination => 3, :position_angle => 4))
 
+# DERIVED from `ParametricLayout` rather than written out, so it cannot drift from the θ the
+# fit actually takes. Built from the `tpole_free` layout because that is the longest legacy
+# one and the GUI always passes the full vector, moving only the named entries.
+# The WIDEST layout — everything the gradient path CAN fit, which is what this table is for:
+# it answers "could this parameter be freed at all", and the per-fit layout (built from what
+# the user actually freed) answers "which slot is it in". Narrower here and `d`/`vgamma` would
+# show in the form but be refused on free, which is exactly the trap this fixes.
 """
     PARAMETRIC_THETA
 
@@ -3468,13 +3475,6 @@ set under different names — `omega` is `frac_escapevel`, `inc` is `inclination
 lets the two meet, and a free parameter with no entry here is what makes the fast path
 inapplicable.
 """
-# DERIVED from `ParametricLayout` rather than written out, so it cannot drift from the θ the
-# fit actually takes. Built from the `tpole_free` layout because that is the longest legacy
-# one and the GUI always passes the full vector, moving only the named entries.
-# The WIDEST layout — everything the gradient path CAN fit, which is what this table is for:
-# it answers "could this parameter be freed at all", and the per-fit layout (built from what
-# the user actually freed) answers "which slot is it in". Narrower here and `d`/`vgamma` would
-# show in the form but be refused on free, which is exactly the trap this fixes.
 const PARAMETRIC_THETA = let L = ROTIR.parametric_layout(; tpole_free = true,
                                                            distance_free = true,
                                                            vgamma_free = true)

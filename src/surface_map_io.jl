@@ -38,20 +38,22 @@ _param_unicode(s::AbstractString) = get(_PARAM_UNICODE, String(s), Symbol(s))
 """
     save_surface_map(path, x, params; nside_exp, kwargs...) -> path
 
-Write a surface map to FITS, together with everything needed to reproduce its χ².
+Write a surface map to FITS with what is needed to reproduce its χ².
 
 `x` is the per-tessel map, `params` the `star_params` NamedTuple it was computed with, and
-`nside_exp` the HEALPix level as `tessellation_healpix` takes it — log₂(nside), so 3 means
-nside 8 and 768 tessels.
+`nside_exp` the HEALPix level as `tessellation_healpix` takes it (log₂ nside: 3 means
+nside 8, 768 tessels).
 
-Optional:
+Keywords:
 
-  * `tepochs`, `mjd` — the observation times. `tepochs` is what `create_star_multiepochs`
-    takes (days since the first epoch), `mjd` the absolute dates; both are written when given.
-  * `field` — what the values ARE (`:temperature` by default, `:intensity` for a map with limb
-    darkening already multiplied in). A map of one kind fed to a χ² expecting the other is
-    silently wrong, which is why it is recorded.
-  * `secondary`, `chi2`, `ndata`, `comment` — provenance, written to the primary header.
+  * `tessellation` — `:healpix` (default) or `:longlat`.
+  * `tepochs`, `mjd` — observation times: days since the first epoch, as
+    `create_star_multiepochs` takes them, and absolute MJD. Written when given.
+  * `field` — `:temperature` (default) or `:intensity` (limb darkening multiplied in).
+  * `secondary`, `chi2`, `ndata`, `comment` — written to the primary header.
+
+The file holds the map (primary HDU, tessellation in the header), a PARAMS table (name, value
+and Julia type of each numeric field of `params`) and, with times, an EPOCHS table.
 
 To get the χ² back:
 
@@ -60,7 +62,7 @@ m = load_surface_map("map.fits")
 tess  = tessellation_healpix(m.nside_exp)
 stars = create_star_multiepochs(tess, m.params, m.tepochs; secondary = m.secondary)
 setup_oi!(data, stars)
-chi2_breakdown(m.x, data, stars)
+chi2_breakdown(m.x, stars, data)
 ```
 """
 function save_surface_map(path::AbstractString, x::AbstractVector, params::NamedTuple;
@@ -104,7 +106,7 @@ function save_surface_map(path::AbstractString, x::AbstractVector, params::Named
         v isa Real || continue          # a NamedTuple field that is not a number is not a
                                         # fit parameter; nothing downstream reads one.
         push!(names, _param_ascii(k)); push!(values, Float64(v))
-        push!(types, v isa Integer ? "I" : v isa Bool ? "B" : "D")
+        push!(types, v isa Bool ? "B" : v isa Integer ? "I" : "D")
     end
 
     FITSIO.FITS(String(path), "w") do f
@@ -124,14 +126,12 @@ end
 """
     load_surface_map(path) -> NamedTuple
 
-Read back what [`save_surface_map`](@ref) wrote.
+Read a file written by [`save_surface_map`](@ref).
 
 Returns `x`, `params`, `nside_exp`, `tessellation`, `field`, `secondary`, `tepochs`, `mjd`,
-`chi2`, `ndata` and `header`. `params` comes back as a NamedTuple with the field types it was
-saved with, so it can go straight into `create_star_multiepochs`.
-
-A file without a PARAMS table still loads — `params` is then empty and only the map and its
-tessellation are available, which is enough to draw it but not to refit it.
+`chi2`, `ndata` and `header`. `params` has the field types it was saved with and can be
+passed to `create_star_multiepochs`. Without a PARAMS table, `params` is an empty
+NamedTuple.
 """
 function load_surface_map(path::AbstractString)
     FITSIO.FITS(String(path), "r") do f

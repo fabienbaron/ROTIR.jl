@@ -963,56 +963,28 @@ end
 """
     sobel_gradient_healpix(n; T=Float32, power=2) -> (; Gx, Gy, D, owner, npix, area)
 
-Tangent-plane **first-derivative** operators on the NESTED HEALPix sphere at `nside = 2ⁿ`,
-as two sparse `npix × npix` matrices: `(Gx*x)[i]` and `(Gy*x)[i]` are the two components of
-∇x at tessel `i`, in that tessel's own orthonormal tangent basis.
+Gradient operators on the nested HEALPix sphere at `nside = 2ⁿ`, for `"sobel"` and
+`"sobel2"`.
 
-This is the sphere's analogue of the 2-D Sobel pair
-
-```
-Gx = [-1 0 1; -2 0 2; -1 0 1]      Gy = [-1 -2 -1; 0 0 0; 1 2 1]
-```
-
-On a regular grid the Sobel stencil **is** the inverse-distance²-weighted least-squares
-gradient: edge neighbours (`d = 1`) get weight 2, corner neighbours (`d = √2`) get weight 1.
-That characterisation, not the stencil itself, is what carries over — HEALPix pixels have 7
-or 8 irregularly placed neighbours and no global axes, so a fixed 3×3 kernel cannot be used.
-The 1‑2‑1 smoothing transverse to the derivative direction emerges from fitting *all* the
-neighbours at once, which is what makes the estimate robust to a single noisy tessel.
-
-With `uᵢ` the tessel centre and `tᵢⱼ` the tangent-plane projection of `uⱼ − uᵢ`, the gradient
-solves
+`Gx`, `Gy` (sparse `npix × npix`): `(Gx*x)[i]` and `(Gy*x)[i]` are the two components of ∇x
+at tessel `i` in an orthonormal basis of its tangent plane. Each row is the weighted
+least-squares gradient fitted to the tessel's 7 or 8 neighbours,
 
 ```
 min_g  Σⱼ wᵢⱼ (g·tᵢⱼ − (xⱼ − xᵢ))²,      wᵢⱼ = |tᵢⱼ|^(−power)
 ```
 
-which is linear in `x`, giving the rows of `Gx`/`Gy` directly (the diagonal carries
-`−Σⱼ`, so constants are annihilated exactly).
+with `tᵢⱼ` the tangent-plane projection of `uⱼ − uᵢ` (tessel centres). On a regular grid with
+`power = 2` this is the 2-D Sobel stencil. Constants map to zero.
 
-Being a first derivative this has a `k²` response, where the Laplacian-stencil operator
-behind `tv_neighbors_healpix` has `k⁴`. It therefore rolls off far more gently with
-scale: it can suppress tessel-scale noise without also crushing genuine structure.
+`D` (sparse, one row per directed neighbour pair, `owner[r]` the tessel of row `r`): rows
+`√(2wₖ/tr Mᵢ)·(x_jₖ − xᵢ)`, so that the rows of tessel `i` give
+`‖D x‖² ≈ |∇x|ᵢ²` for a smooth field. Unlike `Gx`, `Gy`, which give zero for a
+checkerboard, `D` vanishes only for a constant map; the regularisers use `D`.
 
-`area = 4π/npix` is the exact per-tessel solid angle (HEALPix is equal-area), so
-`area·Σᵢ|∇x|ᵢ²` is a consistent discretisation of `∫|∇x|²dΩ` and is therefore independent of
-`nside` for a smooth map.
-
-# `D`: what the regularizers penalise
-
-`Gx`/`Gy` sum signed differences, so a pattern in which opposite neighbours share a value (a
-checkerboard) has `∇x ≈ 0` at every tessel: they are an edge detector, not a penalty.
-
-`D` squares each neighbour difference before summing. Its rows are `√(2wₖ/tr Mᵢ)·(x_jₖ − xᵢ)`,
-one per directed neighbour pair (`owner[r]` is the tessel row `r` belongs to), so that
-
-```
-‖D x‖² restricted to tessel i  =  (2/tr Mᵢ) Σₖ wₖ (x_jₖ − xᵢ)²  ≈  |∇x|ᵢ²
-```
-
-— the same neighbours and weights, equal to the gradient estimate for a smooth field (for a
-linear field the sum is `gᵀMᵢg = ½tr(Mᵢ)|g|²` on an isotropic neighbourhood), and zero ONLY for
-a constant map. `"sobel2"` is `area·‖Dx‖²/x̄²` and `"sobel"` the per-tessel `√` of it.
+`area = 4π/npix` is the solid angle of a tessel, so `area·‖D x‖²` approximates `∫|∇x|²dΩ`
+independently of `nside`. A first derivative has a `k²` response, against `k⁴` for the graph
+Laplacian of `tv_neighbors_healpix`.
 """
 function sobel_gradient_healpix(n; T = Float32, power = 2)
     nside = 2^n
@@ -1077,28 +1049,23 @@ end
 """
     laplace_beltrami_healpix(n; T = Float32) -> (; D, npix, area, nedges)
 
-The **Dirichlet energy** ∫|∇x|² dΩ on the NESTED HEALPix sphere at `nside = 2ⁿ`, discretised
-as the cotangent Laplace–Beltrami operator: one row of the sparse `nedges × npix` matrix `D` per
-edge of the triangulation of the tessel centres,
+Cotangent Laplace–Beltrami operator on the nested HEALPix sphere at `nside = 2ⁿ`, for
+`"laplace_beltrami"`. `D` is sparse `nedges × npix`, one row per edge of a triangulation of
+the tessel centres:
 
 ```
 (D x)_e = √wₑ · (x_j − x_i),   wₑ = ½(cot αₑ + cot βₑ),   ‖D x‖² = Σₑ wₑ (x_j − x_i)²  ≈  ∫|∇x|² dΩ
 ```
 
-with αₑ, βₑ the angles opposite edge `e` in its two triangles. `‖D x‖²` is EXACTLY the
-Dirichlet energy of the piecewise-linear interpolant of `x` on that triangulation (the P1
-finite-element stiffness matrix), so it converges to ∫|∇x|²dΩ at O(h²) — measured on
-`z`: 1.6 %, 0.4 %, 0.1 % low at n = 2, 3, 4 — and isotropically, so a weight means the same
-thing at every resolution and in every direction.
+with αₑ, βₑ the angles opposite edge `e`. `‖D x‖²` is the Dirichlet energy of the piecewise
+linear interpolant of `x` (P1 finite-element stiffness matrix). It converges at O(h²): on the
+field `z` it is 1.6 %, 0.4 % and 0.1 % low at n = 2, 3, 4.
 
-The triangulation is the dual of the pixelisation: every pixel CORNER is shared by four
-tessels (three at the eight base-pixel vertices), and those centres form one quadrilateral (or
-triangle) face. Each quadrilateral is split along its Delaunay diagonal, which keeps every
-`wₑ ≥ 0` (diagonals of cocircular quads get `wₑ = 0` and are dropped). The result is a closed
-surface of exactly `2·npix − 4` triangles.
-
-Every difference enters squared, so the only null mode is the constant map. `area = 4π/npix` is carried for symmetry with `sobel_gradient_healpix`;
-the energy above already includes the geometry and needs no area factor.
+The tessel centres around each pixel corner (four, or three at the eight base-pixel
+vertices) form one face; quadrilaterals are split along their Delaunay diagonal, so every
+`wₑ ≥ 0`, and edges with `wₑ = 0` are dropped. The triangulation has `2·npix − 4` triangles.
+The only null mode is the constant map. `area = 4π/npix` is returned for symmetry with
+[`sobel_gradient_healpix`](@ref); `‖D x‖²` needs no area factor.
 """
 function laplace_beltrami_healpix(n; T = Float32)
     tess = tessellation_healpix(n; T = Float64)
@@ -1181,7 +1148,7 @@ function downsample_map_stars(tmap, stars, star_params, tepochs)
   n_old = npix2n(stars[1].npix)
   n_new = n_old - 1 
   stars_new = create_star_multiepochs(tessellation_healpix(n_new), star_params, tepochs);
-  tmap_new = [mean(tmap[i:i+3]) for i=1:4:nside2npix(2^n_new)-3]
+  tmap_new = [mean(tmap[i:i+3]) for i=1:4:length(tmap)]
   return tmap_new, stars_new
 end
 
@@ -1196,11 +1163,9 @@ end
 """
     upsample_healpix_xmap(xmap_coarse, n_coarse, n_fine; T=Float32)
 
-Upsample a HEALPix surface map from tessellation level `n_coarse` to `n_fine` by replicating each
-parent into its four children, recursively for a multi-level jump.
-
-NESTED ordering only (see the note above). The map is piecewise constant on the parent facets
-afterwards — this is a change of representation, not an interpolation.
+Upsample a HEALPix map from level `n_coarse` to `n_fine` by copying each pixel into its four
+children, once per level. The result is piecewise constant on the coarse pixels. Nested
+ordering only.
 """
 function upsample_healpix_xmap(xmap_coarse, n_coarse, n_fine; T=Float32)
     @assert n_fine >= n_coarse "n_fine ($n_fine) must be >= n_coarse ($n_coarse)"
@@ -1221,16 +1186,12 @@ end
 """
     downsample_healpix_xmap(xmap_fine, n_fine, n_coarse; T=Float32)
 
-Degrade a HEALPix surface map from level `n_fine` to `n_coarse` by averaging each group of four
-children into their parent, recursively for a multi-level jump. The inverse direction of
-[`upsample_healpix_xmap`](@ref), and the HEALPix `ud_grade` operation.
+Downsample a HEALPix map from level `n_fine` to `n_coarse` by averaging each group of four
+children, once per level (HEALPix `ud_grade`). Pixels are equal-area, so this is the
+area-weighted mean. Nested ordering only.
 
-Equal-area pixels make the plain mean the area-weighted mean, so this is exactly the map a fit at
-the coarser level could represent. Useful for asking how much of a map survives a given
-resolution: on zeta And, degrading the published 768-element map to 192 costs 0.155 in chi2/n and
-keeps r = 0.917, which says the information is essentially all at level 2.
-
-NESTED ordering only (see the note above).
+On ζ And, the published 768-pixel map downsampled to 192 pixels has χ²/n higher by 0.155 and
+correlation r = 0.917 with the original.
 """
 function downsample_healpix_xmap(xmap_fine, n_fine, n_coarse; T=Float32)
     @assert n_coarse <= n_fine "n_coarse ($n_coarse) must be <= n_fine ($n_fine)"

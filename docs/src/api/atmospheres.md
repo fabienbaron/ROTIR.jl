@@ -1,14 +1,13 @@
 # Model Atmospheres, Stellar Physics & Spectra
 
-API for the intensity providers, the derived stellar quantities that index them,
-the surface velocity field and the velocity-resolved observables built on it.
-See the [Model Atmospheres](@ref "Model atmospheres and limb darkening") guide
-for how these fit together.
+Intensity providers, the derived stellar quantities they use, the surface velocity field and
+the velocity-resolved observables. See the guide
+[Model atmospheres and limb darkening](@ref).
 
 ## Derived stellar quantities
 
-The mass is **derived** from `(rpole, d, frac_escapevel, rotation_period)` rather
-than fitted, which is what makes a per-tessel surface gravity available at all.
+The mass is derived from `(rpole, d, frac_escapevel, rotation_period)`; with it, each
+tessel has an absolute surface gravity.
 
 ```@docs
 derive_mass
@@ -23,8 +22,7 @@ projected_veq
 
 ## Temperature to intensity: choosing a source
 
-The "Intensity from" setting — see the guide's
-[From temperature to intensity](@ref) section.
+The GUI's "Intensity from" setting; see [From temperature to intensity](@ref).
 
 ```@docs
 INTENSITY_PARAMS
@@ -66,8 +64,8 @@ load_intensity_grid
 
 ## Backends
 
-`build_korg_grid` lives in a package extension and needs `using Korg`. The
-Kurucz readers need a downloaded intensity pack; nothing is bundled.
+`build_korg_grid` and `korg_provider` need `using Korg`. The Kurucz readers need the
+intensity pack ([`kurucz_pack_path`](@ref) downloads it).
 
 ```@docs
 build_korg_grid
@@ -83,6 +81,7 @@ KuruczModel
 los_velocity
 los_velocity_from_proj
 doppler_lambda
+rest_lambda
 velocity_field_summary
 ```
 

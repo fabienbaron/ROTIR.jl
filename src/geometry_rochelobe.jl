@@ -4,32 +4,37 @@ import Base: Math as math
 """
     synchronicity(p) -> F
 
-Synchronicity parameter `F = ω_rot/ω_orb = P_orb/P_rot` — 1 synchronous, >1
-supersynchronous, <1 subsynchronous. This is the quantity that enters the Roche
-potential's centrifugal term as `½F²(1+q)r²(1−ν²)`, and it is the same `F` as PHOEBE's
-`syncpar`, ELISa's `synchronicity`, and `P` in `RocheLobe.f90`.
+Synchronicity `F = ω_rot/ω_orb = p.P / p.rotation_period`: 1 synchronous, > 1
+supersynchronous, < 1 subsynchronous. It enters the Roche potential's centrifugal term as
+`½F²(1+q)r²(1−ν²)`, and is PHOEBE's `syncpar`, ELISa's `synchronicity` and `P` in
+`RocheLobe.f90`.
 
-Note it is the ratio of *angular rates*, i.e. the RECIPROCAL of the ratio of periods:
-`P/rotation_period`, NOT `rotation_period/P`. The inverted form is invisible for a
-synchronous binary (both give 1), which is every configuration in the demos and the tests,
-so it will not show up in a test run — but for Spica's primary (v sin i = 161 km/s ⇒
-F ≈ 1.92) it puts the centrifugal term out by F⁴ ≈ 13.6× and the rotational flattening at
-0.5% instead of 9.4%.
-
-Verified against `libphoebe.roche_Omega(q, F, d, [x,y,z])` at F = 0.521, 1.0 and 1.92 —
-see the "synchronicity convention" testset in `test/test_reflection.jl`.
+Tested against `libphoebe.roche_Omega(q, F, d, [x,y,z])` at F = 0.521, 1.0 and 1.92
+("synchronicity convention" testset in `test/test_reflection.jl`).
 """
 @inline synchronicity(p) = p.P / p.rotation_period
+
+"""
+    roche_q(p; secondary=false) -> q
+
+The binary mass ratio `M₂/M₁` from a component's parameters.
+
+A component's `q` is `M_companion/M_self`: `M₂/M₁` on the primary, `M₁/M₂` on the secondary.
+The Roche potentials, gravities, volumes and fill-out conversions (`compute_potential_*`,
+`compute_gravity_*`, `roche_volume`, `fillout_to_rpole`, …) take `M₂/M₁` for both
+components; the functions that read a component's parameters convert with this.
+"""
+roche_q(p; secondary = false) = secondary ? inv(p.q) : p.q
 
 # The following function is for single visible roche lobes (= symbiotics or large stars with hidden companions) ONLY
 #
 function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fillout_factor = false, secondary = false, T=eltype(tessels), omega = nothing)
-    # if wanting to call this for secondary=true, invert roche_parameters.q;
+    # `roche_parameters.q` is the component's own M_companion/M_self; see `roche_q`.
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     secondary == false ? fillout_factor = roche_parameters.fillout_factor_primary : fillout_factor = roche_parameters.fillout_factor_secondary;
     async_ratio = synchronicity(roche_parameters)
     a = roche_parameters.a;
-    q = roche_parameters.q;
+    q = roche_q(roche_parameters; secondary = secondary)
     rpole = roche_parameters.rpole
     # Compute surface potentials and good init.
     # `omega` (if given) pins the equipotential directly — the volume-conserving path
@@ -53,26 +58,6 @@ function update_roche_radii(tessels::tessellation, roche_parameters, D; use_fill
 end
 
 
-# TODO: update with the new scheme
-function update_roche_radii_binary(star1_geom::tessellation, star2_geom::tessellation, binary_parameters, D, use_fillout_factor = false) # updates both primary and secondary
-## TEST star1_geom = star1; star2_geom =  star2; use_fillout_factor = false;
-    fillout_factor1 = binary_parameters.fillout_factor[1];
-    fillout_factor2 = binary_parameters.fillout_factor[1];
-    async_ratio1 = binary_parameters.P/binary_parameters.star1.rotation_period
-    async_ratio2 = binary_parameters.P/binary_parameters.star2.rotation_period
-    a = binary_parameters.a
-    q = binary_parameters.q;
-
-    # Compute surface potentials and good init
-    potS1, r_init1 = get_surface_potential(binary_parameters.star1.rpole/a, D, q, async_ratio1, fillout_factor1, use_fillout_factor = use_fillout_factor);
-    potS2, r_init2 = get_surface_potential(binary_parameters.star2.rpole/a, D, 1/q, async_ratio2, fillout_factor2, use_fillout_factor = use_fillout_factor, secondary = true);
-
-    # Update the radii r at each (θ,ϕ) to match the surface potential
-    star1_roche_geom = update_roche_geom(star1_geom, r_init1, potS1, a, D, q, async_ratio1);
-    star2_roche_geom = update_roche_geom(star2_geom, r_init2, potS2, a, D, 1/q, async_ratio2, secondary = true);
-    return star1_roche_geom, star2_roche_geom
-end
-
 function get_surface_potential(rpole_a, D, q, async_ratio, fillout_factor; secondary = false, use_fillout_factor = false,
                                T = float(promote_type(typeof(rpole_a), typeof(D), typeof(q))))
   secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
@@ -93,15 +78,16 @@ end
 end
 
 function fillout_to_rpole(fillout, D, q, async_ratio; secondary = false)
-    # Note we expect calls to this with q = M2/M1 for primary, and = M1/M2 for secondary
-    secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
+    # `q` is M2/M1 for either component (see `roche_q`).
     # Finds which (dimensionless) rpole corresponds to the fillout
     # Multiply by a to find the size in mas
+    secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     secondary == false ? rtry = radius_point_Pathania(q) : rtry=radius_point_Pathania(1/q)
-    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function);
-    pot_L1, ~ = potential_function(R_L1, D, pi/2.0, 0.0, q, async_ratio);
+    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function; secondary = secondary)
+    pot_L1, ~ = potential_function(R_L1, D, Int(-2*(secondary == true)+1)*pi/2.0, 0.0, q, async_ratio) # Primary -> π/2, Secondary -> -π/2
     potS = (pot_L1 + 0.5 * q * q / (1.0 + q)) / fillout - 0.5 * q * q / (1.0 + q)
-    rpole = solve_radius(radius_leahy(q), potS, D, 0.0, 0.0, q, async_ratio, potential_function, verbose=false)
+    r0 = 0.8 * radius_leahy(secondary ? 1/q : q)   # inside the lobe, below L1
+    rpole = solve_radius(r0, potS, D, 0.0, 0.0, q, async_ratio, potential_function, verbose=false)
     return rpole # Beware, output is the reduced rpole = rpole/a
 end
 
@@ -109,7 +95,7 @@ function rl1(roche_parameters; secondary = false)
     secondary == false ? potential_function = compute_potential_primary : potential_function = compute_potential_secondary;
     async_ratio = synchronicity(roche_parameters)
     a = roche_parameters.a;
-    q = roche_parameters.q;
+    q = roche_q(roche_parameters; secondary = secondary)
     D = 1.0 # circular orbit approximation
     secondary == false ? rtry = radius_point_Pathania(q) : rtry = radius_point_Pathania(1/q)
     R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function, secondary = secondary)
@@ -119,9 +105,9 @@ end
 function max_rpole(D, roche_parameters; secondary = false)
     # The maximum rpole will be gotten for a fillout factor of 1.0
     a = roche_parameters.a;
-    q = roche_parameters.q;
+    q = roche_q(roche_parameters; secondary = secondary)
     async_ratio = synchronicity(roche_parameters)
-    return fillout_to_rpole(1.0, D, q, async_ratio)*a;
+    return fillout_to_rpole(1.0, D, q, async_ratio; secondary = secondary)*a;
 end
 
 
@@ -131,7 +117,7 @@ function rpole_to_fillout(rpole, D, q, async_ratio; secondary = false)
     # Finds which fillout corresponds to the dimensionless rpole (=rpole/a)
     potS, ~ = potential_function(rpole, D, 0.0, 0.0, q, async_ratio);
     secondary == false ? rtry = radius_point_Pathania(q) : rtry=radius_point_Pathania(1/q)
-    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function);
+    R_L1 = solve_R_L1(rtry, D, q, async_ratio, potential_function; secondary = secondary)
     pot_L1, ~ = potential_function(R_L1, D, Int(-2*(secondary == true)+1)*pi/2.0, 0.0, q, async_ratio);
     fillout =   (pot_L1 + q * q / 2(1.0 + q)) /  (potS + q * q / 2(1.0 + q))
     return fillout
@@ -234,9 +220,9 @@ end
     solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function;
                  verbose=true)
 
-Find the radius r at direction (θ,ϕ) where the Roche potential equals `pot_surface`.
-Uses Halley's method (cubic convergence). Converges reliably even near the L1 point
-at all fillout levels up to and including 1.0.
+Radius (units of a) in direction (θ, ϕ) at which `potential_function` equals
+`pot_surface`, by Halley's method from `r0`. Converges near L1 for fill-out up to 1. The
+`fillout`, `R_L1` and `secondary` keywords are accepted and ignored.
 """
 function solve_radius(r0, pot_surface, D, θ, ϕ, q, async_ratio, potential_function;
                       verbose=true, fillout=0.0, R_L1=0.0, secondary=false)
@@ -484,8 +470,9 @@ function temperature_map_vonZeipel_roche_single(parameters, star_geom, t; second
     if secondary == true
         compute_gravity = compute_gravity_secondary;
     end
-    g_pole = compute_gravity(rpole,T(0),T(0),D,p.q,async_ratio);
-    gravity_map = compute_gravity(r,θ,ϕ,D,p.q,async_ratio);
+    q = roche_q(p; secondary = secondary)
+    g_pole = compute_gravity(rpole,T(0),T(0),D,q,async_ratio);
+    gravity_map = compute_gravity(r,θ,ϕ,D,q,async_ratio);
     # Computes von Zeipel temperature map directly from the gravity map
     Teff = p.tpole*(gravity_map./g_pole).^p.beta;
     return Teff
@@ -524,11 +511,6 @@ function radius_eggleton(q)
     return 0.49*q1^(2/3)/(0.6*q1^(2/3)+log(1.0+q1^(1/3)));
 end
 const radius_equivalent_eggleton = radius_eggleton  # backward compat alias
-
-function radius_point_kopal_polynomial(x)
-    # Polynomial = 0 at x=point radius
-    return (q + 1)x^5 - (3q + 2)x^4 + (3q + 1)x^3 - x^2 + 2x - 1
-end
 
 # Leahy & Leahy (2015) approximation for the L1 radius
 function radius_leahy(q)
@@ -589,14 +571,13 @@ end
 """
     roche_polar_radius(OmegaF, D, q, async_ratio, potential_function) -> r_pole
 
-Radius of the `Ω = OmegaF` equipotential along the rotation axis (θ = 0), found by
-bracketing outward from the centre and then Brent.
+Radius (units of a) of the `Ω = OmegaF` equipotential along the rotation axis (θ = 0),
+by bracketing outward from the centre and then Brent. Warns and returns the last bracket
+end if `OmegaF` cannot be reached.
 
-This is the *minimum* radius on the equipotential, which makes it the only universally
-safe starting point for the Halley solve in other directions: starting from anything
-larger (in particular from the L1 radius, which lies outside the star for an under-filled
-lobe) lets Halley step over the saddle and converge to a spurious root beyond L1 —
-silently returning a radius roughly twice too large near the companion.
+This is the minimum radius on the equipotential, so it is the starting point for the Halley
+solve in other directions. A start beyond the surface (e.g. the L1 radius of an under-filled
+lobe) can converge to a root beyond L1, about twice too large near the companion.
 """
 function roche_polar_radius(OmegaF, D, q, async_ratio, potential_function)
     f(r) = potential_function(r, D, 0.0, 0.0, q, async_ratio)[1] - OmegaF
@@ -622,23 +603,12 @@ end
 """
     roche_volume(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing) -> Float64
 
-Dimensionless Roche lobe volume (units of a³), by double Romberg quadrature over
-(cos θ, φ) following Leahy (2014).
+Roche lobe volume (units of a³), by double Romberg quadrature over (cos θ, φ) following
+Leahy (2014). The surface equipotential comes from `fillout` (relative to L1), or from
+`omega` if given. The radius in each direction is a Halley solve seeded from
+[`roche_polar_radius`](@ref). Tested against the HEALPix mesh sum `(4π/3npix)·Σrᵢ³`.
 
-By default the surface equipotential comes from `fillout` (relative to L1); pass `omega`
-to give it directly.
-
-Two corrections relative to the original implementation, both verified against a direct
-HEALPix mesh sum `(4π/3npix)·Σrᵢ³`:
-
-* the quadrature carried an extra factor of 2 (the μ- and φ-symmetry factors were applied
-  on top of an integrand that already included them), so every volume came out exactly 2×
-  too large — and hence `R_vol` 2^(1/3) ≈ 1.26× too large;
-* the Halley solve was seeded with the L1 radius; see [`roche_polar_radius`](@ref).
-!!! note "Returns `Float64` on purpose"
-    Not an oversight and not a candidate for the element-type-follows-input rule: this is a
-    root solve / quadrature whose nested Halley stack needs the headroom. Float32 inputs are
-    accepted and widened.
+Computes in `Float64` whatever the input type.
 """
 function roche_volume(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
     potential_function = secondary ? compute_potential_secondary : compute_potential_primary
@@ -669,17 +639,12 @@ end
 """
     roche_area(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing) -> Float64
 
-Dimensionless Roche lobe surface area (units of a²), by double Romberg quadrature.
+Roche lobe surface area (units of a²), by double Romberg quadrature, with the same
+equipotential and root solve as [`roche_volume`](@ref). The area element is
+`dA = r²/cos γ dΩ`, with γ the angle between `r̂` and the surface normal,
+`cos γ = |∂Ω/∂r| / |∇Ω|`.
 
-Carries the same two fixes as [`roche_volume`](@ref) (spurious factor of 2; L1-seeded
-root solve) and additionally the projection factor that the original omitted: for a
-star-shaped surface `dA = r²/cos γ dΩ`, where γ is the angle between `r̂` and the surface
-normal, so `cos γ = |∂Ω/∂r| / |∇Ω|`. Dropping it underestimates the area of a distorted
-lobe.
-!!! note "Returns `Float64` on purpose"
-    Not an oversight and not a candidate for the element-type-follows-input rule: this is a
-    root solve / quadrature whose nested Halley stack needs the headroom. Float32 inputs are
-    accepted and widened.
+Computes in `Float64` whatever the input type.
 """
 function roche_area(q, async_ratio, D; fillout=1.0, secondary=false, omega=nothing)
     potential_function = secondary ? compute_potential_secondary : compute_potential_primary

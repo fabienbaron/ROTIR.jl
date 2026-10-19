@@ -47,29 +47,38 @@ Implement for a new backend:
 | `needs_logg(p)` | `true` if `logg` is actually read (so a distance is required) |
 | `provider_support(p)` | `(Teff, logg, λ)` ranges, for refusing silent extrapolation |
 
-`∂I/∂λ` is not decoration: a velocity-resolved model evaluates each tessel at its own
-Doppler-shifted `λ = λ₀(1 − v_los/c)`, so the gradient with respect to the velocity field
-flows entirely through that partial.
+`∂I/∂λ` carries the gradient with respect to the velocity field: a velocity-resolved model
+evaluates each tessel at its rest-frame wavelength `λ_obs/(1 + v_los/c)`.
 """
 abstract type IntensityProvider end
 
-"True when the provider's `I` already contains limb darkening, so `ldmap` must be unity."
+"""
+    owns_mu(provider) -> Bool
+
+Whether the provider's intensity already contains limb darkening (then `ldtype` must be 0).
+"""
 owns_mu(::IntensityProvider) = false
-"True when the provider reads `logg`, so the model needs a distance to derive a mass."
+"""
+    needs_logg(provider) -> Bool
+
+Whether the provider reads `logg`, in which case the model needs a distance `d`.
+"""
 needs_logg(::IntensityProvider) = false
-"`(Teff = (lo,hi), logg = (lo,hi), λ = (lo,hi))` — the range the backend is valid over."
+"""
+    provider_support(provider) -> (Teff = (lo,hi), logg = (lo,hi), λ = (lo,hi))
+
+The parameter ranges the provider covers.
+"""
 provider_support(::IntensityProvider) =
     (Teff = (0.0, Inf), logg = (-Inf, Inf), λ = (0.0, Inf))
 
 """
     check_provider_consistency(provider, star_params) -> Vector{String}
 
-Complaints about using `provider` with `star_params`, empty when the pair is coherent.
+Problems with using `provider` with `star_params`; empty if none.
 
-Two ways to get it wrong, and both are silent in a fit:
-
-  * `owns_mu(provider)` with `ldtype ≠ 0` counts limb darkening twice.
-  * `needs_logg(provider)` without a distance leaves `logg` undefined.
+  * `owns_mu(provider)` with `ldtype ≠ 0`: limb darkening counted twice.
+  * `needs_logg(provider)` without [`has_physical_scale`](@ref): `logg` undefined.
 """
 function check_provider_consistency(p::IntensityProvider, star_params)
     msgs = String[]
@@ -93,14 +102,10 @@ end
 """
     PlanckProvider()
 
-Non-dimensional Planck intensity — `src/intensity.jl`'s `:planck`, reached through the
-provider interface so the two paths cannot diverge.
+Non-dimensional Planck intensity, the same as `intensity(T, :planck, …)`.
 
-`owns_mu` is **false**: this carries no μ dependence, so it is meant to be combined with
-one of the `ldtype` laws exactly as today. It is the reference a tabulated grid is
-compared against, and the null case for the gradient tests — under it `∂I/∂logg` and
-`∂I/∂μ` are identically zero, so a non-zero `∂logπ/∂d` would mean the distance had leaked
-into the likelihood through something other than the atmosphere.
+No μ or `logg` dependence (`owns_mu` and `needs_logg` are false); limb darkening comes from
+the `ldtype` law.
 """
 struct PlanckProvider <: IntensityProvider end
 
@@ -134,14 +139,9 @@ end
 """
     RayleighJeansProvider()
 
-The Rayleigh–Jeans limit of [`PlanckProvider`](@ref): intensity **linear in temperature**,
-`I = λT/c₂`, which is what `1/(e^{c₂/λT} − 1)` tends to when `c₂/λT ≪ 1`. Same
-normalisation as the Planck provider, so the two can be compared directly and agree in that
-limit.
-
-This is the conversion an imaging code that fits "brightness" per patch is implicitly using —
-SURFING's maps are linear in patch brightness, with temperatures assigned afterwards — and it
-is what `intensity(T, :linear, …)` does up to a constant. Like Planck, `owns_mu` is false.
+Rayleigh–Jeans limit of [`PlanckProvider`](@ref): `I = λT/c₂`, linear in temperature, with
+the same normalisation. Equal to `intensity(T, :linear, …)` up to a constant. `owns_mu` is
+false.
 """
 struct RayleighJeansProvider <: IntensityProvider end
 
@@ -177,9 +177,9 @@ end
 
 Values on a rectilinear `(Teff, logg, μ, λ)` grid, multilinearly interpolated.
 
-Axes must be sorted and strictly increasing; `values` is `(nTeff, nlogg, nμ, nλ)`. Built
-by whichever backend produced the atmosphere — [`TabulatedProvider`](@ref) is the wrapper
-that makes one usable as an [`IntensityProvider`](@ref).
+Axes are strictly increasing and μ starts above 0; `values` is `(nTeff, nlogg, nμ, nλ)`;
+`λ` is in metres.
+[`TabulatedProvider`](@ref) wraps one as an [`IntensityProvider`](@ref).
 """
 struct RectGrid4{T<:AbstractFloat}
     Teff::Vector{T}
@@ -271,13 +271,11 @@ end
 
 A precomputed `(Teff, logg, μ, λ)` intensity grid as an [`IntensityProvider`](@ref).
 
-This is the backend for the hot rapid rotators — Kurucz ATLAS9 (17 μ rays: ten at
-μ = 1.0…0.1 plus seven limb rays down to 0.01) and TLUSTY OSTAR2002 / BSTAR2006 (20 rays
-over 0.001–1, 15–55 kK). `owns_mu` is **true**, so it requires `ldtype = 0`.
+Used for Kurucz ATLAS9, Korg/MARCS and any grid saved with [`save_intensity_grid`](@ref).
+`owns_mu` and `needs_logg` are true, so it requires `ldtype = 0` and a distance.
 
-`strict = true` makes an out-of-range `(Teff, logg, λ)` an error instead of a clamp. Use
-it for a validation run; leave it off for a fit, where a sampler stepping outside the grid
-must not take the chain down with it.
+Out-of-range `(Teff, logg, λ)` are extrapolated linearly from the edge cell; `strict = true`
+raises an error instead.
 """
 struct TabulatedProvider{T} <: IntensityProvider
     grid::RectGrid4{T}
@@ -390,15 +388,12 @@ end
 
 A `RectGrid4` sampled from a smooth closed-form `f(Teff, logg, μ, λ)`, together with `f`.
 
-For testing the interpolation and its partials against something whose exact answer is
-known independently of the code under test. `f` is deliberately multiplicatively
-separable and mildly non-linear in each argument, so a dropped or transposed axis shows
-up rather than cancelling:
+For testing the interpolation and its partials:
 
     f = (Teff/6000)³ · 10^(−0.4(logg−4)) · (0.35 + 0.65μ^0.8) · (λ/2.2e-6)^(−1.7)
 
-Note that interpolation error is second-order in the cell size, so a test comparing
-`interp4_and_grad` to `f` off-node must allow for it; comparing ON node is exact.
+The interpolant equals `f` at the nodes; between nodes the error is second order in the
+cell size.
 """
 function analytic_test_grid(; nT = 9, ng = 7, nm = 11, nl = 6,
                             Teff = (4000.0, 9000.0), logg = (2.5, 4.5),
@@ -432,10 +427,7 @@ const _GRID_FITS_VERSION = 1
     save_intensity_grid(path, grid; comment = "") -> path
 
 Write a [`RectGrid4`](@ref) to a FITS file: the 4-D intensity as the primary HDU, the four
-axes as image extensions named `TEFF`, `LOGG`, `MU` and `LAMBDA`.
-
-Grid building is the expensive step and it is deterministic, so it belongs on disk. Once
-saved, evaluating the grid needs neither Korg nor any synthesis code.
+axes as image extensions `TEFF`, `LOGG`, `MU` and `LAMBDA`. Reading it back needs no Korg.
 """
 function save_intensity_grid(path::AbstractString, g::RectGrid4; comment::AbstractString = "")
     hdr = FITSIO.FITSHeader(
@@ -463,8 +455,7 @@ end
 """
     load_intensity_grid(path; T = Float64) -> RectGrid4{T}
 
-Read back a grid written by [`save_intensity_grid`](@ref). The axes are found by their
-`EXTNAME`, not by position, so a file gaining an extension later still loads.
+Read a grid written by [`save_intensity_grid`](@ref). Axes are found by `EXTNAME`.
 """
 function load_intensity_grid(path::AbstractString; T::Type = Float64)
     FITSIO.FITS(path, "r") do f
@@ -510,17 +501,17 @@ end
 
 Synthesize a `(Teff, logg, μ, λ)` specific-intensity grid with Korg.jl.
 
-Requires `using Korg` (weak dependency; implemented in `ext/ROTIRKorgExt.jl`). Korg's
-`interpolate_marcs` spans **Teff 2800–8000 K** and **logg −0.5 to 5.5**, so this covers
-beta Cas (7208 K) and not Vega, Regulus, beta Lyr or Spica — those need a tabulated
-Kurucz or TLUSTY grid through [`load_intensity_grid`](@ref).
+Requires `using Korg`. MARCS covers Teff 2800–8000 K and logg −0.5 to 5.5; hotter stars
+need a Kurucz grid ([`read_kurucz_intensity`](@ref)) or a grid loaded with
+[`load_intensity_grid`](@ref).
 """
 function build_korg_grid end
 
 """
     korg_provider(; kwargs...) -> TabulatedProvider
 
-[`build_korg_grid`](@ref) wrapped as a provider. Requires `using Korg`.
+[`build_korg_grid`](@ref) wrapped as a [`TabulatedProvider`](@ref); `strict` is passed to it
+and the other keywords to `build_korg_grid`. Requires `using Korg`.
 """
 function korg_provider end
 
@@ -540,19 +531,16 @@ function korg_provider end
 """
     build_intensity_provider(cfg, path) -> IntensityProvider
 
-The provider named by `cfg[:intensity_source]`, built from the settings the backend reads.
+Build the provider selected by `cfg[:intensity_source]` (codes in
+[`INTENSITY_PARAMS`](@ref): 1 Planck, 2 grid file, 3 Kurucz pack, 4 Korg, 5 Rayleigh–Jeans).
 
-`cfg` is a `name => value` mapping of the numeric fields of `INTENSITY_PARAMS` (a `Dict` or a
-NamedTuple) and `path` the text-valued `grid_path`, read only for a custom grid
-(`grid_choice = 0`): a shipped grid is found inside the package and the Kurucz pack in a
-per-user cache. Use
-[`validate_intensity_source`](@ref) first: this raises on a bad configuration rather than
-returning a provider that is wrong in a way only a fit residual would show.
+`cfg` maps the numeric fields of `INTENSITY_PARAMS` to values (a `Dict` or a NamedTuple).
+`path` is `grid_path`, read only for a custom grid (`grid_choice = 0`). Raises on a bad
+configuration; [`validate_intensity_source`](@ref) checks one without building it.
 
-**Cost is not uniform and the caller has to know it.** 1 and 5 are free, 2 is a FITS read, 3
-parses a 67 MB pack (downloading it once, the first time), and 4 runs `grid_nodes²` syntheses —
-seconds to minutes. Nothing is cached here;
-save a built grid with [`save_intensity_grid`](@ref) and come back through source 2.
+Cost: 1 and 5 are immediate, 2 reads a FITS file, 3 parses the 67.5 MB Kurucz pack
+(downloaded on first use), 4 runs `grid_nodes²` Korg syntheses (seconds to minutes). Nothing
+is cached; save a built grid with [`save_intensity_grid`](@ref) and load it as source 2.
 """
 function build_intensity_provider(cfg, path::AbstractString = "")
     src = round(Int, float(_cfg(cfg, :intensity_source, INTENSITY_PARAMS[1].default)))
@@ -600,17 +588,21 @@ end
 const KURUCZ_PACK_URL = "http://kurucz.harvard.edu/grids/gridp00/ip00k2.pck19"
 const KURUCZ_PACK_ENV = "ROTIR_KURUCZ_PACK"
 
-"Per-user cache for downloaded intensity data, under the first Julia depot."
+"""
+    intensity_cache_dir() -> String
+
+Per-user cache for downloaded intensity data: `scratchspaces/ROTIR/intensity` under the first
+Julia depot.
+"""
 intensity_cache_dir() = joinpath(first(DEPOT_PATH), "scratchspaces", "ROTIR", "intensity")
 
 """
     kurucz_pack_path(; download = false) -> String
 
-Where the ATLAS9 intensity pack `ip00k2.pck19` (67.5 MB, Teff 3500–50000 K — the solar-
-metallicity pack that reaches the hot stars; see src/kurucz_intensity.jl) lives:
-`ENV["$(KURUCZ_PACK_ENV)"]` if set, otherwise `intensity_cache_dir()`. With `download = true` a
-missing pack is fetched once from $(KURUCZ_PACK_URL); without it the cache path is returned
-whether or not the file is there yet, so a caller can say where it WILL go.
+Path of the solar-metallicity ATLAS9 intensity pack `ip00k2.pck19` (67.5 MB, Teff
+3500–50000 K): `ENV["$(KURUCZ_PACK_ENV)"]` if set, otherwise in [`intensity_cache_dir`](@ref).
+With `download = true` a missing pack is downloaded from $(KURUCZ_PACK_URL); otherwise the
+path is returned whether or not the file exists.
 """
 function kurucz_pack_path(; download::Bool = false)
     forced = get(ENV, KURUCZ_PACK_ENV, "")

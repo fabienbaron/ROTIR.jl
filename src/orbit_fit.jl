@@ -73,8 +73,9 @@ end
 GaussianDisk(; fwhm) = GaussianDisk(fwhm)
 
 """
-Elliptical Gaussian: `fwhm` (mas) along the major axis, axis `ratio` in (0,1], major axis
-at position angle `pa` (degrees).
+Elliptical Gaussian: `fwhm` (mas) along the major axis, axis `ratio` in (0,1]. `pa`
+(degrees) is the angle of the minor axis, measured from +RA toward +Dec; the major axis is at
+position angle `-pa` (North through East).
 
 `pa` is taken modulo 180: the profile is symmetric under a half turn, so a [0,360) range
 would hold two exact copies of every solution.

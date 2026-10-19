@@ -5,11 +5,8 @@
 """
     orbit_to_rotir_offset(bparams, tepoch_jd) -> (offset_x, offset_y)
 
-Convert orbital position to ROTIR's projected coordinate frame.
-Returns the secondary's offset relative to the primary in mas, in ROTIR's (West, North) frame.
-
-The orbital code (`binary_orbit_abs`) returns positions where x=North, y=East.
-ROTIR's projected coordinates have proj_west=West, proj_north=North.
+The secondary's offset from the primary (mas) in ROTIR's (West, North) frame, from
+[`binary_orbit_abs`](@ref) (x = North, y = East).
 """
 function orbit_to_rotir_offset(bparams, tepoch_jd)
     x1, y1, z1, x2, y2, z2 = binary_orbit_abs(bparams, tepoch_jd)
@@ -23,21 +20,12 @@ end
 """
     orbit_to_rotir_offset(bparams, tepochs::AbstractVector) -> (offsets_x, offsets_y)
 
-Vectorised over epochs: same `(West, North)` offsets in mas as the scalar method, returned
-as two arrays.
+The scalar method over a vector of epochs: the same `(West, North)` offsets in mas, as two
+arrays.
 
-This is not just convenience — it is the form that can be differentiated affordably.
-`binary_orbit_abs` is scalar-only and routes through the true anomaly and the individual
-component radii; calling it in a loop makes reverse-mode AD tape one closure per epoch, and
-the per-call overhead then dominates completely (measured: **512× the primal** for 55
-epochs, versus ~4–13× for every other stage of the visibility model). Broadcasting instead
-tapes a handful of array operations regardless of how many epochs there are.
-
-The relative orbit is used directly rather than differencing the two absolute positions:
-the components sit at true anomalies `υ` and `υ+π` with radii `r₂ = D/(1+q)` and
-`r₁ = qD/(1+q)`, which sum to `D`, so `r₂ − r₁` is exactly the relative vector and `q`
-drops out. That also removes the `υ ∈ [0, π]` branch in `binary_orbit_abs`, which is a
-discrete test that AD would have to step around.
+Computed from the relative orbit with array operations, so reverse-mode AD records a few
+array operations instead of one closure per epoch (a loop over the scalar method cost 512×
+the primal for 55 epochs). Since `r₁ + r₂ = D`, the relative vector does not depend on `q`.
 """
 function orbit_to_rotir_offset(bparams, tepochs::AbstractVector)
     # Integer literals and `pi` (an Irrational) throughout, never `180.0`: both specialise to
@@ -75,6 +63,8 @@ function _relative_offsets(bparams, Ω, inc, E, ω)
     return -east, north                        # West = −East
 end
 
+# The phase argument kx·Δx + ky·Δy runs to many radians at long baselines, so its precision
+# is set here, not downstream. Follow the inputs.
 """
     binary_phase_shift(uv, offset_x, offset_y) -> Vector{Complex}
 
@@ -94,8 +84,6 @@ Two independent checks pin it, both in `test/test_binary_cvis.jl`: translating a
 this factor, and for two unresolved components it must reduce to the textbook
 `exp(-2πi(u·Δα + v·δ))` with Δα = -offset_x (West = -East) in radians.
 """
-# The phase argument kx·Δx + ky·Δy runs to many radians at long baselines, so its precision
-# is set here, not downstream. Follow the inputs.
 function binary_phase_shift(uv, offset_x, offset_y;
                             T = float(real(promote_type(eltype(uv), typeof(offset_x),
                                                         typeof(offset_y)))))
@@ -106,31 +94,30 @@ function binary_phase_shift(uv, offset_x, offset_y;
 end
 
 """
-    binary_cvis(x1, star1, x2, star2, phase_shift; intensity_model=:linear, band=nothing)
+    binary_cvis(x1, star1, x2, star2, phase_shift; intensity_model=:linear, band=nothing,
+                occultation=false, data=nothing)
         -> Vector{Complex}
 
-Compute combined complex visibilities for a binary system.
-Star 1 is at the origin; star 2's visibilities are multiplied by `phase_shift`.
-Each map is weighted by its own soft visibility × limb-darkening map (`ldmap`, built by
-`create_star`), so the two components' fluxes — and hence their flux ratio in the joint
-normalization — are limb-darkened consistently with the single-star path.
+Combined complex visibilities of a binary, normalised by the total flux. Star 1 is at the
+origin; star 2's visibilities are multiplied by `phase_shift`. Each map is weighted by its
+soft visibility and limb-darkening map (`ldmap`), as for a single star.
 
 `intensity_model = :linear` (default) uses the maps directly as surface brightness, the
 Rayleigh–Jeans proxy. `:planck` treats them as *temperature* maps and converts them with
 [`intensity`](@ref) at wavelength `band` (metres).
 
-The flux ratio is where this matters most: for a 25300 K / 20585 K pair the linear proxy
-misstates it by −4.1 % in H and −13.1 % in V. The non-dimensional Planck form
-(λ⁵ and all constants dropped) stays exact here because both components are evaluated at
-the same `band`, so the discarded prefactor cancels from the ratio as well as from the
-flux normalization.
+For a 25300 K / 20585 K pair the linear proxy misstates the flux ratio by −4.1 % in H and
+−13.1 % in V. The Planck form drops λ⁵ and the constants, which cancel because both
+components use the same `band`.
 
-`occultation` folds in mutual occultation: pass `true` to compute it on the fly from the
-two components' `center_offsets`, or a precomputed `(w1, w2)` pair from
-[`occultation_weights`](@ref) to reuse it across a scan, or `:exact`/`:soft` to pick the
-method. The default `false` sums the two
-components unconditionally, which is wrong once their disks overlap on the sky — see
-`check_binary_overlap` for the epochs where that happens.
+`occultation` applies mutual occultation: `true` (method `:exact`), `:exact` or `:soft`
+computes it from the components' `center_offsets`; a `(w1, w2)` pair from
+[`occultation_weights`](@ref) reuses precomputed weights. The default `false` sums the two
+components without occultation, which is wrong where the disks overlap
+([`check_binary_overlap`](@ref)).
+
+With `data` given and no `setup_oi!` matrices on `star1`, the transform is computed
+matrix-free with the selected `POLYFT_BACKEND[]`.
 """
 function binary_cvis(x1, star1, x2, star2, phase_shift;
                      intensity_model::Symbol = :linear, band = nothing,
@@ -177,11 +164,11 @@ end
 
 """
     binary_observables(x1, star1, x2, star2, data, phase_shift;
-                       intensity_model=:linear, band=nothing) -> (v2, t3amp, t3phi)
+                       intensity_model=:linear, band=nothing, occultation=false)
+        -> (v2, t3amp, t3phi)
 
-Compute model observables (V2, T3amp, T3phi) for a binary system.
-Uses `cvis_to_obs` (shared with single-star path) for the cvis→observables step.
-See [`binary_cvis`](@ref) for the intensity-model keywords.
+Model V², T3amp and T3φ of a binary, from [`binary_cvis`](@ref) (see it for the keywords)
+and `cvis_to_obs`.
 """
 function binary_observables(x1, star1, x2, star2, data, phase_shift;
                             intensity_model::Symbol = :linear, band = nothing,

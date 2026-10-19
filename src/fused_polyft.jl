@@ -41,15 +41,11 @@ end
 """
     fused_cvis(x, star, data; intensity_model=:linear, band=nothing) -> Vector{Complex}
 
-Normalised complex visibilities WITHOUT building `polyft`.
+Normalised complex visibilities without a polyft matrix.
 
-The matrix-free counterpart of [`poly_to_cvis`](@ref), and identical to it in what it returns:
-the same weighting (soft visibility × limb darkening), the same flux normalisation. The
-difference is only that `poly_to_cvis` reads `star.polyft`, which `setup_oi!` must have built,
-and this computes the sum directly.
-
-Use it wherever the geometry changes per evaluation — a parametric fit — and `poly_to_cvis`
-wherever it is fixed and the map varies, which is imaging.
+Returns what [`poly_to_cvis`](@ref) returns (same soft-visibility × limb-darkening weights,
+same flux normalisation), without `setup_oi!`. Suited to fits where the geometry changes at
+every evaluation; `poly_to_cvis` suits imaging, where the geometry is fixed.
 """
 fused_cvis(x, star, data; intensity_model::Symbol = :linear, band = nothing) =
     ((F, flux) = fused_cvis_parts(x, star, data; intensity_model = intensity_model,
@@ -58,17 +54,12 @@ fused_cvis(x, star, data; intensity_model::Symbol = :linear, band = nothing) =
 """
     fused_cvis_parts(x, star, data; intensity_model, band, extra_weights) -> (F, flux)
 
-The two HALVES of the matrix-free visibility computation: the unnormalised polygon transform
-and the total flux it should be divided by.
+The unnormalised polygon transform `F` and the total flux; [`fused_cvis`](@ref) is `F/flux`.
+A binary combines two components as `(F1 + F2·phase) / (flux1 + flux2)`, which
+[`binary_cvis`](@ref) computes from these.
 
-[`fused_cvis`](@ref) is just their quotient. They are exposed separately because a BINARY
-cannot use the quotient: two components combine as `(F1 + F2·phase) / (flux1 + flux2)`, which
-needs each star's transform and flux before either is normalised. Without this,
-[`binary_cvis`](@ref) had no matrix-free route at all and every binary χ² had to build the
-dense `nuv × npix` matrix through `setup_oi!` — twice, once per component.
-
-`extra_weights` multiplies the per-tessel weights after limb darkening and soft visibility,
-which is where mutual occultation enters.
+`extra_weights` multiplies the per-tessel weights after limb darkening and soft visibility
+(used for mutual occultation).
 """
 function fused_cvis_parts(x, star, data; intensity_model::Symbol = :linear, band = nothing,
                           extra_weights = nothing)
@@ -105,12 +96,12 @@ end
 """
     POLYFT_BACKEND
 
-The PROCESS-WIDE forward kernel: `:t3` (default), `:nufft`, `:turbo`, or `:scalar`. A task can
-override it for its own duration with [`with_polyft_backend`](@ref); read the answer that
-applies here and now with [`polyft_backend`](@ref) rather than this Ref.
+The process-wide forward kernel: `:t3` (default), `:nufft`, `:turbo` or `:scalar`. A task
+overrides it with [`with_polyft_backend`](@ref); [`polyft_backend`](@ref) returns the kernel
+in force.
 
-All three compute the SAME quantity and are asserted against each other in
-`test/test_fused_polyft.jl`. They differ in how, and therefore in how the cost scales:
+The four compute the same quantity; `test/test_fused_polyft.jl` checks them against each
+other. Time per evaluation:
 
 | backend   | method                                   | HEALPix 3 | 4 | 5 |
 |-----------|------------------------------------------|-----------|---|---|
@@ -119,71 +110,39 @@ All three compute the SAME quantity and are asserted against each other in
 | `:nufft`  | Gauss quadrature + type-3 NUFFT          | 2.6 ms | 3.8 ms | 4.1 ms |
 | `:t3`     | the same quadrature, ROTIR's own type 3  | 0.20 ms | 0.28 ms | 0.62 ms |
 
-`:scalar` and `:turbo` are EXACT — the closed-form polygon transform, no parameters.
-Both quadrature routes are accurate to a tolerance rather than exactly, and their cost barely
-moves with the mesh because it is set by the source and target counts rather than their
-product.
+`:scalar` and `:turbo` evaluate the closed-form polygon transform. `:nufft` and `:t3` use
+Gauss quadrature and a type-3 NUFFT (FINUFFT, or ROTIR's own in `src/type3_nufft.jl`); they are
+accurate to a tolerance and their cost depends little on the mesh. `:t3` is faster than
+`:nufft` (0.20 against 1.7 ms at HEALPix 3, 2.3 against 6.0 ms at HEALPix 6) and more accurate
+(2.5e-11 against 5.8e-10 on λ And, 1.1e-10 against 2.4e-9 on Polaris). A 2-point quadrature
+is good to 1.6e-3 at HEALPix 3 (see `polyft_cvis_nufft`); `:turbo` is exact on coarse meshes.
 
-`:t3` IS THE DEFAULT, and it is the default over `:nufft` on measurement rather than novelty:
-it is faster at every mesh level and in both precisions (0.20 ms against 1.7 at HEALPix 3, 2.3
-against 6.0 at HEALPix 6), MORE accurate on both test datasets (2.5e-11 against 5.8e-10 on
-lam And, 1.1e-10 against 2.4e-9 on polaris), needs no weak dependency, and is the only
-quadrature route with an adjoint. `:nufft` remains as the independent cross-check — it is a
-different implementation of the same idea through FINUFFT, which is what makes it worth
-keeping.
-
-`:t3` is the same quadrature through `src/type3_nufft.jl` instead of FINUFFT. It is faster than
-every other backend in double at every mesh level, more accurate than `:nufft` (2.5e-11 against
-5.8e-10), needs no weak dependency — and is the ONLY route with an adjoint, so it is the only
-one a gradient fit or a sampler can use. In SINGLE precision the picture differs: `:turbo`
-gains 3.5-5.6x from Float32 where `:t3` gains only 10-25 %, so `:turbo` wins the Float32
-adjoint at HEALPix 3-4 and `:t3` only from 5.
-
-`:turbo` is what to fall back on if a mesh is coarse enough to worry about the quadrature (see
-`polyft_cvis_nufft`: a 2-point rule is only good to 1.6e-3 at HEALPix 3), and `:scalar` is the
-definition the other two are tested against — worth being able to select without rebuilding
-when a fit looks wrong.
+`:t3` and `:nufft` apply to `fused_cvis`/`fused_cvis_parts`. The gradient kernels
+(`compute_polyflux_and_cvis!`, `compute_adjoint_cvis!`, `compute_adjoint_vertices!`) run
+`:turbo` when it is selected and loaded and `:scalar` otherwise. In Float32, `:turbo` is
+3.5–5.6× faster than in Float64.
 """
 const POLYFT_BACKEND = Ref(:t3)
 
 """
     POLYFT_BACKEND_SCOPE
 
-A per-TASK override of [`POLYFT_BACKEND`](@ref); `nothing` — the default — means "no override,
-use the process-wide setting". Set it with [`with_polyft_backend`](@ref) and read the answer
-with [`polyft_backend`](@ref); nothing should read either this or `POLYFT_BACKEND` directly.
+Per-task override of [`POLYFT_BACKEND`](@ref); `nothing` (default) means no override. Set it
+with [`with_polyft_backend`](@ref) and read the kernel in force with
+[`polyft_backend`](@ref).
 
-WHY A SCOPE AND NOT JUST THE REF. The right kernel is a property of the CODE PATH, not of the
-caller's taste, and the two paths disagree:
-
-  * `fused_cvis` / `fused_cvis_parts` — one χ² for a table, a derivative-free trial point —
-    has a `:nufft` branch, and `:nufft` is nearly mesh-independent there (2.6/3.8/4.1 ms at
-    HEALPix 3/4/5).
-  * `interferometric_chi2` and `shape_chi2_fg!` go through `_cvis_forward!` and the two
-    adjoints, which have NO `:nufft` branch — they run `:scalar` unless `:turbo` is selected.
-    That is where a gradient fit and a sampler live, and `:turbo` takes the three kernels a
-    gradient evaluation runs from 11.4 ms to 0.7 ms at HEALPix 3.
-
-So a fit wants to select `:turbo` for its own duration WITHOUT changing what the rest of the
-process computes: a GUI holds its worker on one thread while the event loop keeps answering on
-another, and flipping a global Ref under a running optimiser changes the objective function
-mid-line-search — value and gradient from different kernels. A scope is task-local and is
-inherited by tasks started inside it (`Threads.@threads` inside the kernels included), which is
-exactly the lifetime wanted.
-
-The one place it does NOT reach is another PROCESS: a distributed Pigeons run would see the
-process default on its workers. Neither does the Ref, so this is not a regression.
+The override is task-local and inherited by tasks started inside it, so a fit can select
+`:turbo` (11.4 ms → 0.7 ms for the three gradient kernels at HEALPix 3) without changing the
+kernel for the rest of the process. It does not reach other processes (e.g. distributed
+Pigeons workers).
 """
 const POLYFT_BACKEND_SCOPE = Base.ScopedValues.ScopedValue{Union{Nothing, Symbol}}(nothing)
 
 """
     polyft_backend() -> Symbol
 
-Which forward kernel to run here and now: the innermost [`with_polyft_backend`](@ref) scope if
-there is one, and [`POLYFT_BACKEND`](@ref) otherwise. Every kernel dispatch reads this.
-
-The read is one scope lookup per KERNEL INVOCATION — once per epoch per evaluation, not per
-element or per uv point — against milliseconds of kernel, so it does not register.
+The forward kernel in force: the innermost [`with_polyft_backend`](@ref) scope, or
+[`POLYFT_BACKEND`](@ref) if there is none.
 """
 function polyft_backend()
     s = POLYFT_BACKEND_SCOPE[]
@@ -194,8 +153,7 @@ end
     with_polyft_backend(f, kind::Symbol)
 
 Run `f()` with `kind` as the forward kernel, for this task and any task it starts, then restore
-whatever was in force. See [`POLYFT_BACKEND_SCOPE`](@ref) for why a fit does this rather than
-assigning to [`POLYFT_BACKEND`](@ref).
+the previous kernel.
 
     with_polyft_backend(:turbo) do
         fit_parametric(data, tess, tepochs, base; free = names)
@@ -236,23 +194,8 @@ const TURBO_OK = Ref(false)
 """
     turbo_available() -> Bool
 
-Whether the `:turbo` kernel will work here, i.e. whether `using LoopVectorization` has loaded
-ROTIRLoopVectorizationExt.
-
-A CACHED FLAG, not `!isempty(methods(_cvis_turbo!))`. That spelling asks the runtime's method
-table on every call, which is a reflection call returning `Any` — JET flags it as the only
-runtime dispatch left anywhere in the differentiable log-posterior, reported from inside
-`_cvis_forward!`, the innermost visibility kernel.
-
-To be accurate about what that cost: the call sits inside `if polyft_backend() === :turbo`,
-and the default backend is `:t3`, so the default path never reaches it. JET sees it because
-it analyses both branches. The fix is worth making for the `:turbo` path, which the GUI does
-offer, and because a clean report is what makes the next audit readable — not because the
-default was paying for it.
-
-The extension SETS the flag rather than this function asking, which also removes a staleness
-trap: the GUI loads LoopVectorization on demand mid-session, so anything cached at ROTIR's own
-load time would have been wrong for the rest of that session.
+Whether the `:turbo` kernel is available, i.e. whether `using LoopVectorization` has loaded
+ROTIRLoopVectorizationExt. Reads [`TURBO_OK`](@ref), which the extension sets when it loads.
 """
 turbo_available() = TURBO_OK[]
 
@@ -509,8 +452,8 @@ end
 """
     fused_spheroid_chi2_fg(x, g, star, data; verbose=true)
 
-Compute chi2 and gradient using the fused two-pass approach (no polyft matrix).
-Drop-in replacement for spheroid_chi2_fg.
+χ² and its gradient (filled into `g`) without a polyft matrix. Same arguments as
+`spheroid_chi2_fg`.
 """
 @views function fused_spheroid_chi2_fg(x, g, star, data; verbose::Bool = true)
     npix = star.npix

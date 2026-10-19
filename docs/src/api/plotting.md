@@ -1,235 +1,209 @@
 # Plotting
 
-All plotting functions use [PythonPlot](https://github.com/JuliaPy/PythonPlot.jl)
-(Matplotlib). Import ROTIR to get access to these functions — the style is applied
-automatically and matches OITOOLS, so figures from the two packages sit together in one
-document without a font or tick mismatch.
+Two plotting layers, each a package extension:
+
+- **PythonPlot** (matplotlib): `plot2d`, `plot2d_wireframe`, `plot2d_allepochs`,
+  `plot2d_binary`, `plot3d`, `plot_rv`, `plot_mollweide` and the `draw_*` helpers. They use
+  OITOOLS' matplotlib style (`set_oiplot_defaults`).
+- **Makie** (any backend): the same plots with a `_makie` suffix, each returning
+  `(fig, ax)` (see [Makie equivalents](@ref)).
+
+Plot coordinates: x = East = `-proj_west`, y = North, in mas; East is to the left.
 
 ## 2D projections
 
 | Function | Description |
 |----------|-------------|
-| `plot2d(tmap, star; kwargs...)` | Plot temperature map in observer's sky plane for one epoch |
-| `plot2d_wireframe(star; kwargs...)` | Tessellation only, no colour fill |
-| `plot2d_allepochs(tmap, stars; kwargs...)` | Multi-epoch subplot grid with shared colour scale |
+| `plot2d(tmap, star; kwargs...)` | Map on the sky plane at one epoch; returns `(fig, ax)` |
+| `plot2d_wireframe(star; kwargs...)` | Tessellation edges only |
+| `plot2d_allepochs(tmap, stars; kwargs...)` | One panel per epoch, shared colour scale |
 
 ### `plot2d` keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `intensity` | `false` | Plot surface *brightness* (map × limb darkening) rather than temperature |
-| `intensity_model` | `:linear` | `:linear` or `:planck`. Only applies when `intensity = true`, since a temperature map is band-independent |
-| `band` | `nothing` | Wavelength in metres, required by `intensity_model = :planck` |
-| `plotmesh` | `false` | Show tessel edges |
+| `intensity` | `false` | Colour by surface brightness `I(T) × ldmap` instead of temperature |
+| `intensity_model` | `:linear` | `I(T)`: `:linear` (`I = T`) or `:planck`; used only with `intensity = true` |
+| `band` | `nothing` | Wavelength in metres, required by `:planck` |
+| `plotmesh` | `false` | Draw tessel edges |
 | `colormap` | `"gist_heat"` | Matplotlib colormap name |
-| `figtitle` | `""` | Figure title |
-| `flipx` | `false` | Flip East-West |
-| `pad` | `0.5` | Padding around star (mas) |
-| `background` | `"white"` | Background colour |
-| `xlim`, `ylim` | `Float64[]` | Axis limits (auto if empty) |
-| `vmin`, `vmax` | `nothing` | Pin the colour scale (auto if `nothing`) |
-| `contours` | `Float64[]` | Contour levels to overlay |
-| `contour_color` | `"gray"` | Contour line colour |
-| `contour_labels` | `true` | Label the contours |
+| `figtitle` | `""` | Axes title |
+| `flipx` | `false` | East to the right |
+| `pad` | `0.5` | Margin around the star (mas) |
+| `background` | `"white"` | `"white"` or `"black"` |
+| `vmin`, `vmax` | `nothing` | Fix the colour scale (automatic if `nothing`) |
+| `contours` | `Float64[]` | Contour levels |
+| `contour_color` | `"gray"` | Contour colour |
+| `contour_labels` | `true` | Label the contours (in K) |
 | `contour_fontsize` | `10` | Contour label size |
+
+Fix `vmin`/`vmax` when rendering a sequence of frames, so the colour scale is the same in all.
 
 ### `plot2d_wireframe` keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `hidden` | `true` | Also draw the far-side tessels, behind the near side |
-| `front_color` | `"black"` | Edge colour for the near hemisphere |
-| `hidden_color` | `"lightgrey"` | Edge colour for the far hemisphere |
+| `hidden` | `true` | Also draw the far-side edges, behind an unfilled near side |
+| `front_color` | `"black"` | Near-side edge colour |
+| `hidden_color` | `"lightgrey"` | Far-side edge colour |
 | `linewidth` | `0.5` | Edge width |
-| `compass` | `true` | Draw N/E compass arrows |
-| `rotation_axis` | `false` | Draw the rotation axis |
+| `compass` | `true` | N/E compass |
+| `rotation_axis` | `false` | Rotation axis |
 
-`hidden = true` needs the near side unfilled, so the mesh reads as a transparent globe and
-the two hemispheres are distinguished by edge weight. `hidden = false` restores the opaque
-near-side-only view.
+`hidden = false` draws the near side only, filled white.
 
 ### `plot2d_allepochs` keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `plotmesh` | `false` | Show tessel edges |
-| `tepochs` | `[]` | Epoch labels |
+| `plotmesh` | `false` | Draw tessel edges |
+| `tepochs` | `[]` | Epoch labels for the panel titles |
 | `colormap` | `"gist_heat"` | Matplotlib colormap name |
-| `ncols` | `nothing` | Pin the number of columns (auto: up to 4 across) |
-| `arr_box` | `nothing` | Legacy two-digit `<rows><cols>` layout, e.g. `23` |
-| `compass` | `true` | Draw the compass on the first panel |
+| `ncols` | `nothing` | Number of columns (default: up to 4) |
+| `arr_box` | `nothing` | Layout as a two-digit `<rows><cols>` number, e.g. `23` |
+| `compass` | `true` | Compass on the first panel |
 
-The grid and figure size follow the number of epochs, so three epochs give a 1×3 row rather
-than a half-empty 2×3 block.
+The figure size follows the number of rows and columns.
 
 ### Decorations
 
+Keywords of `plot2d` (and `plot2d_binary`):
+
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `compass` | `true` | Draw N/E compass arrows |
-| `limb` | `true` | Outline the projected stellar limb |
-| `limb_color` | `"black"` | Limb colour |
+| `compass` | `true` | N/E compass arrows |
+| `limb` | `true` | Outline of the projected limb |
+| `limb_color` | `"black"` | Limb colour (also the graticule colour) |
 | `limb_linewidth` | `0.8` | Limb width |
-| `graticules` | `false` | Draw latitude/longitude grid lines on the surface |
-| `rotation_axis` | `false` | Draw the rotation axis (dashed line through the poles) |
-| `rotation_arrow` | `false` | Draw the spin-direction arrow at the north pole |
-| `inclination`, `position_angle` | `NaN` | Override the orientation used for the decorations |
-| `star_params` | `nothing` | Star parameters NamedTuple, for closed-form graticule *geometry* (sphere, triaxial ellipsoid, rapid rotator) |
-| `graticule_kwargs` | `(;)` | Style overrides passed to `draw_graticules` (see below) |
+| `graticules` | `false` | Latitude/longitude lines on the surface |
+| `rotation_axis` | `false` | Rotation axis, dashed, with an arrow at the north pole |
+| `rotation_arrow` | `false` | Arrow around the north pole showing the sense of rotation |
+| `inclination`, `position_angle` | `NaN` | Orientation for the decorations (degrees); from the mesh if `NaN` |
+| `star_params` | `nothing` | Star parameters, for the closed-form surface shape of the graticules |
+| `graticule_kwargs` | `(;)` | Passed to `draw_graticules` (see below) |
 
-!!! note "Where the decoration orientation comes from"
-    With `inclination`/`position_angle` given, the decorations use those angles. Otherwise
-    the orientation is recovered from the **mesh itself**, which is correct whatever built
-    the star and also captures the rotation phase. `star_params` supplies the surface
-    *shape*, not the orientation.
+The orientation comes from `inclination`/`position_angle` when given, otherwise from the mesh,
+which includes the rotation phase. `star_params` gives the surface shape only.
 
-!!! note "Graticules on a Roche lobe"
-    Sphere, triaxial ellipsoid and rapid rotator have closed forms, and `star_params`
-    selects them. **Everything else — a Roche lobe (`surface_type = 3`), or any star drawn
-    without `star_params` — reads the shape off the mesh's own `r(θ, φ)`**, interpolated
-    between tessel centres.
+Graticules use a closed-form shape for a sphere, triaxial ellipsoid or rapid rotator when
+`star_params` is given. Otherwise, including for a Roche lobe (`surface_type = 3`), the shape
+is interpolated from the mesh's `r(θ, φ)`. Curves end at the limb, where the mesh normal turns
+away from the observer.
 
-    That is not a fallback so much as the general case. A Roche lobe is elongated toward
-    its companion and has no axisymmetric description, so the curves have to come from the
-    surface that was actually built. Visibility comes from the mesh normal rather than
-    `z > 0`, which is what makes the curves stop exactly at the drawn limb instead of at
-    the terminator of an imaginary sphere.
-
-    Nothing extra is required to get this: pass `star_params` for a Roche star as you would
-    for any other, or omit it entirely.
-
-The limb outline matters more than it sounds: a surface that maps to the pale end of a
-colormap is indistinguishable from a white background, so without it the disk can vanish
-and take its decorations with it.
+The limb outline keeps the disk visible when the surface maps to the pale end of the colormap
+on a white background.
 
 ### Graticule style (`graticule_kwargs`)
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `nlat` | `5` | Number of latitude circles |
-| `nlon` | `8` | Number of longitude lines |
+| `nlon` | `8` | Number of meridians |
 | `color` | `"black"` | Line colour |
 | `linewidth` | `0.8` | Line width |
 | `alpha` | `0.5` | Opacity |
-| `npoints` | `200` | Points per curve (resolution) |
-| `limb` | `true` | Include the projected limb with the graticule |
+| `npoints` | `200` | Points per curve |
+| `limb` | `true` | Also draw the limb |
 
-### Standalone decoration helpers
+### Decoration helpers
 
-These take an existing axes, so they can be added to a figure you build yourself:
+Each draws into an existing matplotlib axes:
 
 | Function | Description |
 |----------|-------------|
-| `draw_compass(ax, axis_max; ...)` | E/N compass arrows, sized to stay legible in small subplots |
+| `draw_compass(ax, axis_max; size_frac=0.12, fontsize=nothing, color="black")` | N/E arrows in the lower-right corner; `fontsize = nothing` scales with the axes size |
 | `draw_limb!(ax, star; ...)` | Projected limb (convex hull of the visible vertices) |
-| `draw_graticules(ax, star; ...)` | Latitude/longitude grid on the surface |
+| `draw_graticules(ax, star; ...)` | Latitude/longitude lines |
 | `draw_rotation_axis(ax, star; ...)` | Pole-to-pole line with an arrow at the north pole |
-| `draw_rotation_arrow(ax, star; ...)` | Curved arrow showing the sense of rotation |
-| `add_tessel_collection!(ax, star, colours; ...)` | The tessellated surface as one `PolyCollection` |
+| `draw_rotation_arrow(ax, star; ...)` | Arrow around the pole showing the sense of rotation |
+| `add_tessel_collection!(ax, star, colours; ...)` | The visible tessels as one `PolyCollection` |
 
 ## Binary sky-plane
 
 | Function | Description |
 |----------|-------------|
-| `plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch; kwargs...)` | Plot a binary with depth ordering and the orbital offset |
+| `plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch; kwargs...)` | Both components at their orbital positions, nearer one in front; returns `(fig, ax)` |
 
-`plot2d_binary` accepts the same decoration keywords as `plot2d` plus:
+`tepoch` is in the time system of `bparams.T0`. `plot2d_binary` takes the decoration keywords of
+`plot2d`, `intensity`, `intensity_model`, `band`, `plotmesh`, `colormap`, `background`,
+`figtitle`, `pad` (default `1.0`), and:
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `star_params1`, `star_params2` | `nothing` | Star parameters for exact graticule geometry on each component |
-| `inclination1`, `position_angle1` | `NaN` | Override star 1 orientation for decorations |
-| `inclination2`, `position_angle2` | `NaN` | Override star 2 orientation for decorations |
-| `vmin`, `vmax` | `nothing` | Pin the shared colour scale — essential across a frame sequence |
+| `star_params1`, `star_params2` | `nothing` | Star parameters for each component's graticules |
+| `inclination1`, `position_angle1` | `NaN` | Orientation of star 1 for the decorations |
+| `inclination2`, `position_angle2` | `NaN` | Orientation of star 2 for the decorations |
+| `vmin`, `vmax` | `nothing` | Fix the shared colour scale |
 | `colorbar_on` | `true` | Draw the colour bar |
-| `ax` | `nothing` | Draw into an existing axes instead of creating a figure |
-| `axis_max` | `nothing` | Pin the plot half-width (mas) |
-| `graticule_kwargs` | `(;)` | Graticule style overrides (shared by both components) |
+| `ax` | `nothing` | Draw into an existing axes |
+| `axis_max` | `nothing` | Plot half-width (mas) |
+| `graticule_kwargs` | `(;)` | Graticule style, both components |
 
-!!! warning "`inclination1` / `position_angle1` are rarely what you want"
-    `create_binary_geometry` orients **both** components by the shared
-    `binary_frame`, built from the orbital elements `(i, Ω, ω)`. A component's own
-    `inclination` / `position_angle` play no part. Passing the single-star angles here
-    therefore decorates a differently-oriented star — for a Spica-like system the two
-    answers differ by over 100°. Leave them at `NaN` and the mesh orientation is used.
+!!! warning "`inclination1` / `position_angle1`"
+    `create_binary_geometry` orients both components from the orbital elements `(i, Ω, ω)`
+    through `binary_frame`; a component's own `inclination` and `position_angle` are not used.
+    Passing them here draws the decorations for a different orientation (over 100° apart for
+    a Spica-like system). Leave them at `NaN` to use the mesh orientation.
 
 ## Radial velocity
 
 | Function | Description |
 |----------|-------------|
-| `plot_rv(bparams; K1, K2, γ=0.0, rv_data1=nothing, rv_data2=nothing, figtitle="Radial Velocities")` | RV model curves vs orbital phase |
+| `plot_rv(bparams; K1, K2, γ=0.0, rv_data1=nothing, rv_data2=nothing, figtitle="Radial Velocities")` | Model RV curves against orbital phase; returns `(fig, ax)` |
 
-`rv_data1` / `rv_data2` should be N×3 matrices with columns `[JD, RV_km/s, error_km/s]`.
-With only N×2, the points are drawn without error bars.
+`rv_data1` / `rv_data2` are N×3 matrices `[time, RV, error]` (km/s), with time in the system of
+`bparams.T0`. N×2 matrices are drawn without error bars.
 
 ## 3D surface
 
 | Function | Description |
 |----------|-------------|
-| `plot3d(tmap, star)` | 3D coloured surface (`Poly3DCollection`) |
+| `plot3d(tmap, star)` | Coloured 3D surface (`Poly3DCollection`) |
 
 ## Mollweide projection
 
 | Function | Description |
 |----------|-------------|
-| `plot_mollweide(tmap, star; kwargs...)` | Full-surface Mollweide projection (auto-selects HEALPix or lat/long) |
+| `plot_mollweide(tmap, star; kwargs...)` | Whole surface in Mollweide projection, HEALPix or lat/long mesh |
 
 ### `plot_mollweide` keywords
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `visible_pixels` | `[]` | Pixel subset that was actually observed |
-| `mask_unobserved` | `true` | Blank everything outside `visible_pixels` |
-| `bad_color` | `"lightgray"` | Colour for masked pixels (needs `visible_pixels` to have any effect) |
-| `vmin` | `-Inf` | Colour scale minimum (auto if `-Inf`) |
-| `vmax` | `Inf` | Colour scale maximum (auto if `Inf`) |
+| `visible_pixels` | `[]` | Observed pixels; sets the colour range |
+| `mask_unobserved` | `true` | Paint pixels outside `visible_pixels` in `bad_color` |
+| `bad_color` | `"lightgray"` | Colour of masked pixels |
+| `vmin`, `vmax` | `-Inf`, `Inf` | Colour scale (automatic if infinite) |
 | `colormap` | `"gist_heat"` | Matplotlib colormap name |
-| `incl` | `90.0` | Draw the observability limit at latitude `-incl` |
-| `lon_color` | `"white"` | Colour of the meridians and their tick labels |
-| `lat_color` | `"black"` | Colour of the parallels and their tick labels |
-| `figtitle` | `"Mollweide"` | Names the FIGURE WINDOW — it does **not** appear in a saved file; use `title` |
-| `title` | `nothing` | Axes title, which is what a saved PNG shows |
-| `ntheta`, `nphi` | `nothing` | Lat/long grid dimensions; recovered from the mesh when omitted |
-
-`ntheta` / `nphi` apply only to a lat/long tessellation. `stellar_geometry` does not store
-them, so they are recovered from the mesh unless you pin them.
+| `incl` | `90.0` | Draw a dash-dot line at latitude `-incl` (none at 90) |
+| `lon_color` | `"white"` | Colour of the meridians and their labels |
+| `lat_color` | `"black"` | Colour of the parallels and their labels |
+| `figtitle` | `"Mollweide"` | Figure window name; also the axes title on a lat/long mesh |
+| `title` | `nothing` | Axes title |
+| `ntheta`, `nphi` | `nothing` | Lat/long grid size; read from the mesh if omitted |
 
 ### Controlling the furniture
 
-A figure made to be **read** and one made to be **compared** against someone else's want
-different things: degree labels and seven colourbar ticks help the first and get in the way of
-the second. Each piece can be turned off or restyled, and every default reproduces the previous
-behaviour.
-
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `graticule` | `true` | Draw meridians and parallels at all |
-| `lon_spacing` | `20` (HEALPix), `30` (lat/long) | Meridian spacing in degrees |
-| `lat_spacing` | `15` (HEALPix), `30` (lat/long) | Parallel spacing in degrees — **must divide 90** |
-| `labels` | `true` | The degree labels; `false` keeps the lines and drops the numbers |
-| `grid_style` | `"-"` | Linestyle of the graticule, e.g. `":"` for dotted |
-| `grid_alpha` | `0.6` | Alpha of the graticule |
-| `axis_lines` | `false` | Draw the equator and central meridian SOLID over the graticule |
-| `axis_color`, `axis_style`, `axis_width` | `"black"`, `"-"`, `1.0` | How those two are drawn |
-| `colorbar` | `true` | Draw the colourbar |
-| `colorbar_label` | `"Temperature (K)"` | Its label; pass `""` for none |
-| `colorbar_ticks` | `7` | How many ticks it carries |
+| `graticule` | `true` | Draw meridians and parallels |
+| `lon_spacing` | `20` (HEALPix), `30` (lat/long) | Meridian spacing (degrees) |
+| `lat_spacing` | `15` (HEALPix), `30` (lat/long) | Parallel spacing (degrees); must divide 90 |
+| `labels` | `true` | Degree labels |
+| `grid_style` | `"-"` | Graticule linestyle, e.g. `":"` |
+| `grid_alpha` | `0.6` | Graticule opacity |
+| `axis_lines` | `false` | Draw the equator and central meridian as solid lines |
+| `axis_color`, `axis_style`, `axis_width` | `"black"`, `"-"`, `1.0` | Style of those two lines |
+| `colorbar` | `true` | Draw the colour bar |
+| `colorbar_label` | `"Temperature (K)"` | Colour bar label; `""` for none |
+| `colorbar_ticks` | `7` | Number of colour bar ticks |
 
-!!! warning "`lat_spacing` must divide 90"
-    A value that does not divide 90 is refused. matplotlib's `GeoAxes.set_latitude_grid(d)`
-    places parallels at `arange(-90+d, 90, d)` and labels them with `ThetaFormatter(d)`, which
-    rounds to multiples of `d`; at `d = 20` the parallels at ±10, ±30, ±50, ±70 would be
-    labelled -80, -40, -20, 0, 0, 20, 40, 80. 15 and 30 are safe.
+A `lat_spacing` that does not divide 90 raises an error: matplotlib labels the parallels in
+multiples of the spacing, so other values put the labels on the wrong lines.
 
-!!! note "`colorbar_label` is not always kelvin"
-    The default is `"Temperature (K)"`. For a map in other units — a normalised surface
-    brightness, say — set it to whatever the map actually is.
-
-**Matching a published figure.** The settings below reproduce the house style of healpy's
-`mollview`, which is what most published HEALPix stellar maps are drawn with — dotted graticule,
-solid equator and central meridian, no degree labels, and a colourbar carrying only its two end
-values. `demos/zetand_render_map.jl` uses exactly this to put a ROTIR plot beside a published
-one.
+The settings below match healpy's `mollview` (dotted graticule, solid equator and central
+meridian, no degree labels, colour bar with its two end values). `demos/zetand_render_map.jl`
+uses them.
 
 ```julia
 plot_mollweide(map, star; vmin = 0.8025, vmax = 0.9977, colormap = "gist_heat",
@@ -240,14 +214,28 @@ plot_mollweide(map, star; vmin = 0.8025, vmax = 0.9977, colormap = "gist_heat",
                colorbar_ticks = 2, colorbar_label = "")
 ```
 
-### The two back ends take different keywords
+## Makie equivalents
 
-`plot_mollweide` is the PythonPlot route and everything above applies to it, for a HEALPix mesh
-and a lat/long one alike — the keywords are forwarded to whichever variant the MESH selects, so
-one that worked on a HEALPix star and threw on a lat/long one would be a trap for a caller who
-did not choose the mesh.
+Available once a Makie backend is loaded (`CairoMakie` for files, `GLMakie` for windows). Each
+returns `(fig, ax)`; `plot2d_allepochs_makie` returns `fig`.
 
-`plot_mollweide_makie` is the GLMakie route, which is what the GUI draws with. It has
-its own `labels` and `colorbar` switches plus `nlon`/`nlat` and `figsize`, and does not take the
-styling keywords above. The two live in separate package extensions — `ROTIRPythonPlotExt` and
-`ROTIRMakieExt` — so neither can be affected by a change to the other.
+| Function | Matplotlib counterpart |
+|----------|------------------------|
+| `plot2d_makie(tmap, star; ...)` | `plot2d`; adds `colorbar` and `figsize` |
+| `plot2d_wireframe_makie(star; ...)` | `plot2d_wireframe` (see note below) |
+| `plot2d_allepochs_makie(tmap, stars; ...)` | `plot2d_allepochs`; adds `pad`, `panelsize` |
+| `plot2d_binary_makie(tmap1, tmap2, star1, star2, bparams, tepoch; ...)` | `plot2d_binary` |
+| `plot3d_makie(tmap, star; ...)` | `plot3d`; rotatable, orthographic, `axistype = :lscene` or `:axis3` |
+| `plot3d_binary_makie(tmap1, tmap2, star1, star2, bparams, tepoch; ...)` | both components in 3D, with the relative orbit (`orbit = true`) |
+| `plot_rv_makie(bparams; K1, K2, ...)` | `plot_rv` |
+| `plot_mollweide_makie(tmap, star; ...)` | `plot_mollweide` |
+| `draw_compass_makie!`, `draw_limb_makie!`, `draw_graticules_makie!`, `draw_rotation_axis_makie!`, `draw_rotation_arrow_makie!`, `add_tessel_collection_makie!` | the `draw_*` helpers |
+
+`plot_mollweide_makie` takes `visible_pixels`, `mask_unobserved`, `bad_color`, `vmin`, `vmax`,
+`colormap`, `figtitle`, `incl`, `lon_color`, `lat_color`, `labels`, `colorbar`, `nlon`/`nlat`
+(resampling grid, default 720×360) and `figsize`; not the styling keywords of
+[Controlling the furniture](@ref).
+
+!!! note "`hidden` in the wireframe plots"
+    `plot2d_wireframe(star; hidden = true)` draws the far side; `plot2d_wireframe_makie(star;
+    hidden = true)` does not, and draws it with `hidden = false`.

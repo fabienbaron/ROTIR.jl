@@ -53,35 +53,22 @@ const _C_KMS = 299792.458
     los_velocity_from_proj(pw, pn, incl_deg, pa_deg, period_days, d_pc;
                            vgamma = 0, B_rot = 0, cosθ = nothing) -> Vector
 
-Line-of-sight velocity per tessel in km/s, positive RECEDING, from the projected
-sky-frame vertex coordinates.
+Line-of-sight velocity of each tessel centroid in km/s, positive receding, plus `vgamma`.
 
-`pw`, `pn` are `(npix, 4)` projected West/North in mas, exactly as
-`stellar_geometry.proj_west`/`.proj_north` and as `project_geometry` returns them — which
-is what lets this differentiate with respect to the geometry parameters through their
-existing rrule rather than needing one of its own.
-
-`d_pc` converts mas to a length; without it an angular rate is not a velocity.
+`pw`, `pn` are the `(npix, 4)` projected West/North vertex coordinates in mas
+(`stellar_geometry.proj_west`/`.proj_north`). Angles are in degrees, the period in days and
+`d_pc` in parsecs. Differentiable through the geometry's rules.
 
 ## Differential rotation
 
-`B_rot ≠ 0` applies a solar-type law in the colatitude θ,
+`B_rot ≠ 0` applies `Ω(θ) = Ω₀ (1 − B_rot cos²θ)` in colatitude θ: `rotation_period` is the
+equatorial period and `B_rot > 0` makes the poles slower. It requires `cosθ`, the body-frame
+colatitude cosines (see [`los_velocity`](@ref)).
 
-    Ω(θ) = Ω₀ (1 − B_rot cos²θ)
-
-so `rotation_period` is the EQUATORIAL period and `B_rot > 0` makes the poles lag. It
-needs `cosθ` (body-frame colatitude cosines, `star.vertices_spherical[:,5,3]`-adjacent —
-see [`los_velocity`](@ref)).
-
-Two honest caveats. First, the centroid identity above stops being exact, because Ω now
-varies across a tessel; evaluating at the centre is then an approximation, good while the
-mesh resolves the latitudinal shear. Second, and more fundamental: a differentially
-rotating surface has **no rotational potential**, so its shape does not follow ROTIR's
-Roche factor at all — the figure would have to come from `g_eff·ds = 0` instead, and the
-gravity-darkening law would need Zorec et al. (2017) rather than ELR (the reasoning is
-spelled out at the end of `src/gravity_darkening.jl`). So `B_rot ≠ 0` is a kinematic
-perturbation on a shape that is not self-consistent with it. Useful for asking whether the
-data want shear at all; not a substitute for the real model.
+The velocity is evaluated at tessel centroids, which is exact for solid-body rotation and an
+approximation with shear. The surface shape and gravity darkening stay those of solid-body
+rotation, so `B_rot` is a kinematic perturbation only (a self-consistent model would need
+the Zorec et al. 2017 gravity darkening; see `src/gravity_darkening.jl`).
 """
 function los_velocity_from_proj(pw::AbstractMatrix, pn::AbstractMatrix,
                                 incl_deg, pa_deg, period_days, d_pc;
@@ -121,8 +108,7 @@ end
 `position_angle`, `rotation_period`, `d` and the optional `vgamma`/`B_rot` from
 `star_params`.
 
-Errors without a distance: an angular rotation rate is not a velocity, and silently
-substituting one would put a plausible-looking but meaningless number into a line profile.
+Raises an error if `star_params` has no distance `d`.
 """
 function los_velocity(star, star_params)
     has_physical_scale(star_params) || throw(ArgumentError(
@@ -145,14 +131,8 @@ Observed wavelength(s) for a rest wavelength `λ₀` and a receding-positive vel
 
     λ = λ₀ (1 + v_rad/c)
 
-Broadcasts, so `λ₀` may be a scalar and `v_rad` a per-tessel vector — which is the shape
-the spectral cube needs, one shifted wavelength per tessel per channel.
-
-The first-order form is deliberate and sufficient here: the relativistic correction is
-O((v/c)²), i.e. 3e-7 at 300 km/s, far below the 1e-4 a Doppler-imaging grid resolves.
-What is NOT optional is doing the resampling in log λ rather than linear λ once a spectrum
-is interpolated — `src/di.jl:371` shifted in linear λ and its own comment at :323 admits
-the error varies across the window.
+Broadcasts over `λ₀` and `v_rad`. First order in `v/c`; the second-order term is 3×10⁻⁷ at
+300 km/s.
 """
 @inline function doppler_lambda(λ0, v_rad)
     # `_C_KMS` is a Float64 const and `1` an Int, so writing this as `λ0 .* (1 .+ v_rad/_C_KMS)`
@@ -168,10 +148,9 @@ end
 
 `(vmin, vmax, vspan, vsini_proj)` of the visible hemisphere, in km/s.
 
-`vsini_proj` is half the peak-to-peak line-of-sight velocity over visible tessels — the
-quantity a rotational broadening measurement actually constrains. Comparing it against
-[`projected_veq`](@ref), which comes from the geometry alone, is the cross-check that the
-velocity field and the surface agree; they are computed by completely different routes.
+`vsini_proj` is half the peak-to-peak line-of-sight velocity over visible tessels, which a
+rotational-broadening measurement constrains. [`projected_veq`](@ref) computes `v_eq sin i`
+from the parameters alone, so comparing the two checks the velocity field.
 """
 function velocity_field_summary(star, star_params)
     v = los_velocity(star, star_params)

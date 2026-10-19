@@ -211,11 +211,10 @@ end
 
 """
     rasterize_polygon_image!(img, proj_west, proj_north, x_weighted, pixsize;
-                             cx=nx/2+1, cy=ny/2+1, w_threshold=1e-10)
+                             cx=nx÷2+1, cy=ny÷2+1, w_threshold=1e-10)
 
-Build a centered real-space image by rasterizing each quadrilateral tile with
-intensity `x_weighted[p]`.  Output is in the "data-centered" convention:
-`proj_west=proj_north=0` maps to pixel `(cx, cy)`.
+Rasterize each quadrilateral tile with intensity `x_weighted[p]` into `img`.
+`proj_west = proj_north = 0` maps to pixel `(cx, cy)`.
 
 # Arguments
 - `img`: `(ny, nx)` preallocated output matrix (will be zeroed and filled)
@@ -223,9 +222,10 @@ intensity `x_weighted[p]`.  Output is in the "data-centered" convention:
 - `x_weighted`: `(Npix,)` intensity weights (e.g. `xmap .* vis_weights`)
 - `pixsize`: mas per pixel
 - `cx, cy`: pixel index (1-based) where the projection origin maps
+- `w_threshold`: tiles with `|x_weighted[p]| < w_threshold` are skipped
 
 Each pixel accumulates `sum_p x_weighted[p] * Area(tile_p intersect pixel)`.
-Threaded over polygons (per-thread local images, reduced at the end).
+Threaded over polygons.
 """
 function rasterize_polygon_image!(img::Matrix{T}, proj_west::AbstractMatrix,
                                     proj_north::AbstractMatrix,
@@ -303,9 +303,9 @@ end
 
 """
     rasterize_polygon_image(proj_west, proj_north, x_weighted, pixsize, nx;
-                            cx=nx/2+1, cy=nx/2+1, T=float(real(eltype(x_weighted))))
+                            cx=nx÷2+1, cy=nx÷2+1, T=float(real(eltype(x_weighted))))
 
-Non-mutating convenience wrapper: allocates and returns an `(nx, nx)` image.
+Allocate and return the `(nx, nx)` image of [`rasterize_polygon_image!`](@ref).
 
 # Arguments
 - `proj_west, proj_north`: `(Npix, 4)` polygon vertex coordinates (mas)
@@ -323,17 +323,13 @@ end
 
 """
     rasterize_adjoint!(grad, res_img, proj_west, proj_north, pixel_weight, pixsize;
-                       cx=nx/2+1, cy=ny/2+1)
+                       cx=nx÷2+1, cy=ny÷2+1)
 
-Adjoint (transpose) of `rasterize_polygon_image!` for gradient computation.
+Adjoint (transpose) of `rasterize_polygon_image!`, for gradients.
 Given a residual image `res_img` (same layout as the rasterized output),
 compute `grad[p] = pixel_weight[p] * pixsize^2 * sum_{iy,ix} res_img[iy,ix] * area(tile_p intersect pixel_{iy,ix})`.
 
-This is the exact transpose of the forward rasterization: the forward spreads
-polygon intensities into pixels weighted by overlap area; the adjoint gathers
-pixel values back to polygons weighted by the same overlap area.
-
-Threaded over polygons (per-thread local gradient, reduced at the end).
+Threaded over polygons.
 """
 function rasterize_adjoint!(grad::AbstractVector{T}, res_img::Matrix{T},
                              proj_west::AbstractMatrix, proj_north::AbstractMatrix,

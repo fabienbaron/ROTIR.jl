@@ -1,22 +1,18 @@
 # Rasterization & NFFT
 
-Two alternative forward-model implementations that avoid building the dense
-polyft matrix. Both produce real-space images from polygon vertex coordinates
-and intensity weights.
-
-See [Direct imaging methods](@ref) for a guide with usage examples and
-guidance on when to use each approach.
+Two ways to make a real-space image from the projected tessels and their intensity weights,
+without the dense polyft matrix. See [Direct imaging methods](@ref) for examples.
 
 ## Rasterization
 
-Exact polygon-to-pixel rendering via Sutherland-Hodgman clipping. Works
-entirely in image space — no Fourier transforms involved.
+Each pixel receives the exact overlap area of each tessel (Sutherland–Hodgman clipping)
+times its intensity. No Fourier transform is involved.
 
 | Function | Description |
 |----------|-------------|
 | `rasterize_polygon_image(proj_west, proj_north, x_weighted, pixsize, nx; cx, cy, T)` | Allocate and return an `(nx, nx)` rasterized image |
 | `rasterize_polygon_image!(img, proj_west, proj_north, x_weighted, pixsize; cx, cy)` | In-place rasterization into preallocated `img` |
-| `rasterize_adjoint!(grad, res_img, proj_west, proj_north, pixel_weight, pixsize; cx, cy)` | Adjoint (transpose) of rasterization for gradient computation |
+| `rasterize_adjoint!(grad, res_img, proj_west, proj_north, pixel_weight, pixsize; cx, cy)` | Adjoint (transpose) of the rasterization, for gradients |
 
 ### `rasterize_polygon_image` arguments
 
@@ -32,40 +28,36 @@ entirely in image space — no Fourier transforms involved.
 |---------|---------|-------------|
 | `cx` | `nx÷2+1` | Column index of the projection origin |
 | `cy` | `nx÷2+1` | Row index of the projection origin |
-| `T` | `Float32` | Element type of output image |
+| `T` | `float(real(eltype(x_weighted)))` | Element type of the image |
 
-### `rasterize_adjoint!` details
+The image is indexed `img[iy, ix]`; `proj_west = proj_north = 0` falls on pixel `(cx, cy)`.
 
-The adjoint operation is the exact transpose of the forward rasterization:
-the forward spreads polygon intensities into pixels weighted by overlap area;
-the adjoint gathers pixel values back to polygons weighted by the same
-overlap area.
+### `rasterize_adjoint!`
+
+The exact transpose of the rasterization: it gathers pixel values back to the tessels,
+weighted by the same overlap areas.
 
 ```
 grad[p] = pixel_weight[p] * pixsize^2 * sum_{iy,ix} res_img[iy,ix] * Area(tile_p ∩ pixel)
 ```
 
-Both forward and adjoint are threaded over polygons using per-thread local
-buffers, reduced at the end.
+Both are threaded over tessels.
 
 ### Internal helpers
 
 | Function | Description |
 |----------|-------------|
-| `quad_box_area(q1x,q1y,...,q4x,q4y, xmin,xmax,ymin,ymax, Ax,Ay,Bx,By)` | Exact area of intersection between a quadrilateral and an axis-aligned box via Sutherland-Hodgman clipping + shoelace formula |
+| `quad_box_area(q1x,q1y,...,q4x,q4y, xmin,xmax,ymin,ymax, Ax,Ay,Bx,By)` | Area of the intersection of a quadrilateral and an axis-aligned box (Sutherland–Hodgman clipping, shoelace formula); `Ax,Ay,Bx,By` are scratch buffers of at least 12 elements |
 
 ## NFFT
 
-Fast polygon Fourier transform via Gauss-Legendre quadrature and the
-Non-uniform Fast Fourier Transform. Approximates the continuous polygon FT
-integral by placing quadrature points inside each quadrilateral and
-evaluating the resulting non-uniform exponential sum with a single adjoint
-NFFT.
+The polygon Fourier transform on a regular frequency grid: Gauss–Legendre quadrature points
+inside each tessel, summed with one adjoint NFFT.
 
 | Function | Description |
 |----------|-------------|
-| `polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize, nx; ngauss, nsub, T)` | Complex visibilities on an rfft grid — returns `(nx÷2+1, nx)` array |
-| `polyft_nfft_image(proj_west, proj_north, x_weighted, pixsize, nx; ngauss, nsub, T)` | Convenience: `fftshift(irfft(polyft_nfft_forward(...), nx))` |
+| `polyft_nfft_forward(proj_west, proj_north, x_weighted, pixsize, nx; ngauss, nsub, T, fftflags)` | Complex visibilities on an rfft grid, a `(nx÷2+1, nx)` array |
+| `polyft_nfft_image(proj_west, proj_north, x_weighted, pixsize, nx; ngauss, nsub, T, fftflags)` | `fftshift(irfft(polyft_nfft_forward(...), nx))` |
 | `build_gauss_samples(proj_west, proj_north, x_weighted; ngauss, nsub, T)` | Build Gauss-Legendre quadrature samples for all polygons |
 
 ### `polyft_nfft_forward` arguments
@@ -80,54 +72,44 @@ NFFT.
 
 | Keyword | Default | Description |
 |---------|---------|-------------|
-| `ngauss` | `4` | Gauss-Legendre order per axis (2, 3, 4, 5, 6, 8, or 10) |
-| `nsub` | `1` | Subdivision level per axis (total quadrature points = `(ngauss*nsub)^2` per polygon) |
-| `T` | `Float32` | Floating-point type |
+| `ngauss` | `4` | Gauss–Legendre order per axis: 2, 3, 4, 5, 6, 8 or 10 |
+| `nsub` | `1` | Sub-squares per axis; `(ngauss*nsub)^2` points per tessel |
+| `T` | `float(real(eltype(proj_west)))` | Floating-point type |
+| `fftflags` | `FFTW.MEASURE` | FFTW planner flags; `FFTW.ESTIMATE` for a single call |
 
 ### Return value layout
 
 `polyft_nfft_forward` returns a `Complex{T}` array of shape `(nx÷2+1, nx)` in
 the standard rfft layout:
 
-- **Rows** correspond to `rfftfreq(nx, 1/pixsize)` — non-negative spatial
-  frequencies from 0 to the Nyquist frequency `1/(2*pixsize)` cycles/mas.
-- **Columns** correspond to `fftfreq(nx, 1/pixsize)` — the full frequency
-  axis in standard FFT order (zero-frequency at index 1).
+- rows: `rfftfreq(nx, 1/pixsize)`, from 0 to the Nyquist frequency `1/(2*pixsize)`
+  cycles/mas;
+- columns: `fftfreq(nx, 1/pixsize)`, in FFT order (zero frequency at index 1).
 
-This layout is compatible with Julia's `irfft(F, nx)` to recover the
-real-space image. Apply `fftshift` to center the image:
+`irfft(F, nx)` gives the real-space image; `fftshift` centres it:
 
 ```julia
 img = fftshift(irfft(F, nx))
 ```
 
-### Convention notes
+### Sign convention
 
-The NFFT.jl adjoint computes `sum_j f_j exp(+2*pi*i * k . x_j)`. By
-negating the sample positions (`pos = -r/L` where `L = nx*pixsize`), the
-adjoint directly produces the standard DFT convention
-`F[k] = sum f_j exp(-2*pi*i * k . r_j)`. The `ifftshift` then converts
-from NFFT natural order (`k = -N/2, ..., N/2-1`) to FFT order
-(`k = 0, 1, ..., N/2-1, -N/2, ..., -1`), and extracting the first
-`nx÷2+1` rows gives the rfft layout.
+`F[k] = Σ f_j exp(-2πi k·r_j)`. NFFT.jl's adjoint has the opposite sign, so the sample
+positions are negated (`pos = -r/L`, `L = nx*pixsize`); `ifftshift` then takes NFFT order
+(`k = -N/2, …, N/2-1`) to FFT order, and the first `nx÷2+1` rows form the rfft layout.
 
-### `build_gauss_samples` details
+### `build_gauss_samples`
 
-For each visible polygon, `build_gauss_samples` parameterizes the
-quadrilateral using bilinear shape functions on `[-1,1]^2`, optionally
-subdivides into `nsub x nsub` sub-squares, and places `ngauss x ngauss`
-tensor-product Gauss-Legendre nodes in each sub-square.
-
-Returns `(xs, ys, fs)` where:
-- `xs, ys`: spatial positions (mas) of the quadrature points
-- `fs`: complex weights including the intensity, Jacobian, and Gauss weight
+Maps `[-1,1]^2` onto each tessel bilinearly, splits it into `nsub × nsub` sub-squares, and puts
+an `ngauss × ngauss` Gauss–Legendre rule in each. Returns `(xs, ys, fs)`: the positions (mas)
+of the points and their weights (intensity × Jacobian × Gauss weight).
 
 Total samples: `(ngauss * nsub)^2 * Npix`.
 
 ## Sky images for OITOOLS
 
-FITS cubes OITOOLS can compute visibilities from; see the
-[Exporting sky images for OITOOLS](@ref) guide.
+FITS image cubes from which OITOOLS computes visibilities; see
+[Exporting sky images for OITOOLS](@ref).
 
 ```@docs
 sky_layout

@@ -1,7 +1,6 @@
 # Orbit Fitting
 
-Fit the relative orbit of a two-component system directly to interferometric observables,
-starting from nothing but `readoifits` output and a guess.
+`fit_orbit` fits the relative orbit of a two-component system to interferometric observables.
 
 ```julia
 using ROTIR
@@ -20,7 +19,7 @@ res.elements.a      # fitted semi-major axis, mas
 res.chi2_red        # reduced χ²
 ```
 
-Component 1 sits at the origin and component 2 is displaced by the orbit, so the model is
+Component 1 is at the origin and component 2 is displaced by the orbit:
 
 ```
 cvis = (V₁ + f·V₂·exp(-2πi(u·Δα + v·Δδ))) / (1 + f)
@@ -37,8 +36,7 @@ nights = [readoifits(f)[1, 1] for f in filter(endswith(".oifits"), readdir(dir, 
 res = fit_orbit(nights, comp1, comp2; elements = (...))
 ```
 
-Epochs are fitted jointly against one set of orbital elements — that is the point, since a
-single night rarely constrains an orbit.
+All epochs are fitted with one set of orbital elements.
 
 ## Components
 
@@ -50,22 +48,25 @@ single night rarely constrains an orbit.
 | `GaussianDisk(fwhm = w)` | `fwhm` | circular |
 | `EllipticalGaussian(fwhm = w, ratio = r, pa = θ)` | `fwhm, ratio, pa` | `pa` in degrees |
 
-The disk and Gaussian visibilities come from OITOOLS (`visibility_ud`, `visibility_ldlin`,
-…), so a ROTIR orbit fit and an OITOOLS model fit use the same analytic profiles.
+Default bounds: diameters and FWHM 0.01–20 mas, `ratio` 0.05–1, `pa` 0–180°, `ld1` 0–1,
+`ld2` −0.5–1. The disk visibilities come from the OITOOLS model API (`ud`, `ldlin`, `ldquad`,
+`ldpow`), so ROTIR and OITOOLS use the same profiles.
 
 ## Choosing what to fit
 
-Every parameter is named: the nine orbital elements
-`a, i, Omega, omega, e, P, T0, dP, domega`, each component's own parameters prefixed
-`c1_` / `c2_`, and the flux ratio `f`.
+The parameters are the nine orbital elements `a, i, Omega, omega, e, P, T0, dP, domega`, the
+component parameters prefixed `c1_` / `c2_`, and the flux ratio `f`. Each is free, fixed or
+tied:
 
-Each one is exactly one of three things.
-
-| | how | when |
+| | how | use |
 |---|---|---|
-| **free** | listed in `free`, sampled within `bounds` | the data constrain it |
-| **fixed** | not listed anywhere; keeps its `elements` value | known from elsewhere (an ephemeris) |
-| **tied** | listed in `ties` as an expression | determined by the others through physics |
+| free | listed in `free`, fitted within `bounds` | constrained by the data |
+| fixed | not listed; keeps its `elements` value | known from elsewhere (an ephemeris) |
+| tied | listed in `ties` as an expression | determined by other parameters |
+
+`P` is required in `elements`; the others default to `a = 1, i = 90, Omega = 0, omega = 90,
+e = 0, T0 = 0, dP = 0, domega = 0`. Units: `a` in mas, angles in degrees, `P` and `T0` in days,
+`dP` in days per day, `domega` in degrees per day.
 
 ```julia
 res = fit_orbit(data, comp1, comp2;
@@ -76,115 +77,89 @@ res = fit_orbit(data, comp1, comp2;
                 method = :ultranest)
 ```
 
-The model is assembled once from that description — the ties compiled, the free/fixed layout
-resolved — and then sampled. Nothing about the parameterisation is decided inside the
-likelihood.
+The default frees `a, i, Omega, T0, f` and every component parameter. Not free by default:
 
-The default frees `a, i, Omega, T0, f` and every component parameter. Deliberately **not**
-free by default:
-
-* **`e` and `omega`** — for a circularised system `e = 0` and `omega` is undefined, so
-  fitting it samples a direction the likelihood is exactly flat in.
-* **`P`** — an eclipse or spectroscopic ephemeris usually pins the period far better than a
-  few nights of visibilities can. See *Fitting the period* below.
-* **`dP`** — needs a baseline long enough for the phase drift to accumulate.
-* **`domega`** — apsidal motion. Unmeasurable over a short baseline, and a real effect over
-  a long one: Spica's periapsis advances ~2.6°/yr, so `omega` drifts ~21° across the
-  2007–2015 CHARA data. Free it when the baseline is years, not nights.
+- `e` and `omega`: at `e = 0`, `omega` is undefined.
+- `P`: usually known better from an eclipse or spectroscopic ephemeris. See
+  [Fitting the period](@ref).
+- `dP`: needs a long baseline for the phase drift to accumulate.
+- `domega` (apsidal motion): needs a baseline of years. Spica's periapsis advances about
+  2.6°/yr, so `omega` drifts about 21° across the 2007–2015 CHARA data.
 
 ## Tied parameters
 
-A tie makes one parameter a function of the others. It is the right tool when a quantity is
-not independent but *physically determined* — fitting it freely then spends a degree of
-freedom and, worse, permits a solution in which the components disagree with each other.
-
-The motivating case: a disc lying in the orbital plane has its projected major axis along
-the line of nodes, so its position angle is not free — it is `Ω`.
+A tie computes one parameter from the others. Example: a disc in the orbital plane has its
+projected major axis along the line of nodes, so its position angle follows from `Omega`.
 
 ```julia
 ties = Dict(:c2_pa => "-Omega")
 ```
 
-Expressions are ordinary Julia written against the parameter names, so arithmetic and
-function calls both work, and a tie may reference another tie (evaluation is ordered by
-topological sort; a cycle is an error):
+Expressions are Julia code over the parameter names. A tie may reference another tie;
+ties are evaluated in dependency order, and a cycle is an error.
 
 ```julia
 ties = Dict(:c2_pa    => "-Omega",
             :c2_ratio => "abs(cosd(i))")     # a flat disc's projected axis ratio
 ```
 
-They are compiled once, with `RuntimeGeneratedFunctions`, into a single call — resolving
-them costs one allocation per likelihood evaluation and no measurable time, which matters
-when a nested-sampling run makes hundreds of thousands of them.
+Ties are compiled once with `RuntimeGeneratedFunctions`; resolving them costs one allocation
+per likelihood evaluation.
 
-A parameter cannot be both free and tied: the tie overwrites its target on every evaluation,
-so the sampled value would be silently discarded and the fit would report an uncertainty for
-a quantity the likelihood never used. `orbit_fit_spec` raises rather than allow it.
+A parameter listed as both free and tied is an error (`orbit_fit_spec` raises).
 
-!!! warning "A tie encodes a convention, and a wrong one is invisible"
-    `EllipticalGaussian` takes `pa` as the angle whose axis is scaled by `ratio < 1` — the
-    **minor** axis — measured from +RA toward +Dec, while `Omega` is the node measured North
-    through East. Putting the major axis on the line of nodes is therefore `"-Omega"`, not
-    `"Omega"`. Check the component's own definition before copying a tie to another system:
-    a wrong tie cannot be detected from the χ², because the fit will simply accommodate it.
+!!! warning "Position-angle conventions"
+    `EllipticalGaussian`'s `pa` is the angle of the **minor** axis (the one scaled by
+    `ratio < 1`), measured from +RA toward +Dec. `Omega` is measured North through East. The
+    major axis lies on the line of nodes when `pa = -Omega`. A wrong tie does not show in the
+    χ²: the fit adjusts the other parameters around it.
 
-Whether a tie is *supported* by the data is worth checking before adopting it — fit the
-parameter freely once and compare. On β Lyrae the free position angle lands 1.9° from the
-tied prediction and the tie costs χ²/n 3.154 → 3.189, so it constrains without fighting.
+To test a tie, fit the parameter freely once and compare. On β Lyrae the free position angle
+is 1.9° from the tied value, and the tie raises χ²/n from 3.154 to 3.189.
 
 ## Degeneracies
 
-Three are handled by the default bounds, and all three are exact rather than approximate:
+The default bounds remove two exact degeneracies:
 
-**`(Ω, T0) → (Ω + 180°, T0 + P/2)` at `e = 0`.** Both give identical observables. `Omega`
-is restricted to `[0, 180)` while `T0` spans one full period — together exactly one
-fundamental domain, each physical solution appearing once. Halving *both* would exclude
-real solutions.
+- `(Omega, T0) → (Omega + 180°, T0 + P/2)` at `e = 0`: `Omega` is bounded to `[0, 180)` and
+  `T0` to one period centred on its starting value, so each solution appears once.
+- `EllipticalGaussian` `pa`: the profile is symmetric under a half turn, so `pa` is bounded to
+  `[0, 180)`.
 
-!!! warning "That default is only correct at `e = 0`"
-    The degeneracy is exact for a circular orbit and broken by eccentricity — and by closure
-    phases, which distinguish an orbit from its mirror. For an eccentric system override it:
+!!! warning "The `Omega` bound assumes `e = 0`"
+    Eccentricity breaks the `(Omega, T0)` degeneracy, and so do closure phases. For an
+    eccentric orbit, widen the bound:
 
     ```julia
     bounds = Dict(:Omega => (0.0, 360.0))
     ```
 
-    Leaving the default in place would fold a published `Ω = 309.9°` to `129.9°` and fit the
-    mirrored orbit. `demos/spica_orbit_fit_tied.jl` does the override.
+    With the default, a published `Omega = 309.9°` folds to `129.9°` and the fit finds the
+    mirrored orbit. `demos/spica_orbit_fit_tied.jl` bounds `Omega` to 290–330°.
 
-**Elliptical Gaussian position angle.** The profile is symmetric under a half turn, so
-`pa ∈ [0, 360)` would hold two copies of every solution. The default bound is 180°.
-
-**T0 and disc PA are circular.** With a nested sampler, mark them so a mode sitting on a
-prior boundary is not split in two:
-
-```julia
-# names of the free parameters, in order
-wrapped = [n in (:T0, :c2_pa) for n in res.spec.names[res.spec.free]]
-```
+`T0` and `pa` are periodic, but `fit_orbit` does not tell the sampler so; a mode at a bound is
+split in two. `demos/betlyr/betlyr_orbit_fit_ultranest.jl` calls UltraNest directly with
+`wrapped_params` for these two.
 
 ## Fitters
 
 ```julia
-fit_orbit(...; method = :neldermead)   # NLopt, point estimate, fast
-fit_orbit(...; method = :ultranest)    # nested sampling, posterior + log Z
+fit_orbit(...; method = :neldermead)   # NLopt, point estimate (default)
+fit_orbit(...; method = :ultranest)    # nested sampling, needs `using PythonCall`
+fit_orbit(...; method = :nautilus)     # nested sampling, needs `using Nautilus`
 ```
 
-`:ultranest` additionally returns `posterior` (nsamples × nfree), `logz`, `logzerr`, `q16`,
-`q84`. For a peaked posterior — a poorly fitting model, or many parameters — keep
-`use_stepsampler = true` (the default): plain region rejection stalls once the likelihood
-occupies a vanishing fraction of the prior box.
+The nested samplers also return `posterior` (nsamples × nfree), `logz`, `logzerr`, `q16` and
+`q84`; the point estimate is the posterior median. `maxeval = 20_000` bounds Nelder–Mead;
+`min_num_live_points = 400` and `use_stepsampler = true` go to UltraNest. Plain region
+rejection (`use_stepsampler = false`) stalls on a sharply peaked posterior.
 
-!!! note "A step sampler makes `vectorized` moot"
-    UltraNest's step samplers propose one point at a time by construction, so with a step
-    sampler every likelihood call receives a batch of exactly one row. Any parallelism
-    across the batch is then inert; parallelise *inside* the likelihood instead, or use
-    `use_stepsampler = false` where rejection sampling is viable.
+With a step sampler, UltraNest passes the likelihood one point at a time, so parallelism goes
+inside the likelihood (`threaded = true`).
 
 ## Fitting the period
 
-`P` can be freed as a consistency check:
+Free `P` as a consistency check:
 
 ```julia
 res = fit_orbit(data, comp1, comp2;
@@ -193,25 +168,18 @@ res = fit_orbit(data, comp1, comp2;
                 bounds = Dict(:P => (12.9404, 12.9424)))
 ```
 
-Scale the prior to the physics, not to what the data might detect. The observable is
-accumulated phase drift, `n·δP/P` over `n` orbits — so a short baseline simply cannot see a
-period error, and a flat posterior on `P` is the correct answer rather than a failure. A
-prior much wider than the amount `P` itself varies over the baseline (via `dP`) asserts an
-uncertainty the ephemeris contradicts.
-
-What the check *does* establish: whether the other elements shift when `P` is freed. If they
-do not, the orbital solution does not secretly depend on the assumed period.
+The data measure accumulated phase drift, `n·δP/P` over `n` orbits, so a short baseline gives
+a flat posterior on `P`. Keep the bound on `P` near the range the ephemeris allows over the
+baseline (including `dP`). The check shows whether the other elements move when `P` is free.
 
 ## Performance
 
-One Kepler solve per **distinct time**, not per uv point. An OIFITS night has thousands of
-uv samples across tens of exposures, so `orbit_fit_data` reduces the times to their unique
-values and gathers back — 32× fewer solves on β Lyr, and ~0.05 ms per likelihood over seven
-nights. That is what makes nested sampling over ten parameters practical.
+`orbit_fit_data` solves Kepler's equation once per distinct time, not per uv point. On β Lyr
+that is 50 times for 1613 uv points, and one likelihood over seven nights takes about 0.05 ms.
 
 ## Evaluating without fitting
 
-Pass `free = Symbol[]` to compute χ² at the given elements:
+`free = Symbol[]` computes χ² at the given elements:
 
 ```julia
 res = fit_orbit(data, comp1, comp2; elements = (...), free = Symbol[], verbose = false)
@@ -220,21 +188,19 @@ res.chi2, res.chi2_split      # total, and (V², T3amp, T3φ)
 
 ## Tessellated components
 
-`model = :tessellated` is reserved for fitting orbits with resolved ROTIR surfaces (Roche
-shapes, gravity darkening, irradiation) and is **not yet implemented** — it needs its own
-parameterisation rather than the analytic component library. For a tessellated binary today,
-drive `create_binary_geometry` and `binary_chi2_f` directly; see
-`demos/spica_binary_roche.jl`.
+`model = :tessellated` (ROTIR surfaces: Roche shapes, gravity darkening, irradiation) is not
+implemented and raises an error. For a tessellated binary, use `create_binary_geometry` and
+`binary_chi2_f`; see `demos/spica_binary_roche.jl`.
 
 ## Worked examples
 
 | Script | System | Shows |
 |---|---|---|
 | `demos/betlyr/betlyr_orbit_fit_tied.jl` | β Lyrae — donor + accretion disc | a tie (`c2_pa = -Omega`) on a circular orbit |
-| `demos/spica_orbit_fit_tied.jl` | Spica — two limb-darkened discs | eccentric orbit, `e`/`omega` free, apsidal motion |
+| `demos/spica_orbit_fit_tied.jl` | Spica — two limb-darkened discs | eccentric orbit, `e`/`omega` free, apsidal motion with `APSIDAL=1` |
 
-Both take `METHOD=neldermead` for a fast plumbing check and default to UltraNest for the
-real run. Neither models occultation or mutual irradiation; see the caveats in each header.
+Both default to UltraNest; `METHOD=neldermead` runs a quick Nelder–Mead fit. Neither models
+occultation or mutual irradiation.
 
 ## API
 

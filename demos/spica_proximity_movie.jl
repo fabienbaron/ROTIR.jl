@@ -106,7 +106,7 @@ roche_params(rpole, tpole, q) = (
 )
 
 params1 = roche_params(RPOLE1, TPOLE1, Q_BIN)
-params2 = roche_params(RPOLE2, TPOLE2, 1 / Q_BIN)    # inverted for the secondary potential
+params2 = roche_params(RPOLE2, TPOLE2, 1 / Q_BIN)    # M1/M2: the secondary's own M_companion/M_self
 
 star1p = starparameters(RPOLE1, TPOLE1, 0.0, 3, LD1, 0.0, BETA, 0.0,
                         180.0 - I_ORB, OMEGA - 180.0, 0.0, P_ORB)

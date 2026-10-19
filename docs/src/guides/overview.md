@@ -1,42 +1,31 @@
 # Overview
 
-ROTIR reconstructs temperature maps on the surface of stars using optical
-interferometry data. This page explains the core concepts and the typical
-workflow.
+ROTIR reconstructs stellar surface temperature maps from optical interferometry data.
 
 ## Concepts
 
-**Tessellation.** The stellar surface is divided into pixels (quadrilateral
-patches) using either a HEALPix scheme or a longitude/latitude grid. Each pixel
-has 4 corner vertices and a center, stored in both Cartesian and spherical
-coordinates on a unit sphere.
+**Tessellation.** The surface is divided into quadrilateral pixels on a HEALPix or
+longitude/latitude grid. Each pixel has 4 corners and a centre, stored in Cartesian and
+spherical coordinates on the unit sphere.
 
-**Surface geometry.** The unit-sphere tessellation is scaled to the physical
-stellar shape: a sphere, triaxial ellipsoid, rapid rotator (centrifugally
-distorted), or Roche-lobe-filling star in a binary. The geometry also determines
-gravity darkening via the von Zeipel law.
+**Surface geometry.** The unit-sphere tessellation is scaled to the stellar shape: sphere,
+triaxial ellipsoid, rapid rotator, or Roche-lobe-filling binary component. The geometry sets
+the gravity darkening, by the von Zeipel or Espinosa Lara–Rieutord law (`gravity_law`).
 
-**Rotation and projection.** For each observing epoch, the star is rotated
-according to its spin period, inclination, and position angle, then projected
-onto the observer's sky plane. Pixels facing away from the observer are masked
-(with a smooth sigmoid transition for gradient-based optimization).
+**Rotation and projection.** At each epoch the star is rotated by its spin phase, inclination
+and position angle, and projected onto the sky. Pixels facing away from the observer are
+masked with a sigmoid weight on the normal, so the mask is differentiable.
 
-**Polygon Fourier transform.** Each projected pixel is a quadrilateral. Its
-Fourier transform contribution at each UV frequency is computed analytically
-using the polygon FT formula (edge-based sinc integrals). The total complex
-visibility is the flux-weighted sum over all visible pixels.
+**Polygon Fourier transform.** Each projected pixel is a quadrilateral, whose Fourier
+transform at each uv point is analytic (edge-based sinc integrals). The complex visibility is
+the flux-weighted sum over visible pixels.
 
-**Direct imaging.** In addition to the polyft matrix, ROTIR provides two
-fast methods for producing real-space images: **rasterization** (exact
-polygon-pixel clipping via Sutherland-Hodgman) and **NFFT** (Gauss-Legendre
-quadrature folded into a non-uniform FFT). Both avoid the dense polyft matrix
-and are useful for visualization, image-plane fitting, and large grids. See
-[Direct imaging methods](@ref) for details.
+**Direct imaging.** Two methods produce sky images without the dense polyft matrix:
+rasterisation (exact polygon–pixel clipping, Sutherland–Hodgman) and NFFT (Gauss–Legendre
+quadrature on a non-uniform FFT). See [Direct imaging methods](@ref).
 
-**Reconstruction.** The temperature map is optimized to minimize the
-chi-squared between model and observed interferometric quantities (V², closure
-phase, triple amplitude), subject to regularization. ROTIR uses the VMLMB
-quasi-Newton optimizer with analytical gradients.
+**Reconstruction.** The temperature map minimises the χ² of V², closure phases and triple
+amplitudes plus regularisation, with the VMLMB quasi-Newton optimiser and analytic gradients.
 
 ## Minimal workflow
 
@@ -59,24 +48,24 @@ star_params = (
     surface_type    = 2,        # 0=sphere, 1=ellipsoid, 2=rapid rotator, 3=Roche
     rpole           = 1.37,     # polar radius (mas)
     tpole           = 4800.0,   # polar temperature (K)
-    ldtype          = 3,        # limb darkening: 1=linear, 2=quadratic, 3=Hestroffer
+    ldtype          = 3,        # limb darkening: 0 none, 1 linear, 2 quadratic, 3 power law, 4 Claret
     ld1             = 0.23,     # first LD coefficient
     ld2             = 0.0,      # second LD coefficient
     inclination     = 78.0,     # degrees
     position_angle  = 24.0,     # degrees
     rotation_period = 54.8,     # days
-    beta            = 0.08,     # von Zeipel exponent: T ∝ g^β (e.g. 0.25 radiative, 0.08 convective)
-    frac_escapevel  = 0.9,      # fractional rotational velocity (rapid rotator)
-    B_rot           = 0.0,      # differential rotation coefficient
+    beta            = 0.08,     # gravity darkening, T ∝ g^β (0.25 radiative, 0.08 convective)
+    frac_escapevel  = 0.9,      # Ω / Ω_crit (rapid rotator)
+    B_rot           = 0.0,      # differential rotation (0 = solid body)
 )
 
 # 4. Build geometry for all epochs
 stars = create_star_multiepochs(tessels, star_params, tepochs)
 
-# 5. Compute starting temperature map (von Zeipel)
+# 5. Starting map: the gravity-darkened temperature
 tmap_start = parametric_temperature_map(star_params, stars[1])
 
-# 6. Set up the visibility matrix
+# 6. Polygon flux and Fourier transform, stored in each star
 setup_oi!(data, stars)
 
 # 7. Set up regularization
@@ -91,13 +80,13 @@ plot2d_allepochs(tmap, stars)
 plot_mollweide(tmap, stars[1])
 ```
 
-## Data flow diagram
+## Data flow
 
 ```
 OIFITS files
     |
     v
-readoifits_multiepochs()  -->  Vector{OIdata}  (one per epoch)
+readoifits_multiepochs()  -->  Matrix{OIdata}  [wavelength bin, epoch]
     |
     v
 tessellation_healpix(n)   -->  tessellation     (unit sphere grid)
@@ -117,7 +106,6 @@ plot2d / plot_mollweide   -->  visualization
 
 ## Example output
 
-A Mollweide projection of the gravity-darkened temperature map for a rapid
-rotator:
+Gravity-darkened temperature map of a rapid rotator, Mollweide projection:
 
 ![Mollweide output](../assets/plot_mollweide.png)

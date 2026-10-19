@@ -39,53 +39,44 @@ See the [installation guide](https://fabienbaron.github.io/ROTIR.jl/dev/install/
 
 ### Optional packages
 
-`using ROTIR` loads no plotting toolkit, no Qt, no sampler and no Python. Everything optional
-is a **weak dependency**: the code ships inside ROTIR and becomes active when you load its
-trigger package yourself.
+`using ROTIR` loads no plotting package, no Qt, no sampler and no Python. Optional features are
+package extensions, active once their trigger packages are loaded:
 
-That is measured, not tidiness — `using PythonCall` alone takes one OITOOLS canvas build from
-338 ms to 2477 ms by invalidating precompiled plotting code, and Pigeons and LoopVectorization
-cost 2.8 s and 2.3 s of GUI startup the same way. A script should not pay for what it does not
-use.
-
-| Load this | and you get |
-|-----------|-------------|
+| Load | Enables |
+|------|---------|
 | `Makie` | `plot2d_makie`, `plot3d_makie`, `plot_mollweide_makie`, the decorations |
-| `GLMakie, QMLMakie, QML` | the graphical interface (`rotirgui`, `gui`) |
-| `PythonPlot` | the matplotlib plotting layer (`plot2d`, `plot3d`, …) |
+| `GLMakie, QMLMakie, QML` | the GUI (`rotirgui`, `gui`) |
+| `PythonPlot` | the matplotlib plots (`plot2d`, `plot3d`, …) |
 | `Zygote` | `fit_parametric`, `bootstrap_parametric`, the gradient fit |
 | `AdvancedHMC, LogDensityProblems` | `method = :nuts` |
-| `Nautilus` | `method = :nautilus` — nested sampling, with an evidence |
-| `Pigeons, Distributions, ADTypes` | `method = :pigeons` — parallel tempering |
+| `Nautilus` | `method = :nautilus` (nested sampling, with evidence) |
+| `Pigeons, Distributions, ADTypes` | `method = :pigeons` (parallel tempering) |
 | `PythonCall` | `method = :ultranest` |
-| `LoopVectorization` | `POLYFT_BACKEND[] = :turbo`, the vectorised exact kernel |
+| `LoopVectorization` | `POLYFT_BACKEND[] = :turbo` (vectorised exact kernel) |
 
-Each has to be installed in **your own** project — a weak dependency of ROTIR is not
-automatically available to you — and `rotirgui()` offers to do exactly that for the ones the
-window needs. Calling something whose extension is not loaded raises a `MethodError` naming the
-function, not an `UndefVarError`, because the names are declared in ROTIR itself; several also
-have a predicate you can ask first (`nautilus_available()`, `hmc_available()`,
-`pigeons_available()`, `ultranest_available()`, `turbo_available()`).
+Each must be installed in your own project; `rotirgui()` offers to install the ones the window
+needs. Calling a function whose extension is not loaded raises a `MethodError`.
+`nautilus_available()`, `hmc_available()`, `pigeons_available()`, `ultranest_available()` and
+`turbo_available()` report whether an extension is loaded.
+
+Loading PythonCall, Pigeons or LoopVectorization invalidates precompiled plotting code: GUI
+startup takes about 2 s longer with each.
 
 ## Quick start
 
 ```julia
 using ROTIR
 
-# Read OIFITS files — returns a 2D array: data_all[wavelength_bin, epoch]
+# data_all[wavelength_bin, epoch]
 data_all = readoifits_multiepochs(["epoch1.oifits", "epoch2.oifits"])
 
-# Select the first wavelength bin across all epochs
 data = data_all[1, :]
 
-# Compute relative epoch times (days since first observation) for tracking rotation
-tepochs = [d.mean_mjd for d in data] .- data[1].mean_mjd
+tepochs = [d.mean_mjd for d in data] .- data[1].mean_mjd   # days
 
-# Tessellate the stellar surface using nested HEALPix with resolution level 3
-# (nside=2^3=8, giving 768 equal-area pixels — increase for finer detail)
+# HEALPix level 3: nside = 8, 768 pixels
 tessels = tessellation_healpix(3)
 
-# Define the stellar model: a rapid rotator (surface_type=2)
 star_params = (
     surface_type=2,           # 0=sphere, 1=ellipsoid, 2=rapid rotator, 3=Roche lobe
     rpole=1.37,               # polar radius in milliarcseconds
@@ -94,46 +85,39 @@ star_params = (
     inclination=78.0,         # inclination in degrees (90°=edge-on)
     position_angle=24.0,      # position angle of rotation axis on sky (degrees)
     rotation_period=54.8,     # rotation period in days
-    beta=0.08,                # gravity-darkening exponent (T ∝ g^β: poles hotter, equator cooler)
-    frac_escapevel=0.9,       # rotational velocity as fraction of escape velocity (0–1)
-    B_rot=0.0,                # differential rotation coefficient (0=solid body)
+    beta=0.08,                # gravity darkening, T ∝ g^β
+    frac_escapevel=0.9,       # Ω / Ω_crit
+    B_rot=0.0,                # differential rotation (0 = solid body)
 )
 
-# Build a projected, rotated stellar geometry for each epoch
-# (computes surface shape, normals, visible pixels, and limb darkening)
+# Geometry, projection and visibility at each epoch
 stars = create_star_multiepochs(tessels, star_params, tepochs)
 
-# Generate initial temperature map from the von Zeipel gravity-darkening law
-# (serves as the starting point for the optimizer)
+# Starting map: the gravity-darkened temperature
 tmap_start = parametric_temperature_map(star_params, stars[1])
 
-# Pre-compute polygon flux and Fourier transform matrices for each epoch
-# (stored in-place in the stars objects for fast χ² evaluation)
+# Fourier transform setup, stored in each star
 setup_oi!(data, stars)
 
-# Set up quadratic total-variation regularization to enforce smooth temperature maps
-# while preserving sharp boundaries; weight 1e-5 applied to all pixels
+# "tv2": squared graph Laplacian, weight 1e-5, every pixel
 regularizers = [["tv2", 1e-5, tv_neighbors_healpix(3), 1:length(tmap_start)]]
 
-# Run the reconstruction: iteratively adjusts pixel temperatures to fit
-# the interferometric observables (V², closure phases, triple amplitudes)
 tmap = image_reconstruct_oi(tmap_start, data, stars;
                              maxiter=500, regularizers=regularizers)
 
-# Plot the visible stellar disk at each epoch (shows rotation of surface features)
+# The visible disk at each epoch
 plot2d_allepochs(tmap, stars)
 
-# Rescale so that the pole pixel temperature matches star_params.tpole
+# Scale the map so the pole temperature is star_params.tpole
 tmap = rescale_temperature_tpole(tmap, stars, star_params)
 
-# Plot the visible stellar disk with temperature contours
+# One epoch, with temperature contours
 plot2d(tmap, stars[1];
     intensity=true, graticules=true, compass=true,
     contours=[4200, 4400, 4600, 4800],
     star_params=star_params)
 
-# Plot the full surface as a Mollweide equal-area projection
-# Unobserved pixels are grayed out
+# Whole surface, Mollweide projection; never-visible pixels greyed
 plot_mollweide(tmap, stars[1], visible_pixels=sometimes_visible(stars))
 ```
 
@@ -155,96 +139,74 @@ See the [full documentation](https://fabienbaron.github.io/ROTIR.jl/dev/guides/s
 
 ## Features
 
-- **Multiple surface geometries**: spheres, triaxial ellipsoids, rapid rotators
-  (centrifugally distorted), and Roche-lobe-filling stars in binaries
-- **Binary star modeling**: forward model for resolved binaries with Keplerian
-  orbits, radial velocity curves, and composite interferometric observables
-- **Two tessellation schemes**: nested HEALPix (equal-area, hierarchical) and
-  longitude/latitude grids
-- **Multi-epoch reconstruction**: simultaneously fit data from multiple rotation
-  phases to recover the full surface map
-- **Multi-resolution imaging**: coarse-to-fine HEALPix pyramid for robust
-  convergence
-- **Joint shape + map optimization**: analytical gradients for shape parameters
-  (radii, inclination, position angle) alongside the surface map
-- **Matrix-free polygon Fourier transform**: fused forward/adjoint passes with
-  O(Nuv + Npix) memory instead of O(Nuv * Npix)
-- **Regularization**: total variation (L1, quadratic), maximum entropy, mean
-  constraint, and harmonic bias
-- **Gradient-based optimization**: VMLMB quasi-Newton with bounds
-  (OptimPackNextGen)
-- **Spot creation**: circular spots with Euclidean chord distance (correct on
-  any surface geometry), with flat or linear temperature profiles
-- **Rich visualization**: 2D projections with graticules, temperature contours,
-  rotation decorations; Mollweide maps with unobserved-pixel masking
+- Surface geometries: sphere, triaxial ellipsoid, rapid rotator (Roche potential of a rotating
+  star), Roche-lobe-filling binary component
+- Binaries: Keplerian orbits, radial velocities, combined interferometric observables
+- Tessellations: nested HEALPix and longitude/latitude grids
+- Multi-epoch reconstruction across rotation phases
+- Coarse-to-fine HEALPix reconstruction
+- Joint fit of shape (radii, inclination, position angle) and surface map, with analytic gradients
+- Matrix-free polygon Fourier transform: O(Nuv + Npix) memory
+- Regularisers: `tv`, `tv2`, `mem`, `mean`, `bias`, `sobel`, `sobel2`, `laplace_beltrami`,
+  `radflat`, `radialvar`, `orthold`
+- VMLMB bounded quasi-Newton optimiser (OptimPackNextGen)
+- Parametric fits: NLopt, NUTS, nested sampling (Nautilus, UltraNest), parallel tempering
+  (Pigeons)
+- Spots with flat or linear temperature profiles
+- Plots: sky projections with graticules, contours and rotation marks; 3-D view; Mollweide maps
+  with unobserved pixels masked
 
-ROTIR uses [OITOOLS.jl](https://github.com/fabienbaron/OITOOLS.jl) for OIFITS
-I/O and data handling.
+ROTIR uses [OITOOLS.jl](https://github.com/fabienbaron/OITOOLS.jl) to read and handle OIFITS
+data.
 
 ## Graphical interface (work in progress)
-
-One window over one session — the same dataset moves from epoch browsing to model fitting to
-reconstruction without being written out and read back. Four tabs: **Explore** (epochs, OITOOLS'
-filtering and observable plots — per baseline, against the model or a reconstruction, or as
-residuals — and per-epoch reduced χ² against the current model), **Modeling** (a parameter form
-generated from the surface schema, each parameter free/fixed/tied, and the fit backends below),
-**Imaging** (tessellation, the regularisers, and the reconstruction), and **Orbit**.
-It is under active development: the panels work, but not every control behind them is wired yet.
-
-One call opens it, from a plain session:
 
 ```julia
 using ROTIR
 rotirgui()                             # empty session
-rotirgui("mydata.oifits")              # with a dataset loaded
+rotirgui("mydata.oifits")              # one dataset
 rotirgui("ep1.oifits", "ep2.oifits")   # several epochs
 ```
 
-`rotirgui` does the whole startup: it applies the Mesa, GLFW and Qt hints — which have to be
-set *before* the first OpenGL context exists, so no extension can do it, and which pick native
-Wayland over XWayland where they can — then loads GLMakie, QMLMakie and QML, then the optional
-samplers, then opens the window.
+`rotirgui` sets the OpenGL and Qt environment, loads GLMakie, QMLMakie, QML and the optional
+samplers, and opens the window. If GLMakie, QMLMakie or QML are missing it offers to install
+them; Enter installs only those. `install = true` installs everything without asking,
+`install = false` stops with instructions, `samplers = false` skips the optional samplers
+(faster startup, fewer fit methods).
 
-If GLMakie, QMLMakie or QML are not installed it offers to add them, and lists the optional
-samplers alongside; **Enter** installs only what the window needs and goes straight to the GUI.
-`install = true` takes everything without asking, `install = false` explains and stops, and
-`samplers = false` starts faster at the cost of those fit methods not being offered.
-
-To open the window with a stack you loaded yourself — what `rotirgui` ultimately calls:
+With the packages already loaded, `gui()` opens the window:
 
 ```julia
-using ROTIR, GLMakie, QMLMakie, QML   # these three activate the GUI extension
-gui()                                 # optionally gui(session), or pass files to load
+using ROTIR, GLMakie, QMLMakie, QML
+gui()                                 # or gui(session)
 ```
 
-From a clone there is also a pinned launcher environment, the reproducible way to run it:
+From a clone, with a pinned environment:
 
 ```
 julia --project=bin bin/rotirgui.jl [file.oifits ...]
 ```
 
-A fit or a reconstruction runs on a worker thread with its optimiser trace streaming to the
-console at the bottom, so the window stays responsive and a long run can be watched rather than
-waited on. Nelder–Mead and gradient descent are always available; the nested samplers
-(Nautilus), Hamiltonian Monte Carlo and parallel tempering (Pigeons) appear when their packages
-are loaded, and bring a posterior view with them. The panel says which gradient paths are
-offered and, where one is not, why.
+Tabs:
 
-Every action also echoes the equivalent ROTIR call to the console, so the window doubles as a
-way to learn the scripting API. **Export script…** turns the session into a runnable `.jl`;
-**Save model map** writes the HEALPix map to FITS along with every keyword needed to reproduce
-its χ², and **Load model map** reads one back.
+- **Explore**: epochs, OITOOLS filtering, observable plots (per baseline, against the model or
+  the reconstruction, residuals), point selection and removal, OIFITS export, reduced χ² per
+  epoch.
+- **Model**: parameter form for the chosen surface type; each parameter free, fixed or tied;
+  fits with VMLMB, Nelder–Mead, BOBYQA, NUTS, Nautilus, Pigeons or ESS.
+- **Imaging**: tessellation, regularisers, reconstruction.
+- **Orbit**: binary orbit and orbit fits.
 
-Three surface views are shared by Modeling and Imaging — the orthographic sky projection (the
-default, since it is what the interferometer measures), a rotatable 3-D view with real
-depth-buffer occlusion, and the Mollweide whole-surface map — with the decorations, colormaps
-and epoch slider common to all of them.
+Model and Imaging share three views: sky projection, 3-D, and Mollweide.
+
+Fits and reconstructions run on a worker thread; their trace streams to the console panel.
+Each action prints the equivalent ROTIR call. **Export script…** writes the session as a
+runnable `.jl`. **Save model map** writes the HEALPix map to FITS with the keywords needed to
+reproduce its χ²; **Load model map** reads one.
 
 ## Documentation
 
-Full documentation is available at
-[fabienbaron.github.io/ROTIR.jl](https://fabienbaron.github.io/ROTIR.jl/dev),
-including:
+[fabienbaron.github.io/ROTIR.jl](https://fabienbaron.github.io/ROTIR.jl/dev):
 
 - [Overview and workflow](https://fabienbaron.github.io/ROTIR.jl/dev/guides/overview/)
 - [Tessellation schemes](https://fabienbaron.github.io/ROTIR.jl/dev/guides/tessellation/)

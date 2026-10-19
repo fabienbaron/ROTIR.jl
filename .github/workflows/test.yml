@@ -14,12 +14,14 @@ concurrency:
 
 jobs:
   test:
-    name: Julia ${{ matrix.version }} — ${{ matrix.os }}
+    name: ${{ matrix.group }} — Julia ${{ matrix.version }}, ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    # The suite is ~10 min on 16 threads locally; a 2-core runner is several times that, and
-    # the Python environment CondaPkg resolves on first `using PythonCall` is a cold-cache
-    # cost on top. Generous rather than tight: a timeout kill looks like a test failure.
-    timeout-minutes: 120
+    # ONE JOB PER GROUP. `ROTIR_TEST_GROUP` (test/runtests.jl) runs one group; the groups are
+    # balanced on the section times the suite prints at its end — about 7.5 min in all on 4
+    # threads, 1.5–2.5 min per group — and each job pays its own precompilation. The suite
+    # never finished in one 120-min job: every run was killed at the limit, which GitHub
+    # reports as "cancelled". 60 min per group is still generous; a hang fails in an hour.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +29,8 @@ jobs:
         # Never below 1.11: `[sources]` needs Pkg >= 1.11 and is SILENTLY ignored below it.
         version: ['1.13']
         os: [ubuntu-latest]
+        # Must match `GROUPS` in test/runtests.jl, or a group's sections never run in CI.
+        group: [core, forward, gradients, sampling]
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -43,7 +47,13 @@ jobs:
             Pkg.Registry.add(RegistrySpec(url="https://github.com/emmt/EmmtRegistry"))'
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        with:
+          # julia-runtest's default is `true`, which runs the suite under --code-coverage:
+          # every line instrumented, which slows the numerical kernels many times over and
+          # is a likely reason the suite ran past 120 min. Nothing here uploads coverage.
+          coverage: false
         env:
+          ROTIR_TEST_GROUP: ${{ matrix.group }}
           # `auto` so the nested-threading testsets have more than one thread to use. With a
           # single thread they pass trivially and assert nothing about concurrency.
           JULIA_NUM_THREADS: auto

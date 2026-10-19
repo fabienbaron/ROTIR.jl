@@ -1,24 +1,19 @@
 # Tessellation
 
-ROTIR discretizes the stellar surface into quadrilateral pixels using one of
-two tessellation schemes. The choice affects pixel uniformity, neighbor
-structure, and multi-resolution capabilities.
+ROTIR divides the stellar surface into quadrilateral pixels, with one of two schemes.
 
 ## HEALPix scheme (nested ordering)
 
-The HEALPix (Hierarchical Equal Area isoLatitude Pixelization) scheme divides
-the sphere into equal-area pixels arranged in a nested hierarchy. ROTIR uses the
-**nested** HEALPix ordering, which arranges pixels in a hierarchical quad-tree
-structure. This enables efficient multi-resolution operations (each pixel at
-level n splits into 4 children at level n+1). This is the recommended scheme
-for most applications.
+HEALPix (Hierarchical Equal Area isoLatitude Pixelization) divides the sphere into
+equal-area pixels. ROTIR uses the nested ordering, a quad-tree: each pixel at level n has
+4 children at level n+1, which is what multi-resolution reconstruction uses.
 
 ```julia
 n = 3                                   # resolution parameter
 tessels = tessellation_healpix(n)       # nside = 2^n = 8, npix = 768
 ```
 
-The resolution parameter `n` determines the number of pixels:
+Pixel counts:
 
 | `n` | nside | npix | Typical use |
 |-----|-------|------|-------------|
@@ -28,31 +23,26 @@ The resolution parameter `n` determines the number of pixels:
 | 4 | 16 | 3072 | High resolution |
 | 5 | 32 | 12288 | Very high resolution |
 
-Conversion functions:
-- `nside2npix(nside)` -- returns `12 * nside^2`
-- `npix2n(npix)` -- returns the resolution parameter `n`
+`nside2npix(nside)` returns `12 * nside^2`; `npix2n(npix)` returns `n`.
 
 ### Pixel structure
 
-Each pixel has 5 associated points: 4 corner vertices and 1 center. These are
-stored in the tessellation as:
+Each pixel has 5 points: 4 corners and the centre (index 5).
 
-- `tessels.unit_xyz` -- Cartesian coordinates `(npix, 5, 3)` on the unit sphere
-- `tessels.unit_spherical` -- spherical coordinates `(r, theta, phi)` in `(npix, 5, 3)`
+- `tessels.unit_xyz`: Cartesian coordinates on the unit sphere, `(npix, 5, 3)`
+- `tessels.unit_spherical`: `(r, theta, phi)`, `(npix, 5, 3)`
 
-where `theta` is the colatitude (0 at north pole, pi at south pole) and `phi` is
-the longitude.
+`theta` is the colatitude (0 at the north pole, π at the south pole), `phi` the longitude.
 
 ### Visual comparison
 
-HEALPix wireframe at n=3 (768 pixels) compared with a longitude/latitude grid
-(20x40 = 800 pixels):
+HEALPix at n=3 (768 pixels) and a longitude/latitude grid (20×40 = 800 pixels):
 
 | HEALPix (nested, n=3) | Lon/Lat (20x40) |
 |:----------------------:|:---------------:|
 | ![HEALPix wireframe](../assets/tess_healpix_wireframe.png) | ![Lon/Lat wireframe](../assets/tess_latlong_wireframe.png) |
 
-Mesh overlay showing pixel edges on a limb-darkened sphere:
+Pixel edges on a limb-darkened sphere:
 
 | HEALPix (nested, n=3) | Lon/Lat (20x40) |
 |:----------------------:|:---------------:|
@@ -60,52 +50,48 @@ Mesh overlay showing pixel edges on a limb-darkened sphere:
 
 ### Neighbors, gradients and total variation
 
-HEALPix pixels have 8 neighbors (6 or 7 at special locations). Two different operators are
-built from that neighbor structure.
+HEALPix pixels have 8 neighbours (6 or 7 at a few locations). The regularisers use three
+operators built on them.
 
-For the gradient-based regularizers `"sobel"` and `"sobel2"`:
+Gradient (`"sobel"`, `"sobel2"`):
 
 ```julia
 sobel_info = sobel_gradient_healpix(n)
 ```
 
-This returns `(; Gx, Gy, D, owner, npix, area)`. `Gx` and `Gy` are two sparse matrices giving
-the tangent-plane components of ∇x at each tessel. They are the sphere's analogue of the 2-D
-Sobel stencil — which is itself the inverse-distance²-weighted least-squares gradient on a 3×3
-grid — generalized to neighborhoods that are irregular and have no global axes. `D` is what
-the two regularizers actually penalise: the same neighbours and weights, each difference
-squared before summing, so its only null mode is the constant map.
+Returns `(; Gx, Gy, D, owner, npix, area)`. `Gx` and `Gy` are sparse matrices giving the
+tangent-plane components of ∇x at each tessel: the inverse-distance²-weighted least-squares
+gradient (the 2-D Sobel stencil) on irregular neighbourhoods. `D` is what the regularisers
+penalise: the same neighbours and weights, each difference squared before summing; its only
+null mode is the constant map.
 
-For `"laplace_beltrami"`:
+Cotangent Laplace–Beltrami (`"laplace_beltrami"`):
 
 ```julia
 lb_info = laplace_beltrami_healpix(n)
 ```
 
-This returns `(; D, npix, area, nedges)`, one row per edge of the triangulation of the tessel
-centres (the dual of the pixelisation, each four-tessel corner split along its Delaunay
-diagonal), weighted by the cotangent formula. `‖D x‖²` converges to `∫|∇x|²dΩ` at second
-order, which makes it the most resolution-consistent of the smoothing operators.
+Returns `(; D, npix, area, nedges)`: one row per edge of the triangulation of the tessel
+centres (each four-tessel corner split along its Delaunay diagonal), with cotangent weights.
+`‖D x‖²` converges to `∫|∇x|²dΩ` at second order, the most resolution-independent of the
+three.
 
-For the curvature-based `"tv"` and `"tv2"`:
+Graph Laplacian (`"tv"`, `"tv2"`):
 
 ```julia
 tv_info = tv_neighbors_healpix(n)
 ```
 
-This returns a tuple containing the sparse graph-Laplacian difference matrix and its
-Hessian. For reconstructions where some pixels are never visible, use:
+Returns a tuple whose last two entries are the sparse graph Laplacian and its Hessian. To
+regularise only pixels visible at some epoch:
 
 ```julia
 tv_info = tv_neighbors_healpix_visible(n, stars)
 ```
 
-This excludes invisible pixels from the regularization, preventing artifacts at
-the limb.
-
 ## Longitude/latitude scheme
 
-The longitude/latitude grid is a regular grid in colatitude and longitude:
+A regular grid in colatitude and longitude:
 
 ```julia
 ntheta = 50                                     # latitude rings
@@ -113,11 +99,10 @@ nphi = 50                                       # pixels per ring
 tessels = tessellation_latlong(ntheta, nphi)     # npix = 2500
 ```
 
-All rings have the same number of pixels (`nphi`), giving a total of
-`ntheta * nphi` pixels. The grid ranges over colatitude `[0, pi)` and longitude
-`[0, 2*pi)`.
+Every ring has `nphi` pixels, `ntheta * nphi` in total, over colatitude `[0, π)` and
+longitude `[0, 2π)`.
 
-Neighbor information for total variation:
+Neighbours for `"tv"`/`"tv2"`:
 
 ```julia
 tv_info = tv_neighbors_longlat(ntheta, nphi)
@@ -125,23 +110,19 @@ tv_info = tv_neighbors_longlat(ntheta, nphi)
 
 ### Spots
 
-ROTIR provides two spot-creation interfaces.
-
-**Any tessellation** (HEALPix or lon/lat) — works with `stellar_geometry`:
+Any tessellation, from a star geometry:
 
 ```julia
 tmap = make_circ_spot(tmap, star_geometry, spot_radius, lat, long;
                        bright_frac=0.8)
 ```
 
-- `spot_radius` in degrees, `lat` in \[-90, 90\], `long` in \[-180, 180\] (or \[0, 360\])
-- Uses Euclidean chord distance in 3D, so spots remain circular on
-  non-spherical surfaces (ellipsoids, rapid rotators, Roche lobes)
-- A fill-fraction variant is also available:
-  `make_circ_spot_spotfill(star_geometry, spot_radius, lat, long; profile="flat")`
-  where `profile` can be `"flat"` or `"linear"` (linearly decreasing toward the edge)
+- `spot_radius` in degrees, `lat` in \[-90, 90\], `long` in \[-180, 180\] or \[0, 360\]
+- Distances are 3-D chord lengths, so spots stay circular on non-spherical surfaces
+- `make_circ_spot_spotfill(star_geometry, spot_radius, lat, long; profile="flat")` returns
+  the fill fraction per pixel; `profile` is `"flat"` or `"linear"` (decreasing toward the edge)
 
-**Lon/lat grid only** — pixel-index-based (legacy):
+Lon/lat grid only, by pixel index:
 
 ```julia
 tmap = make_circ_spot(tmap, ntheta, nphi, spot_radius, latitude, longitude;
@@ -149,13 +130,13 @@ tmap = make_circ_spot(tmap, ntheta, nphi, spot_radius, latitude, longitude;
 tmap = make_spot_move(tmap, ntheta, nphi, period, B_rot, tepochs)
 ```
 
-A cool spot created with `make_circ_spot` on a lon/lat sphere:
+A cool spot from `make_circ_spot` on a lon/lat sphere:
 
 ![Lon/Lat spot](../assets/tess_latlong_spot.png)
 
 ### Resolution levels
 
-HEALPix resolution progression on a rapid rotator (pixel edges shown):
+HEALPix levels on a rapid rotator, pixel edges shown:
 
 | n=2 (192 px) | n=3 (768 px) | n=4 (3072 px) |
 |:------------:|:------------:|:-------------:|
@@ -172,5 +153,4 @@ HEALPix resolution progression on a rapid rotator (pixel edges shown):
 | Differential rotation | Manual | Built-in `make_spot_move` |
 | Spot creation | `make_circ_spot(tmap, star_geom, ...)` | Also `make_circ_spot(tmap, ntheta, nphi, ...)` |
 
-For image reconstruction from interferometry, **HEALPix is recommended** due to
-equal-area pixels and multi-resolution support.
+HEALPix is the scheme to use for reconstruction: equal-area pixels and multi-resolution.

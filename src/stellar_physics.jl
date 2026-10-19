@@ -68,18 +68,12 @@ const _MASPC_TO_M = 1e-3 * _AU_M
 """
     derive_mass(rpole_mas, d_pc, fev, period_days) -> M / M☉
 
-The mass a Roche rotator must have for its shape (`fev`) and its spin (`period_days`)
-to be consistent at the given polar radius.
+Mass of a Roche rotator, in solar masses, from its polar radius (mas), distance (pc),
+`fev = Ω/Ω_crit` and rotation period (days):
 
-    Ω = 2π/P,    M = 27 R_p³ Ω² / (8 G fev²)
+    Ω = 2π/P,    Ω_crit = √(8GM/27R_p³),    M = 27 R_p³ Ω² / (8 G fev²)
 
-from `Ω = fev·√(8GM/27R_p³)`, i.e. ELR/Roche's definition of the critical rate. The
-result is in SOLAR masses, obtained by dividing by the nominal `GM☉` rather than by
-multiplying out `G` and `M☉` separately, which avoids carrying `G`'s uncertainty.
-
-Returns `Inf` as `fev → 0`: a spherical star spinning at a finite rate needs infinite
-mass to make that rate a vanishing fraction of critical. Callers that allow `fev = 0`
-must not ask for a mass.
+Uses the IAU nominal `GM☉`. Diverges as `fev → 0`.
 """
 @inline function derive_mass(rpole_mas::T, d_pc::T, fev::T, period_days::T) where {T}
     Rp = polar_radius_m(rpole_mas, d_pc)
@@ -157,12 +151,9 @@ end
 """
     logg_map(rpole_mas, d_pc, fev, period_days, sinθ, cosθ) -> Vector
 
-Per-tessel `log₁₀(g_eff)` in **cgs** for a rapid rotator, with the mass derived from
-the spin (see [`derive_mass`](@ref)).
-
-This is the quantity a model atmosphere is indexed by, alongside `Teff`. It varies by
-0.3–1.0 dex from pole to equator on a fast rotator — which is exactly why a grid with
-a single scalar `logg` (as `src/di.jl`'s `modelGrid` has) cannot serve this surface.
+Per-tessel `log₁₀(g_eff)` (cgs) of a rapid rotator, with the mass from
+[`derive_mass`](@ref). `sinθ`, `cosθ` are the tessels' colatitudes. On a fast rotator it
+varies by 0.3–1.0 dex from pole to equator. Differentiable with Zygote.
 """
 function logg_map(rpole_mas::T, d_pc::T, fev::T, period_days::T,
                   sinθ::AbstractVector{T}, cosθ::AbstractVector{T}) where {T}
@@ -235,7 +226,11 @@ end
 # Reported quantities
 # ---------------------------------------------------------------------------
 
-"Polar surface gravity, log₁₀(cgs). The normalisation the maps divide by."
+"""
+    logg_pole(rpole_mas, d_pc, fev, period_days) -> log₁₀ g
+
+Polar surface gravity, log₁₀ of cgs, with the mass from [`derive_mass`](@ref).
+"""
 @inline function logg_pole(rpole_mas::T, d_pc::T, fev::T, period_days::T) where {T}
     Rp = polar_radius_m(rpole_mas, d_pc)
     GM = derive_mass(rpole_mas, d_pc, fev, period_days) * T(_GMSUN_SI)
@@ -245,9 +240,8 @@ end
 """
     equatorial_velocity(rpole_mas, d_pc, fev, period_days) -> km/s
 
-True equatorial rotation velocity, `Ω R_eq`, with `R_eq = R_p·f(fev)` from the Roche
-shape factor. Not `Ω R_p` — the equator of a fast rotator is up to 1.5x the polar
-radius, and that factor is the whole point of the Roche surface.
+Equatorial rotation velocity `Ω R_eq`, with `R_eq = R_p·f(fev)` from the Roche shape
+(`R_eq` reaches 1.5 `R_p` at `fev = 1`).
 """
 @inline function equatorial_velocity(rpole_mas::T, d_pc::T, fev::T,
                                      period_days::T) where {T}
@@ -260,13 +254,23 @@ end
 # script, and Julia refuses assignment to an imported binding ("cannot assign a value to
 # imported variable"). Exporting `vsini` would break every script with a `vsini = 25.0`
 # line in it. The recognisable name survives as a FIELD of `derived_quantities`.
-"Projected equatorial velocity, `v_eq sin i`, in km/s. `inclination` in degrees."
+"""
+    projected_veq(rpole_mas, d_pc, fev, period_days, inclination_deg) -> km/s
+
+Projected equatorial velocity `v_eq sin i`. The field `vsini` of
+[`derived_quantities`](@ref) holds the same value.
+"""
 @inline projected_veq(rpole_mas::T, d_pc::T, fev::T, period_days::T,
                       inclination_deg::T) where {T} =
     equatorial_velocity(rpole_mas, d_pc, fev, period_days) *
     sin(inclination_deg * T(π) / T(180))
 
-"True whether `p` carries the distance that makes physical units available."
+"""
+    has_physical_scale(star_params) -> Bool
+
+Whether `star_params` has `d`, `rpole`, `frac_escapevel` and `rotation_period`, which the
+physical quantities require.
+"""
 has_physical_scale(p) = hasproperty(p, :d) && hasproperty(p, :rpole) &&
                         hasproperty(p, :frac_escapevel) &&
                         hasproperty(p, :rotation_period)
@@ -274,12 +278,9 @@ has_physical_scale(p) = hasproperty(p, :d) && hasproperty(p, :rpole) &&
 """
     derived_quantities(star_params) -> NamedTuple
 
-Everything physical that `star_params` implies but does not store: `mass` [M☉],
-`rpole_rsun`, `req_rsun`, `logg_pole`, `veq` and `vsini` [km/s], `omega` [rad/s].
-
-Meant for reporting alongside a fit — a posterior on `(rpole, d, fev, P)` is a
-posterior on the mass too, and this is what turns one into the other. Returns
-`nothing` when the parameters carry no distance, rather than inventing one.
+Physical quantities implied by `star_params`: `mass` (M☉), `rpole_rsun`, `req_rsun`,
+`logg_pole` (cgs), `veq` and `vsini` (km/s), `omega` (rad/s). `inclination` defaults to
+90° when absent. Returns `nothing` if [`has_physical_scale`](@ref) is false.
 """
 function derived_quantities(p)
     has_physical_scale(p) || return nothing
@@ -323,31 +324,17 @@ end
 """
     limb_mu_vec(nz) -> μ
 
-`max.(nz, 0)` as a named function, for the μ a provider is indexed by.
-
-Written as a broadcast rather than a hand-written primitive because Zygote differentiates
-`max` correctly on its own — the subgradient at `nz = 0` is what `mu_and_dmu` already
-picks (zero on the back side), so the AD and the forward paths agree without a rule.
+`max.(nz, 0)`: the μ an intensity provider is evaluated at, from the tessels' line-of-sight
+normal components `nz` (zero on the far side).
 """
 limb_mu_vec(nz) = max.(nz, zero(eltype(nz)))
 
 """
     derived_summary_text(star_params) -> String
 
-One line of the PHYSICAL quantities a `star_params` implies but does not store — mass, polar
-and equatorial radius, polar `logg`, equatorial and projected rotation velocity. Empty when
-the model carries no distance, or is not a rapid rotator.
-
-Lives in the core rather than in the GUI extension even though the GUI is its only caller:
-it is a pure function of the parameters, so putting it here is what makes it testable without
-GLMakie and QML loaded. `shell_derived_summary` is the thin session-reading wrapper.
-
-WHY THIS EARNS ITS PLACE IN THE PANEL. The four numbers a user types — `rpole` in mas,
-`frac_escapevel`, `rotation_period`, `d` — imply a mass through
-M = 27R_p³Ω²/(8G·fev²), and nothing on screen said what it was. A fit that wandered to
-rpole 0.98 / fev 0.59 implied a 7.1 Msun star for beta Cas and looked unremarkable in the
-form; it would have been obvious here at a glance. `validate_star_params` flags an
-implausible mass, but only once it is already absurd.
+One line with the mass, polar and equatorial radii, polar `logg`, and equatorial and
+projected velocities from [`derived_quantities`](@ref), as shown in the GUI's Model tab.
+Empty unless `surface_type == 2` and [`has_physical_scale`](@ref) holds.
 """
 function derived_summary_text(p)
     Int(get(p, :surface_type, -1)) == 2 || return ""

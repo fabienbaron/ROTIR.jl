@@ -50,27 +50,26 @@ const _GEOM_ARRAYS = (
 """
     save_star_geometry(path, star, params; nside_exp, kwargs...) -> path
 
-Write a model's geometry to FITS: the mesh, the parameters that built it, and nothing about
-what it is emitting.
+Write a model's geometry to FITS: the mesh of `star` (a `stellar_geometry`) and the
+`star_params` NamedTuple `params` it was built from. No map is written.
 
-`star` is a `stellar_geometry` and `params` the `star_params` NamedTuple it was built from.
-`nside_exp` is the HEALPix level as `tessellation_healpix` takes it — log₂(nside).
+`nside_exp` is the HEALPix level as `tessellation_healpix` takes it (log₂ nside).
 
-For a binary, pass the companion as `star2`/`params2` together with how it is placed
-(`place`, one of `:offset` or `:orbit`, and `offset` in `(West, North, toward-observer)` mas).
-Both components' meshes are then written, the secondary's under the same HDU names with a `2`
-suffix.
+Keywords:
 
-`tepochs`/`mjd` record the observation times the model was set up against, and `comment` is
-free text for the primary header.
-
-To get the geometry back:
+  * `tessellation` — `:healpix` (default) or `:longlat`.
+  * `star2`, `params2` — a companion, given together. Its arrays go in HDUs with a `2`
+    suffix.
+  * `place` — `:offset` (default) or `:orbit`; `offset` — `(West, North, toward observer)`
+    in mas, default `(0, 0, 0)`.
+  * `tepochs`, `mjd` — observation times.
+  * `secondary`, `comment` — written to the primary header.
 
 ```julia
 g = load_star_geometry("model.fits")
-g.star.vertices_xyz          # exactly the mesh that was written
-tess  = tessellation_healpix(g.nside_exp)
-star  = create_star(tess, g.params, g.t)      # and the rebuild, to compare against it
+g.star.vertices_xyz                         # the mesh as written
+tess = tessellation_healpix(g.nside_exp)
+star = create_star(tess, g.params, g.t)     # a rebuild, to compare
 ```
 """
 function save_star_geometry(path::AbstractString, star, params::NamedTuple;
@@ -163,7 +162,7 @@ function _params_columns(params::NamedTuple)
         # ASCII aliases for the three Unicode orbital elements; see `_param_ascii` in
         # src/surface_map_io.jl for why a FITS table cannot carry them verbatim.
         push!(names, _param_ascii(k)); push!(values, Float64(v))
-        push!(types, v isa Integer ? "I" : v isa Bool ? "B" : "D")
+        push!(types, v isa Bool ? "B" : v isa Integer ? "I" : "D")
     end
     return Dict("NAME" => names, "VALUE" => values, "TYPE" => types)
 end
@@ -171,15 +170,12 @@ end
 """
     load_star_geometry(path) -> NamedTuple
 
-Read back what [`save_star_geometry`](@ref) wrote.
+Read a file written by [`save_star_geometry`](@ref).
 
-Returns `star` (a `stellar_geometry` rebuilt from the stored arrays, with an empty `polyft` —
-run `setup_oi!` if a χ² is wanted), `params`, `nside_exp`, `tessellation`, `t`, `secondary`,
-and for a binary `star2`, `params2`, `place` and `offset`. `tepochs`/`mjd` come back when the
-file carried them, `nothing` otherwise.
-
-The returned `star` is the mesh AS SAVED, not a rebuild — that is the point of the file. To
-check a rebuild against it, build one from `params` and compare `vertices_xyz`.
+Returns `star` (the saved mesh as a `stellar_geometry`, with empty `polyft`: run `setup_oi!`
+for a χ²), `params`, `nside_exp`, `tessellation`, `t`, `secondary`, and for a binary `star2`,
+`params2`, `place` and `offset`, and `header`. `tepochs` and `mjd` are `nothing` when the
+file has none.
 """
 function load_star_geometry(path::AbstractString)
     FITSIO.FITS(String(path), "r") do f

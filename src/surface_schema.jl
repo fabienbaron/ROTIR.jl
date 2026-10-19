@@ -235,8 +235,8 @@ const SURFACE_TYPES = Dict{Int,SurfaceSpec}(
               # oblate with real gravity darkening, and at 0.5 it is very nearly a sphere —
               # so "+ model" on this surface type showed something that did not look like
               # what it is for. 0.999 remains the upper bound; break-up is at 1.
-              ParamSpec(:frac_escapevel, "v_eq / v_crit", "", 0.95, 0.0, 0.999, :geometry,
-                        "Equatorial rotation as a fraction of critical. 1 is break-up: " *
+              ParamSpec(:frac_escapevel, "Ω / Ω_crit", "", 0.95, 0.0, 0.999, :geometry,
+                        "Angular velocity as a fraction of critical. 1 is break-up: " *
                         "the equatorial radius diverges as it is approached.")],
              _THERMAL, [_BETA, _GRAVITY_LAW], _LIMBDARK, _ORIENTATION),
         [ParamSpec(:B_rot, "Diff. rotation B", "", 0.0, -1.0, 1.0, :orientation,
@@ -602,13 +602,13 @@ const SHIPPED_INTENSITY_GRIDS = [
 """
     INTENSITY_PARAMS
 
-The provider form, as `ParamSpec`s, in the order it is shown. A sibling of
-`surface_params`, not a part of it — see the comment above.
+The intensity-source settings, as `ParamSpec`s in display order: `intensity_source`
+(1 Planck, 2 ROTIR grid, 3 Kurucz pack, 4 Korg, 5 Rayleigh–Jeans; default 5), `grid_choice`,
+`grid_path`, the λ window in nm (`grid_lambda_min/max`, default 1500–1800), the Teff and
+log g axes (`grid_teff_min/max`, `grid_logg_min/max`) and `grid_nodes` (Korg only).
 
-`kind` is `:choice` for the backend selector, `:path` for the one text-valued field and
-`:setting` for the numbers. `:setting` rather than `:float` because none of them is a
-COORDINATE: a fit cannot free a grid's Teff window, so the form must not offer free/fixed/tied
-on these rows and `_set_state!` refuses it.
+`kind` is `:choice` for the selectors, `:path` for `grid_path` and `:setting` for the
+numbers, which cannot be fitted.
 """
 const INTENSITY_PARAMS = [
     ParamSpec(:intensity_source, "Intensity from", "", 5.0, 1.0, 5.0, :intensity,
@@ -672,14 +672,14 @@ const INTENSITY_PARAMS = [
               kind = :setting),
 ]
 
-"The backend codes [`INTENSITY_PARAMS`](@ref) offers (display order is the choices list)."
+"The `intensity_source` codes in [`INTENSITY_PARAMS`](@ref)."
 const INTENSITY_SOURCES = (1, 2, 3, 4, 5)
 
 """
     intensity_spec(name) -> ParamSpec or nothing
 
-One provider field by name, or `nothing` when the name is not one of them. The membership test
-too: `intensity_spec(:ld1) === nothing`.
+The `ParamSpec` of an intensity setting by name, or `nothing` if `name` is not one
+(`intensity_spec(:ld1) === nothing`).
 """
 function intensity_spec(name::Symbol)
     i = findfirst(ps -> ps.name === name, INTENSITY_PARAMS)
@@ -689,12 +689,9 @@ end
 """
     intensity_params_used(source, cfg = nothing) -> Tuple{Symbol,...}
 
-Which provider fields the chosen backend actually reads — the exact counterpart of
-`ld_coefficients_used`. The form SHOWS exactly these (plus the selector), so an
-analytic conversion carries no grid settings at all.
-
-With `cfg`, the grid's own choice is honoured too: `grid_path` is read only for a custom grid
-(`grid_choice = 0`), never for one that ships with ROTIR.
+The settings that intensity source `source` reads; the GUI shows these. Planck and
+Rayleigh–Jeans read none. With `cfg`, `grid_path` is included only for a custom grid
+(`grid_choice = 0`).
 """
 function intensity_params_used(source::Integer, cfg = nothing)
     src = Int(source)
@@ -730,26 +727,21 @@ end
 """
     intensity_lambda_range(cfg) -> Tuple{Float64,Float64}
 
-The `(λmin, λmax)` window in **metres**, which is what `read_kurucz_intensity` and the rest of
-ROTIR take. The form carries nanometres; this is the only place that conversion happens.
+The `(λmin, λmax)` window in metres, from the nm values `grid_lambda_min`/`grid_lambda_max`
+(defaults 1500 and 1800 nm).
 """
 intensity_lambda_range(cfg) = (1e-9 * float(get(cfg, :grid_lambda_min, 1500.0)),
                                1e-9 * float(get(cfg, :grid_lambda_max, 1800.0)))
 
+# Kept out of `validate_star_params`, which is the GUI's build gate: a wrong grid path must not
+# stop the panel drawing the surface.
 """
     validate_intensity_source(ldtype, cfg, path) -> Vector{String}
 
-Everything wrong with the provider configuration, one message each; empty means it can be
-built.
+Problems with an intensity-source configuration, one message each; empty if it can be built.
 
-`cfg` is a `name => value` mapping for the numeric fields (a `Dict` or a NamedTuple) and
-`path` the text-valued `grid_path`. Only the fields the chosen backend READS are checked —
-`intensity_params_used` says which — because a Teff window left over from a Kurucz grid must
-not refuse a Planck provider that never looks at it.
-
-Not folded into `validate_star_params`: none of this is a `star_params` field, and that
-function is the GUI's build gate, so adding a reason to refuse a model that builds perfectly
-well would stop the panel drawing a surface over a wrong file path.
+`cfg` maps the numeric settings to values (a `Dict` or a NamedTuple); `path` is `grid_path`.
+Only the settings the chosen source reads ([`intensity_params_used`](@ref)) are checked.
 """
 function validate_intensity_source(ldtype, cfg, path::AbstractString)
     msgs = String[]
