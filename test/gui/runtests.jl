@@ -44,6 +44,7 @@ function fresh_shell()
         imsky  = G.build_sky_canvas(figs[5]),  immoll = G.build_moll_canvas(figs[6]),
         msky   = G.build_sky_canvas(figs[7]),
         orbitcanvas = G.build_orbit_canvas(figs[8]),
+        rvcanvas = G.build_rv_canvas(Makie.Figure()),
         post   = G.build_post_canvas(figs[9]),
         imstar = G.build_star_canvas(figs[10]))
     G.SHELL[] = sh
@@ -1326,7 +1327,7 @@ end
         @test G.shell_obs_grouping_noun("t3phi") == "triplet"
         @test G.shell_obs_grouping_noun("uv") == ""
         # Nothing to compare with yet: the data alone, and no complaint on the console.
-        @test G.shell_obs_compare_available() == "model=0,image=0"
+        @test startswith(G.shell_obs_compare_available(), "model=0,image=0,")
         G.shell_set_obs_view("v2", "baseline", "model", "0")
         @test !sh.obs.overplot.visible[]
         @test !any(l -> occursin("compare", l) || occursin("could not draw", l), sh.console)
@@ -1374,9 +1375,9 @@ end
         @test !any(l -> occursin("could not draw", l), sh.console)
 
         # THE IMAGE: the current reconstruction on the model's geometry.
-        @test endswith(G.shell_obs_compare_available(), "image=0")
+        @test occursin("image=0", G.shell_obs_compare_available())
         G.shell_reconstruct(3, "sobel2:10.0:0", 5); drain!()
-        @test G.shell_obs_compare_available() == "model=1,image=1"
+        @test startswith(G.shell_obs_compare_available(), "model=1,image=1,")
         G.shell_set_obs_view("v2", "baseline", "image", "0")
         @test sh.obs.overplot.visible[]
         im = G.current_image(sh.session)
@@ -1394,13 +1395,70 @@ end
         v2b = ROTIR.binary_observables(sb.x, sb.stars[1], sb.x2, sb.stars2[1], dat,
                                        ROTIR.binary_phase_shift(dat.uv, ox, oy))[1]
         @test [p[2] for p in sh.obs.overpoints[]] ≈ Float32.(v2b) rtol = 1e-5
-        @test endswith(G.shell_obs_compare_available(), "image=0")
+        @test occursin("image=0", G.shell_obs_compare_available())
         @test !any(l -> occursin("could not draw", l), sh.console)
 
         # "Save plot…" draws the same figure: panels included.
         G.shell_set_obs_view("v2", "baseline", "data", "0", "0", "1")
         @test G._snapshot_figure(sh, "obs", (800, 600)) isa Makie.Figure
     end
+end
+
+@testset "the Explore tab: OITOOLS' summary and kinds, visibilities, and the orbit" begin
+    sh = fresh_shell()
+    @test G.shell_dataset_summary() == ""
+    G.shell_open(joinpath(DATA, "2007_2012_2015.Spica.oifits"), "0")
+    sh.obs = G.build_obs_canvas(Makie.Figure())
+    sh.obs === nothing && error("OITOOLSGUIExt is not loaded; the Explore plot needs it")
+    # The Dataset box: OITOOLS' rows, plus ROTIR's epochs.
+    sm = Dict(cols(r)[1] => cols(r)[2] for r in rows(G.shell_dataset_summary()))
+    @test haskey(sm, "stations") && haskey(sm, "MJD") && haskey(sm, "channels")
+    @test occursin("V²", sm["points"]) && occursin("T3φ", sm["points"])
+    @test startswith(sm["epochs"], "11") && occursin("split", sm["epochs"])
+    # The kinds follow OITOOLS' rules: one-to-one with its menu, uv always.
+    kinds = Dict(cols(r)[1] => cols(r)[2] for r in rows(G.shell_obs_kinds()))
+    @test sort(collect(keys(kinds))) == sort(["uv", "v2", "t3phi", "t3amp", "visamp", "visphi",
+                                              "diffphi", "diffvisamp", "flux"])
+    @test kinds["uv"] == "1" && kinds["v2"] == "1" && kinds["visphi"] == "0"
+    # The compare default is the data alone, as in OITOOLS.
+    @test sh.obscompare[] === :data
+    @test occursin("orbit=1", G.shell_obs_compare_available())
+
+    # THE ORBIT: the Orbit tab's orbit over the data, exactly as fit_orbit evaluates it.
+    G.shell_load_orbit(joinpath(pkgdir(ROTIR), "demos", "orbits", "spica.toml"))
+    d = G.current_dataset(sh.session); dat = d.data[1]
+    G.shell_set_obs_view("v2", "baseline", "orbit", "0")
+    @test sh.obs.overplot.visible[]
+    o = sh.orbit; v = G.apply_orbit_ties(o)
+    spec = orbit_fit_spec(G._orbit_component(o.kind1, v, :c1), G._orbit_component(o.kind2, v, :c2);
+                          elements = G.orbit_elements_nt(o), flux_ratio = v[:f], free = Symbol[])
+    ref = cvis_to_obs(orbit_model_cvis(spec, spec.values, orbit_fit_data([dat]), 1), dat)
+    @test [p[2] for p in sh.obs.overpoints[]] ≈ Float32.(ref[1]) rtol = 1e-5
+    # Residuals: (orbit − data)/σ, T3φ wrapped.
+    G.shell_set_obs_view("t3phi", "baseline", "residorbit", "0")
+    r = [p[2] for p in sh.obs.points[]]
+    @test r ≈ Float32.(ROTIR.mod360(ref[3] .- dat.t3phi) ./ dat.t3phi_err) rtol = 1e-4
+    # An orbit edit moves the overlay while the plot compares with the orbit.
+    r0 = copy(r)
+    G.shell_set_orbit_param("a", "1.7")
+    @test [p[2] for p in sh.obs.points[]] != r0
+    # The epoch table's χ² is the orbit's while comparing with it.
+    ep = rows(G.shell_epochs())
+    @test length(ep) == length(d.data) && all(cols(e)[7] == "1" for e in ep)
+    oc = G.orbit_epoch_chi2(sh)
+    @test parse(Float64, cols(ep[1])[6]) ≈ oc[1].t3phir rtol = 1e-2
+    # A 3-D star model has no orbit visibilities: refused, with the reason.
+    o.model = :tessellated
+    @test occursin("orbit=0", G.shell_obs_compare_available())
+    o.model = :analytic
+
+    # visamp / visphi are compared too (OITOOLS' set) — the orbit predicts them like the rest.
+    p = G._orbit_obs(sh, dat)
+    @test length(p.visamp) == dat.nvisamp && length(p.visphi) == dat.nvisphi
+    @test :visamp in G.OBS_PREDICTED && :visphi in G.OBS_PREDICTED
+    @test !any(l -> occursin("could not draw", l), sh.console)
+    # Save PNG builds the same view offscreen.
+    @test G._snapshot_figure(sh, "obs", (640, 480)) isa Makie.Figure
 end
 
 @testset "the command log reproduces the session" begin
@@ -2867,6 +2925,9 @@ end
     @test m.params.rpole ≈ 1.37 && m.params.tpole ≈ 4800
     @test m.tepochs !== nothing && length(m.tepochs) == 1
     stars = create_star_multiepochs(tessellation_healpix(m.nside_exp), m.params, m.tepochs)
+    # Each epoch's limb-darkening map travels with it, and matches a rebuild from the file.
+    @test size(m.ldmap) == (768, 1)
+    @test m.ldmap[:, 1] ≈ Float64.(stars[1].ldmap)
     data  = readoifits(LAM[1])[1, 1]
     setup_oi!([data], stars)
     b = chi2_breakdown(m.x, stars[1], data)
@@ -3175,6 +3236,190 @@ end
     # happens if anything above left a job undrained, and is how this testset first failed.
     @test G.shell_fit_orbit("neldermead", 30) == ""
     drain!()
+end
+
+@testset "the orbit fit uses the RV tab's velocities" begin
+    sh = fresh_shell()
+    G.shell_open(joinpath(DATA, "2007_2012_2015.Spica.oifits"), "0")
+    G.shell_load_orbit(joinpath(pkgdir(ROTIR), "demos", "orbits", "spica.toml"))
+    o = sh.orbit
+    # No table: the Orbit tab shows no RV block, and asking for RVs is refused.
+    @test G.shell_orbit_rv_params() == ""
+    @test occursin("no RV table", G.shell_fit_orbit("neldermead", 50, "1"))
+    @test G.shell_job_running() == "0"
+
+    G.shell_rv_open(joinpath(DATA, "spica_rv.csv"))
+    # The block lists every velocity parameter, the jitters included, with the RV tab's values.
+    rws = rows(G.shell_orbit_rv_params())
+    # K1, K2, gamma — not the jitters, which are set in the RV tab and never fitted
+    @test [cols(r)[1] for r in rws] == ["plx", "q", "gamma"]
+    # parallax and mass ratio giving the literature amplitudes 123.9 / 198.8 km/s
+    vv = G.apply_orbit_ties(o)
+    p0, q0 = rv_physical(vv[:a], vv[:i], vv[:P], vv[:e], 123.9, 198.8)
+    for (k, v) in (("plx", string(p0)), ("q", string(q0)), ("gamma", "0"))
+        G.shell_set_orbit_param(k, v)
+    end
+    @test occursin("K1 123.900", G.shell_rv_stats())
+    @test cols(rows(G.shell_rv_params())[1])[3] == cols(rows(G.shell_orbit_rv_params())[1])[3]
+
+    # The fit with velocities: Spica's Omega = 309.9° lies outside the file's [0, 180) box, and
+    # velocities break the astrometric mirror that box is for, so the fit uses the full circle.
+    @test o.bounds[:Omega] == (0.0, 180.0)
+    @test o.params[:Omega] > 180
+    plx = o.params[:plx]
+    @test G.shell_fit_orbit("neldermead", 150, "1") == ""
+    drain!()
+    @test G.shell_job_running() == "0"
+    @test occursin("RV", sh.status) && occursin("over 66", sh.status)
+    @test o.params[:plx] != plx                                 # written back
+    @test o.q == o.params[:q]                     # the rendering assumes the fitted mass ratio
+    @test 180 < o.params[:Omega] < 360
+    @test any(e -> occursin("rv = rv", e.code) && occursin("rv_params", e.code), sh.session.log)
+    @test occursin("rv = rv", G.shell_console())
+    # The RV tab's residuals follow the fitted orbit.
+    @test occursin("total", G.shell_rv_stats())
+
+    # Without the tick, the same orbit is fitted from the interferometry alone: the fit moves it
+    # to the equivalent (Omega - 180, omega - 180) inside the default box.
+    Ω0, ω0 = o.params[:Omega], o.params[:omega]
+    @test G.shell_fit_orbit("neldermead", 60, "0") == ""
+    @test o.params[:Omega] ≈ Ω0 - 180 && o.params[:omega] ≈ mod(ω0 + 180, 360)
+    @test occursin("Omega folded", G.shell_console())
+    drain!()
+    @test !occursin("RV", sh.status)
+    @test 0 <= o.params[:Omega] <= 180
+    # A box set by hand to the full circle is respected: no fold.
+    G.shell_set_orbit_param("Omega", "300")
+    G.shell_set_orbit_bound("Omega", "0", "360")
+    @test o.bounds[:Omega] == (0.0, 360.0)
+    @test G.shell_fit_orbit("neldermead", 30, "0") == ""
+    @test o.params[:Omega] == 300
+    drain!()
+    G.shell_rv_close()
+    @test G.shell_orbit_rv_params() == ""
+end
+
+@testset "the RV tab" begin
+    sh = fresh_shell()
+    c = sh.rvcanvas
+    # Empty state: nothing drawn, a message, no rows.
+    @test G.shell_rv_summary() == "" && G.shell_rv_params() == "" && G.shell_rv_rows() == ""
+    # placeholders, not empty vectors: GLMakie cannot build those (see `_rv_nopt`)
+    @test length(c.pts[]) == 1 && all(isnan, c.pts[][1]) && occursin("Open RV table", c.message[])
+    @test occursin("no RV table", G.shell_rv_close())
+
+    # Spica, against its literature orbit.
+    G.shell_load_orbit(joinpath(pkgdir(ROTIR), "demos", "orbits", "spica.toml"))
+    msg = G.shell_rv_open("file://" * joinpath(DATA, "spica_rv.csv"))
+    @test occursin("66 velocities (33 a, 33 b)", msg)
+    @test occursin("spica_rv.csv", G.shell_rv_summary())
+    @test any(e -> e.binding == "rv" && occursin("read_rv(", e.code), sh.session.log)
+    # The velocity parameters are the ORBIT's: seeded once, K's and γ free, jitters fixed.
+    o = sh.orbit
+    @test all(haskey(o.params, k) for k in (:plx, :q, :gamma, :jit_a, :jit_b))
+    @test :plx in o.free && :q in o.free && :gamma in o.free && !(:jit_a in o.free)
+    @test [cols(r)[1] for r in rows(G.shell_rv_params())] == ["plx", "q", "gamma"]
+    # seeded so the amplitudes match the data's half-ranges at the orbit
+    st = rv_start(sh.rv); pv = G._rv_values(G.apply_orbit_ties(o), sh.rv)
+    @test pv.K1 ≈ st.K1 rtol = 1e-2
+    @test pv.K2 ≈ st.K2 rtol = 1e-2
+    @test [cols(r)[1] for r in rows(G.shell_rv_jitter())] == ["jit_a", "jit_b"]
+    @test all(length(cols(r)) == 8 for r in rows(G.shell_rv_params()))
+    @test cols(rows(G.shell_rv_params())[1])[2] == "mas"            # plx
+    @test cols(rows(G.shell_rv_params())[3])[2] == "km/s"           # gamma
+
+    # The plot holds every point, with one error bar each, and a model curve per star.
+    @test length(c.pts[]) == 66 && length(c.ptcolors[]) == 66 && length(c.ptmarkers[]) == 66
+    @test length(c.bars[]) == 132 && length(c.res[]) == 66
+    @test length(c.curve_a[]) == 400 && length(c.curve_b[]) == 400
+    @test all(0 .<= first.(c.pts[]) .<= 1)                   # phase axis
+    @test isempty(c.message[])
+    @test length(rows(G.shell_rv_rows())) == 66
+    @test all(length(cols(r)) == 8 for r in rows(G.shell_rv_rows()))
+    st = G.shell_rv_stats()
+    @test occursin("a (primary)", st) && occursin("b (secondary)", st) && occursin("total", st)
+
+    # Editing the parallax here edits the orbit and moves the curve; residuals follow.
+    a0 = copy(c.curve_a[]); r0 = copy(c.res[])
+    @test G.shell_set_orbit_param("plx", "20") == ""
+    @test o.params[:plx] == 20.0
+    @test c.curve_a[] != a0 && c.res[] != r0
+    # …and so does an ELEMENT edited in the Orbit tab.
+    a1 = copy(c.curve_a[])
+    G.shell_set_orbit_param("e", "0.2")
+    @test c.curve_a[] != a1
+
+    # Data synthesised from the current orbit leave zero residuals.
+    v = G.apply_orbit_ties(o)
+    rv = sh.rv
+    pv = G._rv_values(v, rv)
+    m = rv_model(G._rv_bp(v), rv; K1 = pv.K1, K2 = pv.K2, gamma = pv.gamma)
+    sh.rv = RVData(rv.jd, m, rv.sigma, rv.star, rv.instrument, rv.path)
+    G.refresh_rv!(sh)
+    @test maximum(abs.(last.(c.res[]))) < 1e-4
+    sh.rv = rv
+
+    # Time axis, and residuals in σ.
+    @test G.shell_rv_set_view("time", "1") == ""
+    @test G.shell_rv_view() == "time\t1"
+    @test minimum(first.(c.pts[])) > 51000                    # MJD
+    @test c.reslabel[] == "O − C (σ)" && c.xlabel[] == "MJD"
+    @test length(c.curve_a[]) >= 400
+    @test occursin("x axis", G.shell_rv_set_view("sideways", "0"))
+    G.shell_rv_set_view("phase", "0")
+
+    # The Orbit tab's time cursor shows here too.
+    @test isempty(c.cursor[])
+    G.shell_set_times("1", "", "", "")
+    G.refresh_orbit!(sh)
+    @test length(c.cursor[]) == 1
+    G.shell_set_times("0", "", "", "")
+
+    # Two instruments: an offset parameter appears, and goes with the table.
+    dir = mktempdir()
+    f2 = joinpath(dir, "two.csv")
+    write_rv(f2, RVData(rv.jd, rv.rv, rv.sigma, rv.star,
+                        [isodd(k) ? "UVES" : "SOPHIE-2" for k in 1:length(rv)], ""))
+    G.shell_rv_open(f2)
+    @test [cols(r)[1] for r in rows(G.shell_rv_params())] ==
+          ["plx", "q", "gamma", "dgamma_SOPHIE_2"]
+    @test :dgamma_SOPHIE_2 in o.free
+    @test occursin("SOPHIE-2", cols(rows(G.shell_rv_params())[4])[8])
+    @test length(unique(c.ptmarkers[])) == 2
+    # the offset moves only that instrument's points onto the common curve
+    p0 = copy(c.pts[])
+    G.shell_set_orbit_param("dgamma_SOPHIE_2", "5")
+    d = last.(c.pts[]) .- last.(p0)
+    @test all(isapprox.(d[2:2:end], -5; atol = 1e-3)) && all(iszero, d[1:2:end])
+    # K's and γ survive a reopen; the offset does not survive a close
+    @test G.shell_rv_close() == "RV table closed"
+    @test !haskey(o.params, :dgamma_SOPHIE_2) && haskey(o.params, :plx)
+    @test o.params[:plx] == 20.0
+    @test all(isnan, c.pts[][1]) && length(c.pts[]) == 1 && G.shell_rv_summary() == ""
+
+    # A bad file is refused, and leaves no table behind.
+    bad = joinpath(dir, "bad.csv"); write(bad, "MJD,RV,sigma\n1,2,3\n")
+    @test occursin("could not read", G.shell_rv_open(bad))
+    @test sh.rv === nothing
+
+    # The orbit TOML carries the velocity parameters.
+    G.shell_rv_open(joinpath(DATA, "spica_rv.csv"))
+    G.shell_set_orbit_param("jit_b", "3.5")
+    # a jitter is a setting: reopening the table does not make it free, and the fit passes
+    # its value without fitting it
+    G.shell_set_orbit_state("jit_b", "free")
+    G.shell_rv_open(joinpath(DATA, "spica_rv.csv"))
+    @test !(:jit_b in o.free) && o.params[:jit_b] == 3.5
+    p = joinpath(dir, "o.toml")
+    G.save_orbit(o, p)
+    o2 = G.load_orbit(p)
+    @test o2.params[:plx] == 20.0 && o2.params[:jit_b] == 3.5
+
+    # Save plot… builds the RV figure offscreen.
+    @test G._snapshot_figure(sh, "rv", (640, 480)) isa Makie.Figure
+    # The file picker lists RV tables for the "rv" purpose.
+    @test occursin("spica_rv.csv", G.picker_list(DATA, "0", "rv"))
+    @test !occursin(".oifits", G.picker_list(DATA, "0", "rv"))
 end
 
 @testset "a fit objective that always fails is refused, not reported as a result" begin

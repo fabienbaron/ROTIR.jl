@@ -71,7 +71,8 @@ phys_radius_rsun(θ_mas, d_pc) = θ_mas / RAD_MAS * (d_pc * PC_M) / R_SUN_M
 
 # --- system ---------------------------------------------------------------------------
 const D_PC   = 77.0        # pc  (π = 12.99 mas, between the Hipparcos and orbital values)
-const P_ORB  = 4.0145      # d
+const P_ORB  = 4.01454     # d, ANOMALISTIC (periastron to periastron; Shobbrook+1972, as in
+                           # Aufdenberg+2015). ω advances separately through DOMEGA below.
 const A_ORB  = 1.54        # mas, semi-major axis of the RELATIVE orbit
 const E_ORB  = parse(Float64, get(ENV, "ECC", "0.123"))   # Aufdenberg+2015; see the note above
 const T0_ORB = 2454189.40  # JD, periastron

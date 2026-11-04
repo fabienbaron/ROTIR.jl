@@ -303,6 +303,14 @@ struct OrbitFitSpec{TT}
     comp2::OrbitComponent
     n1::Int          # number of comp1 parameters
     n2::Int
+    # Radial velocities. `rvinst` lists the table's instruments, the first being the
+    # reference (no offset); `nrv` is the length of the RV block that follows `f`:
+    # K1, K2, gamma, one dgamma_<instrument> per further instrument, jit_a, jit_b. Both are
+    # empty/0 for a fit without velocities.
+    rvinst::Vector{String}
+    nrv::Int
+    # true: the block starts with plx, q (the amplitudes follow from the orbit); false: K1, K2.
+    rvphys::Bool
     # Parameters computed from the others (src/orbit_ties.jl). The type parameter matters:
     # declared as plain `::OrbitTies` this field is abstract, every `spec.ties.fn` call goes
     # through dynamic dispatch, and resolving a one-line tie costs 5x the time and an extra
@@ -312,7 +320,8 @@ end
 
 """
     orbit_fit_spec(comp1, comp2; elements, flux_ratio = 1.0, free = nothing,
-                   bounds = Dict()) -> OrbitFitSpec
+                   bounds = Dict(), ties = Dict(), rv = nothing,
+                   rv_params = NamedTuple()) -> OrbitFitSpec
 
 Assemble the parameter layout. `elements` is a NamedTuple of orbital elements (any of
 $(ORBIT_ELEMENTS); missing ones take sensible defaults, `e = 0`, `omega = 90`, `dP = 0`).
@@ -321,11 +330,34 @@ $(ORBIT_ELEMENTS); missing ones take sensible defaults, `e = 0`, `omega = 90`, `
 two-component interferometric orbit actually constrains — `a, i, Omega, T0` — plus the flux
 ratio and every component parameter. `bounds` overrides individual boxes, e.g.
 `Dict(:a => (0.5, 1.5))`.
+
+With `rv` (an [`RVData`](@ref)) the vector gains an RV block after `f`:
+
+| name | meaning | default start | box |
+|---|---|---|---|
+| `plx` | parallax, mas | from [`rv_start`](@ref) and the elements | [1e-4, 1e4] |
+| `q` | mass ratio M2/M1 | idem | [0.01, 100] |
+| `gamma` | systemic velocity, km/s | from `rv_start` | [−1000, 1000] |
+| `dgamma_<instrument>` | offset of each instrument after the first, km/s | 0 | [−50, 50] |
+| `jit_a`, `jit_b` | jitter of each star, km/s, added in quadrature to σ | 0 | [0, 50] |
+
+The semi-amplitudes are not parameters: with the interferometry fitting `a`, `i`, `P` and `e`,
+they follow from `plx` and `q` through [`rv_amplitudes`](@ref). `rv_parametrization =
+:amplitudes` fits `K1`, `K2` (km/s, box [0, 1000]) in their place instead.
+
+`rv_params` overrides starting values by name, e.g. `(plx = 12.99, jit_b = 2.0)`. The default
+`free` then also includes `plx, q, gamma` (or `K1, K2, gamma`) and the offsets; the jitters are
+fitted only when listed. Velocities break the astrometric (Omega, omega) → (Omega+180°, omega+180°) mirror,
+so `Omega`'s box becomes [0, 360) unless `bounds` sets it.
 """
 function orbit_fit_spec(comp1::OrbitComponent, comp2::OrbitComponent;
                         elements, flux_ratio::Real = 1.0,
                         free = nothing, bounds = Dict{Symbol,Tuple{Float64,Float64}}(),
-                        ties = Dict{Symbol,String}())
+                        ties = Dict{Symbol,String}(), rv = nothing,
+                        rv_params = NamedTuple(), rv_parametrization::Symbol = :physical)
+    rv_parametrization in (:physical, :amplitudes) ||
+        error("orbit_fit_spec: rv_parametrization is :physical or :amplitudes")
+    rvphys = rv_parametrization === :physical
     el = merge((a = 1.0, i = 90.0, Omega = 0.0, omega = 90.0, e = 0.0,
                 P = 1.0, T0 = 0.0, dP = 0.0, domega = 0.0), elements)
     haskey(elements, :P) || error("orbit_fit_spec: `elements` must include the period P")
@@ -347,6 +379,42 @@ function orbit_fit_spec(comp1::OrbitComponent, comp2::OrbitComponent;
     end
     push!(names, :f); push!(values, Float64(flux_ratio)); push!(lo, 0.0); push!(hi, 100.0)
 
+    rvinst = String[]
+    if rv !== nothing
+        rvinst = rv_instruments(rv)
+        offn = rv_offset_name.(rvinst[2:end])
+        allunique(offn) || error("orbit_fit_spec: instrument names $(rvinst) do not give " *
+                                 "distinct parameter names")
+        st = rv_start(rv)
+        if rvphys
+            # parallax and mass ratio that give the data's amplitudes at these elements
+            p0, q0 = rv_physical(el.a, el.i, el.P, el.e, st.K1, st.K2)
+            (isfinite(p0) && p0 > 0) || (p0 = 1.0)
+            (isfinite(q0) && q0 > 0) || (q0 = 1.0)
+            rvn = Symbol[:plx, :q, :gamma, offn..., :jit_a, :jit_b]
+            rvv = Float64[p0, clamp(q0, 0.01, 100.0), st.gamma, zeros(length(offn))..., 0.0, 0.0]
+            rvl = Float64[1e-4, 0.01, -1000.0, fill(-50.0, length(offn))..., 0.0, 0.0]
+            rvh = Float64[1e4, 100.0, 1000.0, fill(50.0, length(offn))..., 50.0, 50.0]
+        else
+            rvn = Symbol[:K1, :K2, :gamma, offn..., :jit_a, :jit_b]
+            rvv = Float64[st.K1, st.K2, st.gamma, zeros(length(offn))..., 0.0, 0.0]
+            rvl = Float64[0.0, 0.0, -1000.0, fill(-50.0, length(offn))..., 0.0, 0.0]
+            rvh = Float64[1000.0, 1000.0, 1000.0, fill(50.0, length(offn))..., 50.0, 50.0]
+        end
+        for (k, v) in pairs(rv_params)
+            j = findfirst(==(Symbol(k)), rvn)
+            j === nothing && error("orbit_fit_spec: unknown RV parameter $k in `rv_params`; " *
+                                   "available: $(join(string.(rvn), ", "))")
+            rvv[j] = Float64(v)
+        end
+        append!(names, rvn); append!(values, rvv); append!(lo, rvl); append!(hi, rvh)
+        hi[3] = 360.0                                # Omega: the mirror is broken
+    elseif !isempty(rv_params)
+        error("orbit_fit_spec: `rv_params` given without `rv`")
+    end
+    nrv = length(names) - (length(ORBIT_ELEMENTS) + length(component_param_names(comp1)) +
+                           length(component_param_names(comp2)) + 1)
+
     for (k, (l, h)) in bounds
         j = findfirst(==(k), names)
         j === nothing && error("orbit_fit_spec: unknown parameter $k in `bounds`")
@@ -362,6 +430,8 @@ function orbit_fit_spec(comp1::OrbitComponent, comp2::OrbitComponent;
         deflt = Symbol[:a, :i, :Omega, :T0, :f]
         append!(deflt, Symbol.(:c1_, component_param_names(comp1)))
         append!(deflt, Symbol.(:c2_, component_param_names(comp2)))
+        rv === nothing || append!(deflt, [(rvphys ? (:plx, :q) : (:K1, :K2))..., :gamma,
+                                          rv_offset_name.(rvinst[2:end])...])
         free = deflt
     end
     compiled_ties = compile_ties(names, ties)
@@ -385,7 +455,8 @@ function orbit_fit_spec(comp1::OrbitComponent, comp2::OrbitComponent;
             error("orbit_fit_spec: start value $(values[j]) for $(names[j]) is outside " *
                   "its bounds [$(lo[j]), $(hi[j])]")
     end
-    OrbitFitSpec(names, values, lo, hi, sort!(idx), comp1, comp2, n1, n2, compiled_ties)
+    OrbitFitSpec(names, values, lo, hi, sort!(idx), comp1, comp2, n1, n2, rvinst, nrv,
+                 rvphys, compiled_ties)
 end
 
 # ---------------------------------------------------------------------------------------
@@ -398,9 +469,34 @@ end
     nel = length(ORBIT_ELEMENTS)
     p1 = view(θ, (nel + 1):(nel + spec.n1))
     p2 = view(θ, (nel + 1 + spec.n1):(nel + spec.n1 + spec.n2))
-    f  = θ[end]
+    f  = θ[nel + spec.n1 + spec.n2 + 1]
     return (a = a, i = i, Omega = Om, omega = om, e = e, P = P, T0 = T0, dP = dP,
             domega = dom), p1, p2, f
+end
+
+# The elements as `binary_RV` / `orbit_to_rotir_offset` read them.
+_orbit_bp(el) = (i = el.i, Ω = el.Omega, ω = el.omega, P = el.P, a = el.a, e = el.e,
+                 T0 = el.T0, q = 1.0, dP = el.dP, dω = el.domega)
+
+"`(K1, K2, gamma, offsets, jitter)` from a resolved parameter vector with an RV block."
+function _rv_block(spec::OrbitFitSpec, θ)
+    j = length(ORBIT_ELEMENTS) + spec.n1 + spec.n2 + 1      # index of f
+    noff = length(spec.rvinst) - 1
+    offsets = Dict{String,eltype(θ)}(spec.rvinst[m + 1] => θ[j + 3 + m] for m in 1:noff)
+    jitter  = (a = θ[j + 4 + noff], b = θ[j + 5 + noff])
+    # ORBIT_ELEMENTS order: a, i, Omega, omega, e, P, …
+    K1, K2 = spec.rvphys ? rv_amplitudes(θ[1], θ[2], θ[6], θ[5], θ[j + 1], θ[j + 2]) :
+                           (θ[j + 1], θ[j + 2])
+    return K1, K2, θ[j + 3], offsets, jitter
+end
+
+function _rv_check(spec::OrbitFitSpec, rv)
+    spec.nrv > 0 || error("RV data given, but the spec has no RV block: build it with " *
+                          "orbit_fit_spec(...; rv = rv)")
+    rv_instruments(rv) == spec.rvinst ||
+        error("the RV table's instruments $(rv_instruments(rv)) differ from the spec's " *
+              "$(spec.rvinst)")
+    return nothing
 end
 
 """
@@ -441,8 +537,7 @@ end
 "Epoch-`k` visibilities for a parameter vector whose ties are ALREADY resolved."
 function _orbit_cvis(spec::OrbitFitSpec, θ, fd::OrbitFitData, k::Int)
     el, p1, p2, f = _unpack(spec, θ)
-    bp = (i = el.i, Ω = el.Omega, ω = el.omega, P = el.P, a = el.a, e = el.e,
-          T0 = el.T0, q = 1.0, dP = el.dP, dω = el.domega)
+    bp = _orbit_bp(el)
     # One Kepler solve per DISTINCT time, then gather back to the uv points.
     ows, decs = orbit_to_rotir_offset(bp, fd.tsrt[k])
     ras = -ows                                   # East = -West
@@ -455,19 +550,26 @@ function _orbit_cvis(spec::OrbitFitSpec, θ, fd::OrbitFitData, k::Int)
 end
 
 """
-    orbit_chi2(spec, θ, fd; weights = OI_DEFAULT_WEIGHTS, split = false)
+    orbit_chi2(spec, θ, fd; weights = OI_DEFAULT_WEIGHTS, split = false, rv = nothing)
 
-Total χ² over all epochs, or `(χ²_V2, χ²_T3amp, χ²_T3phi)` with `split = true`.
+Total over all epochs, or `(χ²_V2, χ²_T3amp, χ²_T3phi)` with `split = true`.
+
+With `rv` (the spec must have been built with the same table) the velocities are added:
+the total then includes [`rv_nll2`](@ref), which equals χ²_RV when the jitters are zero, and
+`split = true` returns a fourth entry, χ²_RV with jitter-inflated errors.
 """
 orbit_chi2(spec::OrbitFitSpec, θ, fd::OrbitFitData;
-           weights = OI_DEFAULT_WEIGHTS, split::Bool = false) =
-    _orbit_chi2(spec, apply_ties(spec.ties, θ), fd; weights = weights, split = split)
+           weights = OI_DEFAULT_WEIGHTS, split::Bool = false, rv = nothing) =
+    _orbit_chi2(spec, apply_ties(spec.ties, θ), fd; weights = weights, split = split, rv = rv)
 
 "χ² for a parameter vector whose ties are ALREADY resolved (see `resolve_params`)."
 function _orbit_chi2(spec::OrbitFitSpec, θr, fd::OrbitFitData;
-                     weights = OI_DEFAULT_WEIGHTS, split::Bool = false)
+                     weights = OI_DEFAULT_WEIGHTS, split::Bool = false, rv = nothing)
     c = zeros(Float64, 3)
-    for k in eachindex(fd.data)
+    # All-zero weights skip the visibilities entirely: an RV-only objective then costs the
+    # Kepler solves for the velocities and nothing else.
+    oi = any(!iszero, (weights[1], weights[2], weights[3]))
+    for k in (oi ? eachindex(fd.data) : 1:0)
         cvis = _orbit_cvis(spec, θr, fd, k)
         d = fd.data[k]
         v2m, t3am, t3pm = cvis_to_obs(cvis, d)
@@ -476,7 +578,44 @@ function _orbit_chi2(spec::OrbitFitSpec, θr, fd::OrbitFitData;
         c[3] += sum(abs2, mod360(t3pm .- d.t3phi) ./ d.t3phi_err)
     end
     c .*= (weights[1], weights[2], weights[3])
+    if rv !== nothing
+        _rv_check(spec, rv)
+        el, _, _, _ = _unpack(spec, θr)
+        K1, K2, γ, off, jit = _rv_block(spec, θr)
+        bp = _orbit_bp(el)
+        split && return (c[1], c[2], c[3],
+                         rv_chi2(bp, rv; K1 = K1, K2 = K2, gamma = γ, offsets = off, jitter = jit))
+        return sum(c) + rv_nll2(bp, rv; K1 = K1, K2 = K2, gamma = γ, offsets = off, jitter = jit)
+    end
     return split ? (c[1], c[2], c[3]) : sum(c)
+end
+
+"""
+    orbit_residuals(spec, θ, fd; rv = nothing) -> Vector
+
+Normalised residuals `(model − data)/σ` for a full parameter vector `θ` (ties are applied
+here): V², T3amp and T3φ (wrapped to ±180°), epoch by epoch, then with `rv` the velocity
+residuals `(model − rv)/√(σ² + s²)`. `sum(abs2, r)` equals the χ² parts of
+[`orbit_chi2`](@ref) with default weights.
+"""
+function orbit_residuals(spec::OrbitFitSpec, θ, fd::OrbitFitData; rv = nothing)
+    θr = apply_ties(spec.ties, θ)
+    out = Float64[]
+    for k in eachindex(fd.data)
+        d = fd.data[k]
+        v2m, t3am, t3pm = cvis_to_obs(_orbit_cvis(spec, θr, fd, k), d)
+        append!(out, (v2m .- d.v2) ./ d.v2_err)
+        append!(out, (t3am .- d.t3amp) ./ d.t3amp_err)
+        append!(out, mod360(t3pm .- d.t3phi) ./ d.t3phi_err)
+    end
+    if rv !== nothing
+        _rv_check(spec, rv)
+        el, _, _, _ = _unpack(spec, θr)
+        K1, K2, γ, off, jit = _rv_block(spec, θr)
+        append!(out, .-rv_residuals(_orbit_bp(el), rv; K1 = K1, K2 = K2, gamma = γ,
+                                    offsets = off, jitter = jit))
+    end
+    return out
 end
 
 # ---------------------------------------------------------------------------------------
@@ -505,17 +644,25 @@ origin, component 2 is displaced by the orbit.
   (nested sampling, returns a posterior and log Z).
 * `model` — `:analytic` (default) or `:tessellated`.
 * `weights` — observable weights, default `OI_DEFAULT_WEIGHTS` (V², T3amp, T3φ on).
+* `rv` — radial velocities ([`RVData`](@ref)), fitted together with the interferometry; see
+  [`orbit_fit_spec`](@ref) for the parameters this adds (K1, K2, gamma, per-instrument
+  offsets, jitters). `rv_params` sets their starting values; `rv_parametrization` chooses
+  `plx, q` (default) or `K1, K2`.
 * `maxeval`, `min_num_live_points`, `use_stepsampler` — passed to the chosen fitter.
 
 # Returns
 A NamedTuple with `params` (full vector), `elements`, `chi2`, `chi2_split`, `chi2_red`,
-`spec`, `data`, and — for `:ultranest` — `posterior`, `logz`, `q16`, `q84`.
+`spec`, `data`, `rv`, and — for `:ultranest` / `:nautilus` — `posterior`, `logz`, `q16`,
+`q84`. With velocities, `chi2_split` has a fourth entry (χ²_RV), `chi2_red` divides by the
+interferometric plus RV point count, and `rvpar` holds the RV block by name. The fit
+minimises χ²_OI + [`rv_nll2`](@ref), which is the plain χ² when the jitters are fixed at 0.
 
 # Degeneracies worth knowing
 At `e = 0` the argument of periastron `omega` is undefined and is not fitted by default.
 The residual `(Omega, T0) -> (Omega + 180°, T0 + P/2)` degeneracy is broken by restricting
 `Omega` to `[0, 180)` while `T0` spans one full period — together exactly one fundamental
-domain. An elliptical Gaussian's `pa` is likewise capped at 180°, since the profile is
+domain. Radial velocities break the (Omega, omega) mirror, and with `rv` Omega spans
+`[0, 360)`. An elliptical Gaussian's `pa` is likewise capped at 180°, since the profile is
 symmetric under a half turn.
 
 `P` is not free by default: for most systems an eclipse or spectroscopic ephemeris pins it
@@ -539,6 +686,8 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
                    elements, flux_ratio::Real = 1.0, free = nothing,
                    bounds = Dict{Symbol,Tuple{Float64,Float64}}(),
                    ties = Dict{Symbol,String}(),
+                   rv = nothing, rv_params = NamedTuple(),
+                   rv_parametrization::Symbol = :physical,
                    method::Symbol = :neldermead, model::Symbol = :analytic,
                    weights = OI_DEFAULT_WEIGHTS, maxeval::Int = 20_000,
                    threaded::Bool = true,
@@ -563,20 +712,24 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
 
     fd   = orbit_fit_data(data)
     spec = orbit_fit_spec(comp1, comp2; elements = elements, flux_ratio = flux_ratio,
-                          free = free, bounds = bounds, ties = ties)
+                          free = free, bounds = bounds, ties = ties,
+                          rv = rv, rv_params = rv_params,
+                          rv_parametrization = rv_parametrization)
     idx  = spec.free
     θ0   = copy(spec.values)
+    nrvp = rv === nothing ? 0 : length(rv)
+    npts = fd.ntot + nrvp
 
-    chi2_of = let spec = spec, fd = fd, weights = weights
-        p -> _orbit_chi2(spec, resolve_params(spec, p), fd; weights = weights)
+    chi2_of = let spec = spec, fd = fd, weights = weights, rv = rv
+        p -> _orbit_chi2(spec, resolve_params(spec, p), fd; weights = weights, rv = rv)
     end
 
     if verbose
-        @printf("fit_orbit: %d epochs, %d points (V² %d, T3amp %d, T3φ %d)\n",
-                length(fd.data), fd.ntot, fd.nv2, fd.nt3amp, fd.nt3phi)
+        @printf("fit_orbit: %d epochs, %d points (V² %d, T3amp %d, T3φ %d, RV %d)\n",
+                length(fd.data), npts, fd.nv2, fd.nt3amp, fd.nt3phi, nrvp)
         @printf("           %d free of %d parameters: %s\n", length(idx), length(spec.names),
                 join(string.(spec.names[idx]), ", "))
-        @printf("           starting χ²/n = %.3f\n", chi2_of(θ0[idx]) / fd.ntot)
+        @printf("           starting χ²/n = %.3f\n", chi2_of(θ0[idx]) / npts)
     end
 
     local best, extra
@@ -605,12 +758,25 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
     end
 
     θbest = resolve_params(spec, best)
-    cs    = _orbit_chi2(spec, θbest, fd; weights = weights, split = true)
+    cs    = _orbit_chi2(spec, θbest, fd; weights = weights, split = true, rv = rv)
     el    = NamedTuple{ORBIT_ELEMENTS}(ntuple(j -> θbest[j], length(ORBIT_ELEMENTS)))
-    verbose && @printf("           final    χ²/n = %.3f  (V² %.2f, T3amp %.2f, T3φ %.2f)\n",
-                       sum(cs)/fd.ntot, cs[1]/max(fd.nv2,1), cs[2]/max(fd.nt3amp,1),
-                       cs[3]/max(fd.nt3phi,1))
+    verbose && @printf("           final    χ²/n = %.3f  (V² %.2f, T3amp %.2f, T3φ %.2f%s)\n",
+                       sum(cs)/npts, cs[1]/max(fd.nv2,1), cs[2]/max(fd.nt3amp,1),
+                       cs[3]/max(fd.nt3phi,1),
+                       rv === nothing ? "" : @sprintf(", RV %.2f", cs[4]/max(nrvp,1)))
+    rvpar = NamedTuple()
+    if rv !== nothing
+        j = length(spec.names) - spec.nrv
+        nt = NamedTuple{Tuple(spec.names[j+1:end])}(Tuple(θbest[j+1:end]))
+        if spec.rvphys
+            # what plx and q mean: the amplitudes, the distance and the dynamical masses
+            K1, K2 = rv_amplitudes(el.a, el.i, el.P, el.e, nt.plx, nt.q)
+            dm = dynamical_masses(el.a, el.P, nt.plx, nt.q)
+            nt = merge(nt, (; K1, K2, M = dm.M, M1 = dm.M1, M2 = dm.M2, d = dm.d))
+        end
+        rvpar = (rvpar = nt,)
+    end
     return merge((params = θbest, names = spec.names, elements = el,
-                  chi2 = sum(cs), chi2_split = cs, chi2_red = sum(cs)/fd.ntot,
-                  spec = spec, data = fd), extra)
+                  chi2 = sum(cs), chi2_split = cs, chi2_red = sum(cs)/npts,
+                  spec = spec, data = fd, rv = rv), rvpar, extra)
 end

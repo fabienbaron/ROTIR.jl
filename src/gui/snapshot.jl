@@ -98,9 +98,16 @@ function _snapshot_figure(sh::ShellState, which::String, sz::Tuple{Int,Int})
         return fig
     elseif which == "orbit"
         c = build_orbit_canvas(fig)
-        te = d === nothing ? Float64[] : d.tepochs
+        # JD, and the cursor, exactly as `refresh_orbit!` draws the screen.
+        te = d === nothing ? Float64[] : d.mjd .+ 2_400_000.5
         show_orbit!(c, sh.orbit, te; nside_exp = sh.nside_exp[], T = sh.precision[],
-                    binary = _orbit_binary(sh))
+                    binary = _orbit_binary(sh), cursor = cursor_time(sh))
+        return fig
+    elseif which == "rv"
+        sh.rv === nothing && return "! no RV table open"
+        c = build_rv_canvas(fig)
+        show_rv!(c, sh.rv, apply_orbit_ties(sh.orbit); xaxis = sh.rvxaxis,
+                 normalized = sh.rvnormalized, cursor = cursor_time(sh))
         return fig
     elseif which == "posterior"
         f = current_fit(sh.session)

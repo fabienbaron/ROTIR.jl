@@ -27,10 +27,11 @@ import ROTIR: plot2d, plot2d_binary, plot2d_wireframe, plot2d_allepochs, plot3d,
 # exported by the parent — they are shared implementation detail, so they are named here.
 using ROTIR: _polar_radius, _mesh_rotation, _spin_axis, _mesh_surface_field,
              _interp_surface, _mesh_body_curve, _visible_segments, _latlong_dims,
-             _binary_value_range, _binary_axis_max, graticule_segments,
+             _binary_value_range, _binary_axis_max, _map_range, graticule_segments,
              rot_vertex, npix2nside, ang2pix_nest, longlat_ang2pix
 
 include(joinpath(pkgdir(ROTIR), "src", "oiplot_spheroid.jl"))
+include(joinpath(pkgdir(ROTIR), "src", "oiplot_rv.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "animation_movie.jl"))
 
 end # module

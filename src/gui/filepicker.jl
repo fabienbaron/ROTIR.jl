@@ -15,11 +15,13 @@
 const PICKER_EXTENSIONS = (".oifits", ".fits", ".fit", ".oifit")
 const PICKER_EXTENSIONS_ORBIT = (".toml",)
 const PICKER_EXTENSIONS_MAP   = (".fits", ".fit")
+const PICKER_EXTENSIONS_RV    = (".csv", ".txt", ".dat")
 
 "Extensions the picker offers for a purpose."
 picker_extensions(purpose::AbstractString) =
     purpose == "orbit" ? PICKER_EXTENSIONS_ORBIT :
     purpose == "map" || purpose == "geometry" ? PICKER_EXTENSIONS_MAP :
+    purpose == "rv" ? PICKER_EXTENSIONS_RV :
     PICKER_EXTENSIONS
 
 """

@@ -302,6 +302,10 @@ save_surface_map("polaris.fits", x, params;
                  chi2 = chi2, ndata = ndata)
 ```
 
+`ldmap = stars` also writes each epoch's limb-darkening map (`star.ldmap`) as an `LDMAP`
+image of `npix × nepochs`; a single vector or a matrix is accepted too. It is returned as
+`m.ldmap`.
+
 [`load_surface_map`](@ref) reads it back with the parameter types it was saved with
 (`surface_type` and `ldtype` stay `Int`), so the χ² can be reproduced from the file:
 
@@ -313,5 +317,6 @@ chi2_breakdown(m.x, stars[1], data[1])
 ```
 
 The GUI's **Save model map** and **Load model map** buttons call these. Save writes the
-reconstruction if there is one, otherwise the model's parametric map; load restores the
-parameters as a model and the values as an image.
+reconstruction if there is one, otherwise the model's parametric map, and with a model also
+each epoch's limb-darkening map; load restores the parameters as a model and the values as an
+image.

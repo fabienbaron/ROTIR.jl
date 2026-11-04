@@ -680,6 +680,30 @@ const BT1, BT2 = handle_reflection(BS1, parametric_temperature_map(sp1(), BS1),
         finish("rv_data_3col")
     end
 
+    @testset "plot_rv with an RVData table" begin
+        K1, K2, γ = 120.0, 190.0, 1.0
+        t = BP.T0 .+ collect(range(0, 3, length = 20)) .* BP.P
+        star = [isodd(k) ? :a : :b for k in eachindex(t)]
+        inst = [k <= 10 ? "UVES" : "SOPHIE" for k in eachindex(t)]
+        m = rv_model(BP, RVData(t, zeros(20), ones(20), star, inst, "");
+                     K1 = K1, K2 = K2, gamma = γ, offsets = Dict("SOPHIE" => 2.0))
+        rv = RVData(t, m, fill(3.0, 20), star, inst, "")
+        kw = (K1 = K1, K2 = K2, γ = γ, offsets = Dict("SOPHIE" => 2.0))
+        fig, axs = plot_rv(BP, rv; kw...)
+        @test length(axs) == 2                           # velocities, residuals
+        @test nlines(axs[1]) >= 2                        # two model curves
+        # one errorbar per (star, instrument): 2 × 2 groups, on both panels
+        @test pylen(axs[1].containers) == 4 && pylen(axs[2].containers) == 4
+        # the residuals are zero for data made from the same model, offsets included
+        c = rv_curves(BP, rv; K1 = K1, K2 = K2, gamma = γ, offsets = Dict("SOPHIE" => 2.0))
+        @test maximum(abs.(c.resid)) < 1e-9
+        @test all(0 .<= c.x .<= 1) && length(c.xc) == 400
+        finish("rv_table")
+        fig, axs = plot_rv(BP, rv; kw..., residuals = false, xaxis = :time)
+        @test length(axs) == 1
+        finish("rv_table_time")
+    end
+
     # -----------------------------------------------------------------
     @testset "plot_mollweide" begin
         # healpix branch, every keyword. `incl` is the path where a Julia Symbol

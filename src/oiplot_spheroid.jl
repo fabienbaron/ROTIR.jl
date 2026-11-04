@@ -446,10 +446,8 @@ function plot2d(tmap, star; intensity = false, figtitle ="", plotmesh=false, pad
   else
     projmap = tmap[star.index_quads_visible];
   end
-  pmin = vmin === nothing ? minimum(projmap) : vmin
-  pmax = vmax === nothing ? maximum(projmap) : vmax
+  pmin, pmax = _map_range(projmap; vmin = vmin, vmax = vmax)
   prange = pmax - pmin
-  if prange < 1.0; prange = max(abs(pmax) * 0.01, 1.0); end
   norm_plot = _padded_norm(pmin, pmax, prange; cfloor = 0.08)
   colours = rgba(get_cmap(colormap), norm_plot.(projmap))
 
@@ -547,10 +545,8 @@ function plot2d_binary(tmap1, tmap2, star1, star2, bparams, tepoch;
     projmap1 = tmap1[star1.index_quads_visible]
     projmap2 = tmap2[star2.index_quads_visible]
   end
-  tmin = vmin === nothing ? min(minimum(projmap1), minimum(projmap2)) : vmin
-  tmax = vmax === nothing ? max(maximum(projmap1), maximum(projmap2)) : vmax
+  tmin, tmax = _map_range(vcat(projmap1, projmap2); vmin = vmin, vmax = vmax)
   trange = tmax - tmin
-  if trange < 1.0; trange = max(tmax * 0.01, 1.0); end
   norm_plot = _padded_norm(tmin, tmax, trange; cfloor = 0.15)
   colours1 = rgba(get_cmap(colormap), norm_plot.(projmap1))
   colours2 = rgba(get_cmap(colormap), norm_plot.(projmap2))

@@ -367,12 +367,12 @@ end
     binary_RV(bparameters, tepoch; K1, K2, γ) -> (Vrad1, Vrad2)
 
 Radial velocities of both stars, in the units of `K1`, `K2` and `γ`; positive is receding.
-`tepoch` is a JD or a vector of JDs.
+`tepoch` is a JD or a vector of JDs. Any real types work, including ForwardDiff duals.
 
 `bparameters.ω` is the argument of periapsis of the relative orbit (the secondary's); the
 primary's is ω + π.
 """
-function binary_RV(bparameters, tepoch::Union{Float64, Vector{Float64}}; K1::Float64, K2::Float64, γ::Float64)
+function binary_RV(bparameters, tepoch::Union{Real, AbstractVector{<:Real}}; K1::Real, K2::Real, γ::Real)
     ω = omega_at(bparameters, tepoch); # argument of periapsis, advanced by apsidal motion
     e = bparameters.e;
     υ = compute_true_anomaly(bparameters, tepoch)

@@ -271,6 +271,17 @@ let mr = ROTIR._map_range
     checkbool("a NaN vmin falls back to the data", isfinite(lo) && hi > lo)
     lo, hi = mr([1.0, 9.0]; vmin = 100.0, vmax = 0.0)
     checkbool("an inverted explicit range is swapped", hi > lo)
+    # A narrow explicit pair is kept: maps in relative units need scales such as 0.8–1.2.
+    checkbool("a narrow explicit vmin/vmax is kept",
+              mr([0.9, 1.1]; vmin = 0.8, vmax = 1.2) == (0.8, 1.2))
+    checkbool("a narrow inverted pair is swapped, not widened",
+              mr([0.9, 1.1]; vmin = 1.2, vmax = 0.8) == (0.8, 1.2))
+    lo, hi = mr([0.9, 1.1])
+    checkbool("a narrow data range without vmin/vmax still widens", hi - lo >= 1.0)
+    lo, hi = mr([0.9, 1.1]; vmin = 0.8)
+    checkbool("a narrow range with one limit still widens", hi - lo >= 1.0)
+    lo, hi = mr([5.0, 5.0]; vmin = 5.0, vmax = 5.0)
+    checkbool("an explicit pair with vmin == vmax widens", lo < 5.0 < hi)
 end
 
 @printf("\n=== %d passed, %d failed ===\n", npass[], nfail[])

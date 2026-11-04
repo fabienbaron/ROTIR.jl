@@ -105,6 +105,33 @@
         @test maximum(abs.(r.vertices_xyz .- g.star.vertices_xyz)) == 0
     end
 
+    @testset "the limb-darkening map in a map file" begin
+        p = default_star_params(2)
+        tep = [0.0, 0.3, 0.6]
+        stars = create_star_multiepochs(tess, p, tep)
+        x = Float64.(parametric_temperature_map(p, stars[1]))
+        d = mktempdir()
+        f = joinpath(d, "ld.fits")
+        save_surface_map(f, x, p; nside_exp = 3, tepochs = tep, ldmap = stars)
+        m = load_surface_map(f)
+        @test size(m.ldmap) == (length(x), 3)
+        @test all(m.ldmap[:, i] == Float64.(stars[i].ldmap) for i in 1:3)
+        # A single epoch as a vector comes back as one column.
+        f1 = joinpath(d, "ld1.fits")
+        save_surface_map(f1, x, p; nside_exp = 3, ldmap = stars[1].ldmap)
+        @test load_surface_map(f1).ldmap[:, 1] == Float64.(stars[1].ldmap)
+        # Without the keyword there is no LDMAP table.
+        f0 = joinpath(d, "ld0.fits")
+        save_surface_map(f0, x, p; nside_exp = 3)
+        @test load_surface_map(f0).ldmap === nothing
+        @test_throws DimensionMismatch save_surface_map(joinpath(d, "e.fits"), x, p;
+                                                        nside_exp = 3, tepochs = tep[1:2],
+                                                        ldmap = stars)
+        @test_throws DimensionMismatch save_surface_map(joinpath(d, "n.fits"), x, p;
+                                                        nside_exp = 3,
+                                                        ldmap = stars[1].ldmap[1:10])
+    end
+
     @testset "what it refuses" begin
         p = default_star_params(0)
         star = create_star(tess, p, 0.0)

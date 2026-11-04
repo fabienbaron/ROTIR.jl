@@ -181,31 +181,22 @@ end
 # are down-weighted rather than discarded (cutting them biases K by ~7% and leaves ω
 # unconstrained).
 const USERV = get(ENV, "USERV", "0") == "1"
-const RVD1, RVD2 = if USERV
-    (readdlm(joinpath(@__DIR__, "data", "all_rv_1_ORIG.txt")),
-     readdlm(joinpath(@__DIR__, "data", "all_rv_2_ORIG.txt")))
-else
-    (zeros(0, 3), zeros(0, 3))
-end
-const RVT  = Float64.(RVD1[:, 1])
-const RV1  = Float64.(RVD1[:, 2])
-const RV2  = Float64.(RVD2[:, 2])
-const NRV  = 2 * length(RVT)
+# The table: demos/data/spica_rv.csv, the CSV OITOOLS reads (MJD,RV,sigma,star).
+const RVTAB = USERV ? read_rv(joinpath(@__DIR__, "data", "spica_rv.csv")) : nothing
+const NRV   = USERV ? length(RVTAB) : 0
 "Empirical RV error (km/s) as a function of model line separation — see the note above."
 @inline rv_sigma(Δ) = 7.0 + 30.0 * exp(-abs(Δ) / 100.0)
 
+# χ² of the velocities. The file's σ is a placeholder, so the error of each row comes from the
+# model's line separation |V2 − V1| at that row's time, re-evaluated with the model: this is
+# why it is not `rv_chi2`, which takes the tabulated σ.
 function chi2_rv(θ, K1, K2, γ)
     NRV == 0 && return 0.0
     bp = (i = θ[2], Ω = θ[3], ω = θ[4], P = P_ORB, a = θ[1], e = θ[5], T0 = θ[6],
           q = Q_BIN, dP = 0.0, dω = θ[7])
-    m1, _ = binary_RV(bp, RVT; K1 = K1, K2 = K2, γ = γ)
-    _, m2 = binary_RV(bp, RVT; K1 = K1, K2 = K2, γ = γ)
-    c = 0.0
-    @inbounds for k in eachindex(RVT)
-        σ = rv_sigma(m2[k] - m1[k])
-        c += ((RV1[k] - m1[k])^2 + (RV2[k] - m2[k])^2) / σ^2
-    end
-    return c
+    m = rv_model(bp, RVTAB; K1 = K1, K2 = K2, gamma = γ)
+    v1, v2 = binary_RV(bp, RVTAB.jd; K1 = K1, K2 = K2, γ = γ)
+    return sum(((RVTAB.rv[k] - m[k]) / rv_sigma(v2[k] - v1[k]))^2 for k in eachindex(m))
 end
 
 function chi2_total(θ)
@@ -288,7 +279,7 @@ idx = findall(free)
 @printf("free parameters (%d): %s\n", length(idx), join(names[idx], ", "))
 if USERV
     @printf("RVs: %d points (%d per component), empirical σ(Δ) = 7 + 30·exp(−|Δ|/100) km/s\n",
-            NRV, length(RVT))
+            NRV, count(==(:a), RVTAB.star))
     println("     ⇒ the (Ω,ω) mirror is broken, so Ω spans the full [0,360).")
     @printf("     χ²_RV at the literature start = %.1f (%.1f per point)\n",
             chi2_rv(θ_lit, θ_lit[11], θ_lit[12], θ_lit[13]),

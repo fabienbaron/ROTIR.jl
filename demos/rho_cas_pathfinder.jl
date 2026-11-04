@@ -15,7 +15,7 @@
 # the Pareto-k diagnostic below tells you when to distrust it. Use it to locate modes and
 # to warm-start the expensive samplers; quote error bars from Pigeons/UltraNest.
 
-using Pathfinder, Zygote, ADTypes, Transducers, Random, LinearAlgebra, Printf, Statistics
+using Pathfinder, Zygote, ADTypes, Random, LinearAlgebra, Printf, Statistics
 include(joinpath(@__DIR__, "rho_cas_model.jl"))
 include(joinpath(@__DIR__, "posterior_utils.jl"))
 
@@ -37,8 +37,7 @@ result, wall = timed(() -> multipathfinder(logpost_z, NDRAWS;
                                            init = inits,
                                            nruns = NRUNS,
                                            adtype = ADTypes.AutoZygote(),
-                                           executor = PARALLEL_PATHS ? Transducers.ThreadedEx() :
-                                                                       Transducers.SequentialEx(),
+                                           ntasks = PARALLEL_PATHS ? Threads.nthreads() : 1,
                                            rng = rng); label = "pathfinder")
 
 # draws are D × ndraws in the unconstrained space

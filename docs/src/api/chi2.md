@@ -213,8 +213,8 @@ The GUI's Imaging tab reconstructs one component and refuses a model with a comp
 ## Saving a surface map
 
 `save_surface_map` writes a map to FITS with its tessellation, the `star_params` it was
-computed with (integer fields stay `Int`), and optionally the epochs, so its χ² can be
-reproduced. See [Saving a reconstruction](../guides/reconstruction.md).
+computed with (integer fields stay `Int`), and optionally the epochs and each epoch's
+limb-darkening map, so its χ² can be reproduced. See [Saving a reconstruction](../guides/reconstruction.md).
 
 ```@docs
 save_surface_map

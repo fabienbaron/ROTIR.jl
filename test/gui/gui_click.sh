@@ -33,6 +33,9 @@ SHOTDIR="${ROTIRGUI_SHOTS:-$(mktemp -d)}"; mkdir -p "$SHOTDIR"
 PICKDIR="$(mktemp -d)"
 ln -sf "$PWD/demos/data/2011Sep02.lam_And_prepped.oifits" "$PICKDIR/a_first.oifits"
 ln -sf "$PWD/demos/data/2011Sep06.lam_And_prepped.oifits" "$PICKDIR/b_second.oifits"
+# An RV table, for the RV tab. Its own extension, so the OIFITS listing above is unchanged and
+# the RV listing holds this one file.
+ln -sf "$PWD/demos/data/spica_rv.csv" "$PICKDIR/c_rv.csv"
 FAIL=0; GUI_PID=""; XVFB_PID=""
 
 if [ "${1:-}" = "--display" ]; then
@@ -145,15 +148,17 @@ CL()   { DISPLAY="$DISP" xdotool mousemove --window "$WID" "$1" "$2" click 1; sl
 KEY()  { DISPLAY="$DISP" xdotool key --window "$WID" "$1"; sleep "${2:-1}"; }
 SHOT() { DISPLAY="$DISP" import -window "$WID" "$SHOTDIR/$1.png" 2>/dev/null; }
 
-GEAR_X=$(FX 33);     OPEN_X=$(FX 102);   TOP_Y=$(FY 22)
+# "Open OIFITS…" follows the Dataset box in the context bar, as in OITOOLS.
+GEAR_X=$(FX 33);     OPEN_X=$(FX 341);   TOP_Y=$(FY 22)
 # Inside the picker. Measured off 02_loaded.png at 1360x920, ROTIRGUI_SCALE=1.0.
 ROW1_X=$(FX 515);    ROW1_Y=$(FY 276)
 ROW2_X=$(FX 515);    ROW2_Y=$(FY 325)
 ACTION_Y=$(FY 784)
 OPENBTN_X=$(FX 812)      # rightmost button when there is no dataset yet
 ADDBTN_X=$(FX 748)       # "Add epoch", once one exists (the row is one button wider)
-# Four tabs share the bar, so each centre is an eighth, three eighths, ... of the width.
-TAB_DATA=$(FX 128);  TAB_MODEL=$(FX 376); TAB_IMAGING=$(FX 623); TAB_ORBIT=$(FX 871)
+# Five tabs share the bar, so each centre is a tenth, three tenths, ... of the width.
+TAB_DATA=$(FX 104);  TAB_MODEL=$(FX 301); TAB_IMAGING=$(FX 500); TAB_ORBIT=$(FX 698)
+TAB_RV=$(FX 896)
 TAB_Y=$(FY 55)
 sleep 8       # the first frame. xdotool finds the window before Qt has drawn into it,
               # and a shot taken then is a blank 290-byte PNG.
@@ -217,7 +222,9 @@ SHOT 06_model_added
 # was the Fit button staying greyed, because it is enabled on the count of free parameters.
 #
 # Coordinates read off 06_model_added.png at 1360x920: the "Radius x" state combo, and Fit.
-CL "$(FX 218)" "$(FY 252)" 2          # "Radius x" state combo -> popup
+# RE-READ after the "Intensity from" row was added above the geometry: the form moved down
+# by one row, and the old click landed on that row instead.
+CL "$(FX 256)" "$(FY 301)" 2          # "Radius x" state combo -> popup
 KEY Down 1                            # fixed -> free
 KEY Return 2
 SHOT 06b_param_freed
@@ -226,9 +233,9 @@ SHOT 06b_param_freed
 # everything below the form has moved DOWN — Fit from y=504 to y=767 in window fractions.
 # RE-READ again after the console began collapsed by default: the panel gained the console's
 # ~120 px, so everything below the parameter form moved UP — Fit from y=767 to y=741.
-CL "$(FX 294)" "$(FY 741)" 4          # Fit: enabled only when something is free
+CL "$(FX 294)" "$(FY 855)" 4          # Fit: enabled only when something is free
 SHOT 06c_fit_started
-CL "$(FX 356)" "$(FY 741)" 3          # Stop, so the rest of the run is not racing a job
+CL "$(FX 357)" "$(FY 855)" 3          # Stop, so the rest of the run is not racing a job
 
 CL "$(FX 491)" "$(FY 89)" 3           # Mollweide
 SHOT 07_view_mollweide
@@ -285,10 +292,11 @@ SHOT 11_imaging_tab
 # enough to tick `sobel` instead of `sobel2` and `bias` instead of `radflat`, and to miss
 # Reconstruct entirely — the two failures that caught it. The rows are 30px apart, so these
 # are aimed at row centres rather than at edges.
-CL "$(FX 23)" "$(FY 247)" 1           # tick sobel2
-CL "$(FX 23)" "$(FY 442)" 1           # tick radflat  (Monnier's)
+# RE-READ after the "Intensity from" row and the laplace_beltrami regulariser were added.
+CL "$(FX 23)" "$(FY 270)" 1           # tick sobel2
+CL "$(FX 23)" "$(FY 490)" 1           # tick radflat  (Monnier's)
 SHOT 12_regularisers
-CL "$(FX 38)" "$(FY 699)" 30          # Reconstruct, then let it run
+CL "$(FX 38)" "$(FY 755)" 30          # Reconstruct, then let it run
 SHOT 13_reconstructed
 
 # ── the settings panel: one more popup, one more GL surface ──────────────────
@@ -302,32 +310,44 @@ CL "$TAB_ORBIT" "$TAB_Y" 3
 SHOT 18a_orbit_tab
 # Free a fixed element: its bounds appear in the trailing slot, and the columns to its left
 # must not move. The screenshot is the check — the alignment is not observable from Julia.
-CL "$(FX 188)" "$(FY 265)" 2          # the "e" row's state combo
+# RE-READ after the Star model frame moved above the elements.
+CL "$(FX 197)" "$(FY 576)" 2          # the "e" row's state combo
 KEY Down 1
 KEY Return 2
 SHOT 18b_orbit_free
 # The star model: analytic 2-D profiles or ROTIR's tessellated 3-D components. Another popup,
 # and the one place the two frames of this tab are chosen between.
 # Also re-read: the Star model frame sits lower now that the console is collapsed.
-CL "$(FX 232)" "$(FY 612)" 2
+CL "$(FX 235)" "$(FY 132)" 2          # the "components" combo, now at the top
 SHOT 18c_star_model_popup
 KEY Down 1
 KEY Return 3
 SHOT 18d_tessellated
 
-# ── back to Data: everything must still draw after all those popups ──────────
+# ── the RV tab: a table through the picker, drawn against the orbit ──────────
+CL "$TAB_RV" "$TAB_Y" 3
+SHOT 19_rv_empty
+CL "$(FX 44)" "$(FY 98)" 3            # "Open RV table…"
+CL "$ROW1_X" "$ROW1_Y" 2              # the one RV table in the listing
+CL "$OPENBTN_X" "$ACTION_Y" 6         # "Open"
+SHOT 19a_rv_tab
+# The Orbit tab now lists the velocity parameters, and "Use RV from RV tab" is enabled.
+CL "$TAB_ORBIT" "$TAB_Y" 3
+CL "$(FX 174)" "$(FY 837)" 2          # "Use RV from RV tab"
+SHOT 19b_orbit_with_rv
+
+# ── back to Explore: everything must still draw after all those popups ───────
 CL "$TAB_DATA" "$TAB_Y" 3
 SHOT 16_back_to_data
-# The observable views come first now, so the model views are further along the row.
-CL "$(FX 330)" "$(FY 89)" 3           # first observable panel
-SHOT 17_observable
-# The epoch is ONE thing shared by every tab, and the Model tab's arrow moved it to 2 above.
-# The table has to be on 2 as well — it used to restore its own remembered row, so it read
-# "1 / 2" over a plot of night two. The console line is what says which one Julia is on.
-CL "$(FX 405)" "$(FY 156)" 3          # the Data tab's own epoch arrow, back to 1
-SHOT 17b_epoch_back
-CL "$(FX 400)" "$(FY 89)" 3           # the next one
-SHOT 18_observable2
+# The epoch is ONE thing shared by every tab. The stepper under the plot moves it, and the
+# table in the frame has to follow.
+CL "$(FX 511)" "$(FY 935)" 3          # the epoch ▶ under the plot
+SHOT 17b_epoch_next
+# The frame collapses to give the plot the width, as OITOOLS' does, and opens again.
+CL "$(FX 378)" "$(FY 104)" 3          # ◀ on the plot
+SHOT 17c_frame_closed
+CL "$(FX 34)" "$(FY 104)" 3           # ▶, now at the window's left edge
+SHOT 18_frame_open
 
 wait "$GUI_PID" 2>/dev/null
 
@@ -366,6 +386,8 @@ grep -qE "wrote .*\.png" "$DUMP" && ck "Save plot wrote a PNG" 1 \
                                  || ck "Save plot wrote a PNG" 0
 grep -qE "now has 2 epoch\(s\)" "$DUMP" && ck "Ctrl-click selected two files at once" 1 \
                                         || ck "Ctrl-click selected two files at once" 0
+grep -qF "rv = read_rv(" "$DUMP" && ck "the RV tab opened a table through the picker" 1 \
+                                || ck "the RV tab opened a table through the picker (clicks missed?)" 0
 
 # THE regression check, and the reason the script exists: anything drawn after a popup must
 # still draw.

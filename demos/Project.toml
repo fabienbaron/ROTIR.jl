@@ -35,6 +35,6 @@ ROTIR = {path = ".."}
 AdvancedHMC = "0.8.6"
 FiniteDifferences = "0.12.34"
 LogDensityProblems = "2.2.0"
-Pathfinder = "0.9.31"
+Pathfinder = "0.10"
 Zygote = "0.7.11"
 julia = "1.13"   # same floor as ROTIR

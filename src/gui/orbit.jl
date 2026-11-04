@@ -165,9 +165,16 @@ const ORBIT_PARAM_INFO = Dict(
     :T0 => ("JD", "time of periastron passage"),
     :dP => ("d/d", "period derivative; 0 for a constant period"),
     :domega => ("deg/d", "apsidal motion"),
-    :f => ("", "flux ratio, secondary / primary"))
+    :f => ("", "flux ratio, secondary / primary"),
+    :plx => ("mas", "parallax: with a, i, P and e it sets the RV amplitudes"),
+    :q => ("", "mass ratio M2/M1 (velocities: K1/K2 = q)"),
+    :gamma => ("km/s", "systemic velocity"),
+    :jit_a => ("km/s", "RV jitter of the primary, added in quadrature to σ"),
+    :jit_b => ("km/s", "RV jitter of the secondary, added in quadrature to σ"))
 
-_orbit_info(n::Symbol) = get(ORBIT_PARAM_INFO, n,
+_orbit_info(n::Symbol) = startswith(String(n), "dgamma_") ?
+    ("km/s", "velocity offset of instrument $(String(n)[8:end]) relative to the first in the table") :
+    get(ORBIT_PARAM_INFO, n,
     (occursin("pa", String(n)) ? "deg" : occursin("ratio", String(n)) ? "" : "mas",
      "component parameter"))
 
@@ -1014,6 +1021,10 @@ function refresh_orbit!(sh::ShellState)
         idle!(sh.orbitcanvas, "could not draw the orbit — check the elements")
         console!(sh, "orbit draw failed: $(sprint(showerror, err))")
     end
+    # The RV tab draws the same orbit's velocities: every edit that reaches here moves them.
+    refresh_rv!(sh)
+    # …and the Explore plot, when it compares the data with this orbit.
+    sh.obscompare[] in (:orbit, :residorbit) && refresh_obs!(sh)
     return sh.status
 end
 
@@ -1139,10 +1150,12 @@ can go stale.
 On the analytic path the proximity switches change the RENDERING and not this χ²: analytic
 profiles have no surface to shade.
 """
-function shell_fit_orbit(method, maxeval)
+function shell_fit_orbit(method, maxeval, use_rv = "0")
     sh = _sh(); o = sh.orbit
     d = current_dataset(sh.session)
     d === nothing && return "no dataset"
+    userv = _qmlstr(use_rv) in ("1", "true")
+    userv && sh.rv === nothing && return "no RV table: open one in the RV tab, or untick Use RV"
     isempty(o.free) && return "nothing is free — mark at least one parameter free"
     meth = Symbol(_qmlstr(method))
     # No `:ultranest`: the GUI is Python-free by construction, so the method that would need
@@ -1155,7 +1168,6 @@ function shell_fit_orbit(method, maxeval)
 
     c1 = _orbit_component(o.kind1, apply_orbit_ties(o), :c1)
     c2 = _orbit_component(o.kind2, apply_orbit_ties(o), :c2)
-    el = orbit_elements_nt(o)
     # FILTERED to the parameters this component pair actually has. The session keeps bounds for
     # every kind so that switching a Gaussian to a disk and back does not lose them, but
     # `orbit_fit_spec` rejects a bound for a parameter that is not in the vector — and its
@@ -1166,27 +1178,81 @@ function shell_fit_orbit(method, maxeval)
     # drop a free `c1_diameter` from the fit instead of letting `fit_orbit` refuse with its own
     # explanation.
     known = Set(orbit_param_names(o; analytic = true))
+    rvnames = userv ? rv_param_names(sh.rv) : Symbol[]
+    # The jitters are SETTINGS of the RV tab, passed at their values and never fitted.
+    union!(known, filter(n -> !(n in (:jit_a, :jit_b)), rvnames))
     fr = sort([n for n in o.free if n in known])
     bd = Dict(k => v for (k, v) in o.bounds if k in known)
     ti = Dict(k => v for (k, v) in o.ties if k in known && !isempty(strip(v)))
+    # Velocities break the astrometric (Omega, omega) mirror, so Omega gets the full circle —
+    # unless its box is something other than the interferometry-only default.
+    userv && get(bd, :Omega, (0.0, 180.0)) == (0.0, 180.0) && (bd[:Omega] = (0.0, 360.0))
+    _fold_omega!(sh, o, fr, bd, userv)
+    el = orbit_elements_nt(o)
+    vals = apply_orbit_ties(o)
+    rvp = NamedTuple(k => Float64(get(vals, k, 0.0)) for k in rvnames)
     fl = get(o.params, :f, 1.0)
     data = d.data
     it = max(10, Int(maxeval))
     console!(sh, "fit_orbit(data, $(o.kind1), $(o.kind2); free = $(fr), " *
-                 "method = :$(meth), model = :$(o.model))"; kind = :cmd)
+                 "method = :$(meth), model = :$(o.model)$(userv ? ", rv = rv" : ""))"; kind = :cmd)
     log!(sh.session,
          "res = fit_orbit(data, " * _component_source(o.kind1, o.params, :c1) * ", " *
          _component_source(o.kind2, o.params, :c2) * ";\n" *
          "                elements = " * _namedtuple_literal(el) * ",\n" *
          "                flux_ratio = $(fl), free = $(_literal(fr)),\n" *
          "                bounds = $(_literal(bd)), ties = $(_literal(ti)),\n" *
+         (userv ? "                rv = rv, rv_params = " * _namedtuple_literal(rvp) * ",\n" : "") *
          "                method = :$(meth), model = :$(o.model), maxeval = $(it))";
          note = "orbit fit", binding = "res")
     mdl = o.model
+    rv = userv ? sh.rv : nothing
+    rvkw = userv ? rvp : NamedTuple()
     return start_job!(sh, :orbit, function (stop)
         fit_orbit(data, c1, c2; elements = el, flux_ratio = fl, free = fr, bounds = bd,
-                  ties = ti, method = meth, model = mdl, maxeval = it, verbose = true)
+                  ties = ti, rv = rv, rv_params = rvkw,
+                  method = meth, model = mdl, maxeval = it, verbose = true)
     end)
+end
+
+"""
+    _fold_omega!(sh, o, free, bounds, userv) -> Bool
+
+Interferometry alone cannot tell (Omega, omega) from (Omega + 180, omega + 180). For a fit
+without velocities whose Omega is free, has the default [0, 180) box and lies outside it, the
+orbit is moved to the equivalent pair inside the box before the fit starts. A fit with
+velocities, a fixed Omega or a non-default box leaves the orbit as it is.
+"""
+function _fold_omega!(sh, o, free, bounds, userv)
+    (userv || !(:Omega in free)) && return false
+    get(bounds, :Omega, (0.0, 180.0)) == (0.0, 180.0) || return false
+    Ω = get(o.params, :Omega, 0.0)
+    0.0 <= Ω <= 180.0 && return false
+    Ω = mod(Ω, 360.0)
+    ω = get(o.params, :omega, 0.0)
+    if Ω > 180.0
+        Ω -= 180.0
+        ω = mod(ω + 180.0, 360.0)
+    end
+    o.params[:Omega] = Ω
+    o.params[:omega] = ω
+    console!(sh, "Omega folded into [0, 180) for a fit without velocities: " *
+                 "Omega = $(round(Ω; digits = 3)), omega = $(round(ω; digits = 3))")
+    return true
+end
+
+"""
+    shell_orbit_rv_params() -> String
+
+The velocity parameters an open RV table brings into the orbit — plx, q, gamma and the
+instrument offsets — in the element form's columns. Empty without a table. The RV tab shows
+the same entries: one set of numbers, edited from either tab, fitted here. The jitters are
+not listed: they are set in the RV tab and never fitted.
+"""
+function shell_orbit_rv_params()
+    sh = _sh()
+    sh.rv === nothing && return ""
+    return shell_rv_params()
 end
 
 # The component constructor as source, for the exported script.

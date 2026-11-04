@@ -43,6 +43,13 @@ periapsis of the relative orbit; the primary's is `ω + π`.
 | Function | Description |
 |----------|-------------|
 | `binary_RV(bparams, tepoch; K1, K2, γ)` | `(Vrad1, Vrad2)`; positive is receding; units of `K1`, `K2`, `γ` |
+| `read_rv(path)`, `read_rv(path1, path2)` | `RVData` from a CSV table (`MJD,RV,sigma,star[,instrument]`) or two `JD RV sigma` files |
+| `write_rv(path, rv)` | CSV table, readable by OITOOLS' `read_rv` |
+| `rv_model(bp, rv; K1, K2, gamma, offsets)` | model velocity at each row, for that row's star |
+| `rv_residuals`, `rv_chi2`, `rv_nll2` | `(rv − model)/√(σ² + s²)`, its sum of squares, and −2 ln L with the jitter term |
+
+`fit_orbit(...; rv)` fits velocities with the interferometry; see
+[Radial velocities](@ref "Radial velocities in the fit").
 
 ## Stellar parameters
 

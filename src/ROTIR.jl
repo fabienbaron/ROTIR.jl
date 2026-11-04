@@ -69,6 +69,7 @@ include("gravity_darkening.jl");
 include("parametric_gradient.jl");
 include("bootstrap.jl");
 include("parametric_fit.jl");
+include("radial_velocity.jl");  # RVData, read_rv; before orbit_fit.jl, which adds RVs to the fit
 include("orbit_ties.jl");    # before orbit_fit.jl: OrbitFitSpec holds an OrbitTies
 include("orbit_fit.jl");
 # src/ultranest.jl and src/fit_ultranest.jl are NOT included here: they need PythonCall and
@@ -432,6 +433,10 @@ export OrbitComponent, PointSource, UniformDisk, LimbDarkenedDisk, GaussianDisk,
        EllipticalGaussian
 export OrbitFitData, OrbitFitSpec, orbit_fit_data, orbit_fit_spec
 export orbit_model_cvis, orbit_chi2, fit_orbit
+export orbit_residuals
+# Radial velocities (radial_velocity.jl)
+export RVData, read_rv, write_rv, rv_instruments, rv_model, rv_residuals, rv_chi2, rv_nll2,
+       rv_start, rv_amplitudes, rv_physical, dynamical_masses, rv_curves
 export ORBIT_ELEMENTS
 export OrbitTies, compile_ties, apply_ties, resolve_params
 

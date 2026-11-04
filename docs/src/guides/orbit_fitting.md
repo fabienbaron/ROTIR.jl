@@ -121,24 +121,28 @@ is 1.9° from the tied value, and the tie raises χ²/n from 3.154 to 3.189.
 
 The default bounds remove two exact degeneracies:
 
-- `(Omega, T0) → (Omega + 180°, T0 + P/2)` at `e = 0`: `Omega` is bounded to `[0, 180)` and
+- `(Omega, omega) → (Omega + 180°, omega + 180°)`: the two orbits give the same sky positions
+  at every epoch and differ only in which star is in front. Interferometry, closure phases
+  included, cannot separate them at any eccentricity. `Omega` is bounded to `[0, 180)` and
   `T0` to one period centred on its starting value, so each solution appears once.
 - `EllipticalGaussian` `pa`: the profile is symmetric under a half turn, so `pa` is bounded to
   `[0, 180)`.
 
-!!! warning "The `Omega` bound assumes `e = 0`"
-    Eccentricity breaks the `(Omega, T0)` degeneracy, and so do closure phases. For an
-    eccentric orbit, widen the bound:
+A published `Omega = 309.9°` therefore corresponds to `Omega = 129.9°` with `omega` shifted by
+180° in an interferometry-only fit. The Orbit tab's fit makes this change itself when `Omega`
+is free, its box is `[0, 180)` and its value lies outside it; a box set to `[0, 360)` is left as
+it is. To keep a published `Omega` in a script, widen its box:
 
-    ```julia
-    bounds = Dict(:Omega => (0.0, 360.0))
-    ```
+```julia
+bounds = Dict(:Omega => (0.0, 360.0))
+```
 
-    With the default, a published `Omega = 309.9°` folds to `129.9°` and the fit finds the
-    mirrored orbit. `demos/spica_orbit_fit_tied.jl` bounds `Omega` to 290–330°.
+With radial velocities (`rv = ...`) the mirror is broken and `Omega` spans `[0, 360)`; see
+[Radial velocities](@ref "Radial velocities in the fit").
 
-`T0` and `pa` are periodic, but `fit_orbit` does not tell the sampler so; a mode at a bound is
-split in two. `demos/betlyr/betlyr_orbit_fit_ultranest.jl` calls UltraNest directly with
+`T0`, `omega` and `pa` are periodic, but `fit_orbit` does not tell the sampler so; a mode at a
+bound is split in two. When the solution lies near `omega = 0°`, move its box, e.g.
+`bounds = Dict(:omega => (180.0, 540.0))`. `demos/betlyr/betlyr_orbit_fit_ultranest.jl` calls UltraNest directly with
 `wrapped_params` for these two.
 
 ## Fitters
@@ -171,6 +175,79 @@ res = fit_orbit(data, comp1, comp2;
 The data measure accumulated phase drift, `n·δP/P` over `n` orbits, so a short baseline gives
 a flat posterior on `P`. Keep the bound on `P` near the range the ephemeris allows over the
 baseline (including `dP`). The check shows whether the other elements move when `P` is free.
+
+## Radial velocities in the fit
+
+Radial velocities are read from a CSV table, the format OITOOLS reads:
+
+```
+# HD 210763, Gallenne et al. 2023
+MJD,RV,sigma,star
+59510.16368,6.805,0.072,a
+59510.16368,24.530,0.172,b
+```
+
+| column | content |
+|---|---|
+| `MJD` (or `JD`) | time |
+| `RV`, `sigma` | velocity and its error, km/s, positive receding |
+| `star` | `a` primary, `b` secondary |
+| `instrument` | optional |
+
+Columns are found by name in any order; extra columns are ignored; `#` lines are comments.
+`read_rv(path1, path2)` reads the older format of two whitespace files `JD RV sigma`, one
+per star, and `write_rv` writes the CSV.
+
+```julia
+rv  = read_rv("demos/data/hd210763_rv_gallenne2023.csv")
+res = fit_orbit(data, comp1, comp2; elements = (...), rv = rv,
+                rv_params = (plx = 4.5, q = 0.86, gamma = 15.0))
+res.rvpar          # (plx, q, gamma, jit_a, jit_b, K1, K2, M, M1, M2, d)
+res.chi2_split     # (V², T3amp, T3φ, RV)
+```
+
+The velocity model is `binary_RV`, with ω the argument of periapsis of the relative
+orbit:
+
+    V_a = γ − K1 [cos(ν + ω) + e cos ω],    V_b = γ + K2 [cos(ν + ω) + e cos ω]
+
+This is the convention of OITOOLS' `orbit_rv`; its `MJD0` is `T0 − 2400000.5`.
+
+`rv` adds these parameters after `f`:
+
+| name | meaning | starting value | box |
+|---|---|---|---|
+| `plx` | parallax, mas | from the data's amplitudes at the starting elements | [1e-4, 1e4] |
+| `q` | mass ratio M2/M1 | idem | [0.01, 100] |
+| `gamma` | systemic velocity, km/s | mean velocity | [−1000, 1000] |
+| `dgamma_<instrument>` | offset of each instrument after the first, km/s | 0 | [−50, 50] |
+| `jit_a`, `jit_b` | jitter of each star, km/s | 0 | [0, 50] |
+
+The semi-amplitudes are not parameters. The interferometry fits `a`, `i`, `P` and `e`, and the
+amplitudes follow from them, the parallax and the mass ratio ([`rv_amplitudes`](@ref)):
+
+    K = 2π (a/plx) sin i / (P √(1 − e²)),    K1 = K q/(1 + q),    K2 = K/(1 + q)
+
+with `a/plx` in AU and `P` in days. `res.rvpar` also reports `K1`, `K2`, the distance `d = 1000/plx`
+(pc) and the dynamical masses `M = (a/plx)³/(P/365.25)²`, `M1`, `M2` (M☉,
+[`dynamical_masses`](@ref)). A known parallax (Gaia, say) is fixed by leaving `plx` out of
+`free`. `rv_parametrization = :amplitudes` fits `K1`, `K2` (km/s) instead, which is what a fit
+with the interferometry switched off needs.
+
+`plx`, `q`, `gamma` and the offsets are free by default; the jitters are fitted only when
+listed in `free`. An instrument offset exists only when the table has an `instrument`
+column with more than one value; the first instrument in the file is the reference.
+
+The jitter `s` is added in quadrature to the tabulated error, `σ² + s²`. The fit minimises
+the interferometric χ² plus [`rv_nll2`](@ref),
+
+    Σ (rv − model)²/(σ² + s²) + Σ ln((σ² + s²)/σ²),
+
+which equals χ²_RV when the jitters are 0. `chi2_split[4]` and `chi2_red` report χ² with the
+inflated errors; `chi2_red` divides by the interferometric plus RV point count.
+
+`weights = [0, 0, 0]` switches the interferometry off: the visibilities are then not
+computed, and the fit uses the velocities alone.
 
 ## Performance
 
@@ -217,8 +294,21 @@ OrbitFitSpec
 orbit_fit_spec
 orbit_model_cvis
 orbit_chi2
+orbit_residuals
 resolve_params
 compile_ties
 apply_ties
 OrbitTies
+RVData
+read_rv
+write_rv
+rv_instruments
+rv_model
+rv_residuals
+rv_chi2
+rv_nll2
+rv_start
+rv_amplitudes
+rv_physical
+dynamical_masses
 ```

@@ -80,7 +80,7 @@ Base.@kwdef mutable struct ShellState
     obskind::Base.RefValue{Symbol} = Ref(:v2)
     obscolor::Base.RefValue{Symbol} = Ref(:baseline)
     # What the data are compared with: :data, :model, :image, :residmodel or :residimage.
-    obscompare::Base.RefValue{Symbol} = Ref(:model)
+    obscompare::Base.RefValue{Symbol} = Ref(:data)
     # One panel per baseline (triplet, station) against wavelength, as OITOOLS draws it.
     obspanels::Base.RefValue{Bool} = Ref(false)
     # The description of each point on the observable plot, index-aligned with what is drawn
@@ -166,6 +166,12 @@ Base.@kwdef mutable struct ShellState
     lastmap::Base.RefValue{Any} = Ref{Any}(nothing)
     # The Orbit tab's synthetic time cursor.
     times::TimeCursor = TimeCursor()
+    # The RV tab: the table (an `RVData`, or nothing), its canvas, and the view. The velocity
+    # PARAMETERS live in `orbit.params`, not here — see src/gui/rv.jl.
+    rv::Any                     = nothing   # RVData
+    rvcanvas::Any               = nothing   # RVCanvas
+    rvxaxis::Symbol             = :phase
+    rvnormalized::Bool          = false
 end
 
 const SHELL = Ref{Any}(nothing)
@@ -212,7 +218,7 @@ function shell_refresh()
     refresh_data_tab!(sh)
     refresh_model_tab!(sh)
     refresh_posterior!(sh)
-    refresh_orbit!(sh)
+    refresh_orbit!(sh)          # also redraws the RV tab
     return sh.status
 end
 
@@ -418,7 +424,9 @@ function shell_epochs()
     sh = _sh()
     d = current_dataset(sh.session)
     d === nothing && return ""
-    chi2 = epoch_chi2(sh)
+    # The table's χ² follows the Compare choice: the orbit's when the plot compares with the
+    # orbit, so the nights the orbit fits badly stand out; otherwise the Model tab's model's.
+    chi2 = sh.obscompare[] in (:orbit, :residorbit) ? orbit_epoch_chi2(sh) : epoch_chi2(sh)
     rows = String[]
     for i in eachindex(d.data)
         if chi2 === nothing
@@ -2607,32 +2615,89 @@ function shell_obs_kinds()
     sh = _sh()
     d = current_dataset(sh.session)
     d === nothing && return ""
-    always = ["uv"]                    # geometry: present whenever there is data at all
-    O = _oitools_gui()
-    O === nothing && return join(("$(k)\t1" for k in vcat(always, ["v2","t3amp","t3phi"])), "\n")
-    flags = try
-        # OITOOLS returns "v2=1,t3amp=1,t3phi=1,cvis=0,..." — comma-separated `key=value`, NOT
-        # the tab-separated rows the rest of this bridge uses. Parsing it here rather than in
-        # QML keeps one format crossing the boundary; assuming its shape was why the Explore
-        # tab silently fell back to the sky map, with no error anywhere.
-        O.observable_flags_string(reshape(d.data, 1, length(d.data)))
-    catch
-        ""
-    end
-    rows = ["$(k)\t1" for k in always]
-    for part in split(flags, ',')
-        kv = split(strip(part), '=')
-        length(kv) == 2 || continue
-        k = String(strip(kv[1]))
-        avail = strip(kv[2])
-        for kind in get(OBS_KINDS_FOR_FLAG, k, String[])
-            push!(rows, "$(kind)\t$(avail)")
+    data = d.data
+    anyof(f) = any(x -> getfield(x, f) > 0, data)
+    # OITOOLS' rules (`shell_plot_kinds`): visphi and diffphi read the SAME field, and PHITYP
+    # says which of the two is meaningful; a differential plot is against WAVELENGTH, so it
+    # needs more than one wavelength in the data.
+    diff = occursin("differential", lowercase(String(first(data).phityp)))
+    poly = length(unique(reduce(vcat, (Float64.(x.uv_lam) for x in data)))) > 1
+    flags = ("uv"         => true,
+             "v2"         => anyof(:nv2),
+             "t3phi"      => anyof(:nt3phi),
+             "t3amp"      => anyof(:nt3amp),
+             "visamp"     => anyof(:nvisamp),
+             "visphi"     => anyof(:nvisphi) && !diff,
+             "diffphi"    => anyof(:nvisphi) && diff,
+             "diffvisamp" => anyof(:nvisamp) && poly,
+             "flux"       => anyof(:nflux))
+    return join(("$(k)\t$(v ? 1 : 0)" for (k, v) in flags), "\n")
+end
+
+_first_few(v; n::Int = 3) =
+    length(v) <= n ? join(v, ", ") : join(v[1:n], ", ") * " + $(length(v) - n) more"
+
+"""
+    shell_dataset_summary() -> String
+
+What the current dataset holds, `label\tvalue` per line, for the Explore tab's Dataset box:
+the rows OITOOLS' Explore shows (files, target, instrument, array, stations, MJD, channels,
+points, AMPTYP/PHITYP, the dataset it was filtered from), plus the epochs ROTIR split it into.
+"""
+function shell_dataset_summary()
+    sh = _sh()
+    e = current_dataset(sh.session)
+    e === nothing && return ""
+    rows = Pair{String,String}[]
+    try
+        data = e.data
+        d1 = first(data)
+        length(e.paths) > 1 &&
+            push!(rows, "files" => string(length(e.paths), ": ", _first_few(basename.(e.paths))))
+        hdrs = [h for h in (try OITOOLS.load_oifits(f) catch; nothing end for f in e.paths)
+                if h !== nothing]
+        if !isempty(hdrs)
+            tn = get(e.readopts, :targetname, "")
+            tg = isempty(string(tn)) ? unique(String[t.target for h in hdrs for t in h.target]) :
+                 [string(tn)]
+            push!(rows, "target" => _first_few(tg))
+            push!(rows, "instrument" => _first_few(unique(String[i.insname for h in hdrs
+                                                                  for i in h.instr])))
+            push!(rows, "array" => _first_few(unique(String[a.arrname for h in hdrs
+                                                             for a in h.array])))
         end
+        used = unique(vcat((vcat(vec(x.v2_sta_index), vec(x.t3_sta_index),
+                                 vec(x.vis_sta_index)) for x in data)...))
+        st = [d1.sta_name[k] for k in eachindex(d1.sta_name) if d1.sta_index[k] in used]
+        push!(rows, "stations" => string(length(st), ": ", join(st, " ")))
+        mjd = reduce(vcat, (Float64.(x.uv_mjd) for x in data))
+        if !isempty(mjd)
+            lo, hi = extrema(mjd)
+            push!(rows, "MJD" => Printf.@sprintf("%.4f – %.4f", lo, hi))
+        end
+        push!(rows, "epochs" => string(length(data), e.split ? " (split on time gaps)" :
+                                                     length(e.paths) > 1 ? " (one per file)" :
+                                                     " (the file as one epoch)"))
+        lam = reduce(vcat, (Float64.(x.uv_lam) for x in data))
+        if !isempty(lam)
+            nch = length(unique(round.(lam; sigdigits = 10)))
+            lo, hi = extrema(lam) .* 1e6
+            push!(rows, "channels" => nch == 1 ? Printf.@sprintf("1 at %.4g µm", lo) :
+                                       Printf.@sprintf("%d, %.4g – %.4g µm", nch, lo, hi))
+        end
+        tot(f) = sum(getfield(x, f) for x in data)
+        counts = [("V²", :nv2), ("T3amp", :nt3amp), ("T3φ", :nt3phi), ("VISamp", :nvisamp),
+                  ("VISφ", :nvisphi), ("flux", :nflux)]
+        push!(rows, "points" => join((string(l, " ", tot(f)) for (l, f) in counts if tot(f) > 0),
+                                     " · "))
+        any(x -> x.nvisamp > 0, data) &&
+            push!(rows, "AMPTYP / PHITYP" => string(isempty(d1.amptyp) ? "—" : d1.amptyp, " / ",
+                                                    isempty(d1.phityp) ? "—" : d1.phityp))
+        isempty(e.source) || push!(rows, "filtered from" => e.source)
+    catch err
+        push!(rows, "summary" => "! " * sprint(showerror, err))
     end
-    # A file whose tables confuse the check should still be explorable.
-    length(rows) == length(always) &&
-        append!(rows, ("$(k)\t1" for k in ("v2", "t3amp", "t3phi")))
-    return join(rows, "\n")
+    return join((string(first(r), "\t", last(r)) for r in rows), "\n")
 end
 
 """
@@ -2642,8 +2707,9 @@ Redraw the observable plot, with the options OITOOLS' Explore offers: which quan
 colour by, what to compare the data with, a logarithmic y axis, closure quantities against the
 longest baseline, and one panel per baseline (or triplet, or station).
 
-`compare` is `"data"`, `"model"`, `"image"`, `"residmodel"` or `"residimage"` — the data alone,
-the model's or the current reconstruction's observables over them, or `(model − data)/σ`.
+`compare` is `"data"`, `"model"`, `"image"`, `"orbit"`, `"residmodel"`, `"residimage"` or
+`"residorbit"` — the data alone; the observables of the Model tab's model, of the current
+reconstruction, or of the Orbit tab's orbit over them; or `(prediction − data)/σ`.
 `"1"` and `"0"` are read as `"model"` and `"data"`.
 """
 function shell_set_obs_view(kind, color, compare, logy, maxbaseline = "0", panels = "0")
@@ -2659,7 +2725,8 @@ function shell_set_obs_view(kind, color, compare, logy, maxbaseline = "0", panel
     c = c == "1" ? "model" : c == "0" ? "" : c
     sh.obskind[]    = Symbol(k)
     sh.obscolor[]   = Symbol(_qmlstr(color))
-    sh.obscompare[] = c in ("model", "image", "residmodel", "residimage") ? Symbol(c) : :data
+    sh.obscompare[] = c in ("model", "image", "orbit", "residmodel", "residimage",
+                            "residorbit") ? Symbol(c) : :data
     sh.obslog[]     = _qmlstr(logy) == "1"
     sh.obspanels[]  = _qmlstr(panels) == "1"
     return refresh_obs!(sh)
@@ -2682,8 +2749,9 @@ end
 """
     shell_obs_compare_available() -> String
 
-`"model=1,image=0"`: whether the current model, and the current reconstruction, can be compared
-with the data — what the Compare choices are enabled by.
+`"model=1,image=0,orbit=1"`: whether the current model, the current reconstruction and the
+Orbit tab's orbit can be compared with the data — what the Compare choices are enabled by. The
+orbit is always defined, so it needs only data and the analytic star model.
 """
 function shell_obs_compare_available()
     sh = _sh()
@@ -2692,14 +2760,76 @@ function shell_obs_compare_available()
     okm = d !== nothing && m !== nothing && model_state(sh) !== nothing
     oki = d !== nothing && m !== nothing && m.companion === nothing &&
           current_image(sh.session) !== nothing
-    return "model=$(okm ? 1 : 0),image=$(oki ? 1 : 0)"
+    oko = d !== nothing && sh.orbit.model === :analytic
+    return "model=$(okm ? 1 : 0),image=$(oki ? 1 : 0),orbit=$(oko ? 1 : 0)"
 end
 
 "The kinds a log y axis applies to: the positive ones, as in OITOOLS."
 const OBS_LOG_KINDS = (:v2, :t3amp, :t3amp_max, :visamp, :flux, :diffvisamp)
 
-"The kinds ROTIR predicts, and so can overplot or turn into residuals."
-const OBS_PREDICTED = (:v2, :t3amp, :t3amp_max, :t3phi, :t3phi_max)
+"The kinds ROTIR predicts, and so can overplot or turn into residuals — OITOOLS' set."
+const OBS_PREDICTED = (:v2, :t3amp, :t3amp_max, :t3phi, :t3phi_max, :visamp, :visphi)
+
+"""
+    _obs_from_cvis(cvis, dat) -> (; v2, t3amp, t3phi, visamp, visphi)
+
+Every compared observable from one set of complex visibilities on `dat.uv`: `cvis_to_obs`
+for V², T3amp and T3φ, and |V| and arg V (degrees) at the OI_VIS points.
+"""
+function _obs_from_cvis(cvis, dat)
+    v2, t3a, t3p = cvis_to_obs(cvis, dat)
+    cv = cvis[dat.indx_vis]
+    return (; v2, t3amp = t3a, t3phi = t3p, visamp = abs.(cv), visphi = rad2deg.(angle.(cv)))
+end
+
+"The complex visibilities of a map on one star, by whichever route `observables` takes."
+_star_cvis(x, star, dat; kw...) = isempty(star.polyft) ? fused_cvis(x, star, dat; kw...) :
+                                  ROTIR.poly_to_cvis(x, star; kw...)
+
+"""
+    _orbit_obs(sh, dat) -> NamedTuple or an error String
+
+The Orbit tab's orbit, evaluated on one epoch's data the way `fit_orbit` evaluates it: the
+two analytic components, every uv point at its own time.
+"""
+function _orbit_obs(sh::ShellState, dat)
+    o = sh.orbit
+    o.model === :analytic ||
+        return "the orbit's 3-D star model has no visibilities; switch it to analytic"
+    v = apply_orbit_ties(o)
+    c1 = _orbit_component(o.kind1, v, :c1)
+    c2 = _orbit_component(o.kind2, v, :c2)
+    spec = orbit_fit_spec(c1, c2; elements = orbit_elements_nt(o),
+                          flux_ratio = Float64(get(v, :f, 1.0)), free = Symbol[])
+    fd = orbit_fit_data([dat])
+    return _obs_from_cvis(orbit_model_cvis(spec, spec.values, fd, 1), dat)
+end
+
+"""
+    orbit_epoch_chi2(sh) -> Vector{NamedTuple} or nothing
+
+Reduced χ² of the Orbit tab's orbit on every epoch, `(; v2r, t3ampr, t3phir)`, for the epoch
+table when the Explore tab compares with the orbit. `nothing` when it cannot be evaluated.
+"""
+function orbit_epoch_chi2(sh::ShellState)
+    d = current_dataset(sh.session)
+    d === nothing && return nothing
+    out = NamedTuple[]
+    for dat in d.data
+        p = try
+            _orbit_obs(sh, dat)
+        catch
+            return nothing
+        end
+        p isa String && return nothing
+        r(n, x) = n > 0 ? x / n : NaN
+        push!(out, (; v2r = r(dat.nv2, sum(abs2, (p.v2 .- dat.v2) ./ dat.v2_err)),
+                     t3ampr = r(dat.nt3amp, sum(abs2, (p.t3amp .- dat.t3amp) ./ dat.t3amp_err)),
+                     t3phir = r(dat.nt3phi, sum(abs2, ROTIR.mod360(p.t3phi .- dat.t3phi) ./
+                                                     dat.t3phi_err))))
+    end
+    return out
+end
 
 """
     _obs_logscale(sh) -> Bool
@@ -2712,7 +2842,7 @@ here rather than only in QML, because the callback is also reachable from a scri
 tests, and a log axis on a phase is not a rescaling — it is half the points thrown away.
 """
 _obs_logscale(sh::ShellState) = sh.obslog[] && sh.obskind[] in OBS_LOG_KINDS &&
-                                !(sh.obscompare[] in (:residmodel, :residimage))
+                                !(sh.obscompare[] in (:residmodel, :residimage, :residorbit))
 
 """
     _predicted_obs(sh, dat, epoch, source) -> (; v2, t3amp, t3phi) or an error String
@@ -2726,19 +2856,20 @@ current model's geometry at the map's own HEALPix level, with the intensity law 
 tab reconstructs with — the same three things the reconstruction itself used.
 """
 function _predicted_obs(sh::ShellState, dat, epoch::Int, source::Symbol)
+    source === :orbit && return _orbit_obs(sh, dat)
     m = current_model(sh.session)
     m === nothing && return "no model to compare with"
     if source === :model
         st = model_state(sh)
         st === nothing && return "the model's parameters do not build a star"
-        v2, t3a, t3p = if hasproperty(st, :stars2)
+        cvis = if hasproperty(st, :stars2)
             ox, oy = st.offsets[epoch]
-            binary_observables(st.x, st.stars[epoch], st.x2, st.stars2[epoch], dat,
-                               binary_phase_shift(dat.uv, ox, oy))
+            binary_cvis(st.x, st.stars[epoch], st.x2, st.stars2[epoch],
+                        binary_phase_shift(dat.uv, ox, oy); data = dat)
         else
-            observables(st.x, st.stars[epoch], dat)
+            _star_cvis(st.x, st.stars[epoch], dat)
         end
-        return (; v2, t3amp = t3a, t3phi = t3p)
+        return _obs_from_cvis(cvis, dat)
     end
     im = current_image(sh.session)
     im === nothing && return "no reconstruction yet — run one in Imaging first"
@@ -2749,8 +2880,8 @@ function _predicted_obs(sh::ShellState, dat, epoch::Int, source::Symbol)
     d = current_dataset(sh.session)
     star = create_star(tessellation_healpix(im.nside_exp), star_params(m), d.tepochs[epoch];
                        secondary = m.secondary)
-    v2, t3a, t3p = observables(im.x, star, dat; intensity_model = ii.model, band = ii.band)
-    return (; v2, t3amp = t3a, t3phi = t3p)
+    return _obs_from_cvis(_star_cvis(im.x, star, dat; intensity_model = ii.model,
+                                     band = ii.band), dat)
 end
 
 """
@@ -2765,10 +2896,10 @@ function _obs_compare(sh::ShellState, dat, epoch::Int)
     cmp = sh.obscompare[]
     kind = sh.obskind[]
     (cmp === :data || !(kind in OBS_PREDICTED)) && return none
-    src = cmp in (:model, :residmodel) ? :model : :image
+    src = cmp in (:model, :residmodel) ? :model : cmp in (:orbit, :residorbit) ? :orbit : :image
     # Nothing to compare WITH is not an error, only the data alone: the choice stays set, so a
     # model added later appears over the data without the box being touched again.
-    current_model(sh.session) === nothing && return none
+    src !== :orbit && current_model(sh.session) === nothing && return none
     src === :image && current_image(sh.session) === nothing && return none
     p = try
         _predicted_obs(sh, dat, epoch, src)
@@ -2778,9 +2909,9 @@ function _obs_compare(sh::ShellState, dat, epoch::Int)
     p isa String && return p
     base = kind in (:t3amp_max,) ? :t3amp : kind in (:t3phi_max,) ? :t3phi : kind
     y = Float64.(getproperty(p, base))
-    if cmp in (:residmodel, :residimage)
+    if cmp in (:residmodel, :residimage, :residorbit)
         obs = Float64.(getfield(dat, base)); err = Float64.(getfield(dat, Symbol(base, :_err)))
-        r = base === :t3phi ? ROTIR.mod360(y .- obs) ./ err : (y .- obs) ./ err
+        r = base in (:t3phi, :visphi) ? ROTIR.mod360(y .- obs) ./ err : (y .- obs) ./ err
         return (; overlay = nothing, residual = r)
     end
     # On a log axis OITOOLS drops the data's non-positive and unmeasured points before drawing,
@@ -5114,6 +5245,12 @@ function job_succeeded!(sh::ShellState, kind::Symbol, result)
                                     r.chi2_red, r.chi2_split[1] / max(r.data.nv2, 1),
                                     r.chi2_split[2] / max(r.data.nt3amp, 1),
                                     r.chi2_split[3] / max(r.data.nt3phi, 1))
+        # A mass ratio fitted from velocities is what the 3-D rendering should assume too.
+        hasproperty(r, :rvpar) && hasproperty(r.rvpar, :q) && (o.q = Float64(r.rvpar.q))
+        if length(r.chi2_split) >= 4 && r.rv !== nothing
+            sh.status *= Printf.@sprintf("  RV %.2f over %d", r.chi2_split[4] / length(r.rv),
+                                         length(r.rv))
+        end
         console!(sh, sh.status)
         refresh_orbit!(sh)
     elseif kind === :skyexport
@@ -5946,7 +6083,8 @@ until then the model's own map is the only thing on screen.
 
 Everything needed to reproduce the χ² travels with it — the HEALPix level, every resolved
 parameter (ties applied, since a tie is a way of writing a value and not a value of its own),
-and the epoch times of the dataset it was fitted against.
+and the epoch times of the dataset it was fitted against. With a model, the limb-darkening map
+of each epoch is written too (`LDMAP`, one column per epoch).
 """
 function shell_save_map(path)
     sh = _sh()
@@ -5966,22 +6104,27 @@ function shell_save_map(path)
         # is how a file becomes unloadable.
         nexp = im === nothing ? sh.nside_exp[] : im.nside_exp
         prm  = m === nothing ? NamedTuple() : star_params(m)
+        # One geometry per epoch of the dataset (t = 0 without one): the parametric map is
+        # read off the first, and every epoch's limb-darkening map is written beside the map.
+        stars = m === nothing ? nothing :
+                create_star_multiepochs(tessellation_healpix(nexp; T = sh.precision[]), prm,
+                                        d === nothing ? [0.0] : d.tepochs;
+                                        secondary = m.secondary)
         x = if im !== nothing
             im.x
         else
-            star = create_star(tessellation_healpix(nexp; T = sh.precision[]), prm,
-                               d === nothing ? 0.0 : d.tepochs[1]; secondary = m.secondary)
-            Float64.(parametric_temperature_map(prm, star; secondary = m.secondary))
+            Float64.(parametric_temperature_map(prm, stars[1]; secondary = m.secondary))
         end
         save_surface_map(p, x, prm; nside_exp = nexp,
                          tepochs = d === nothing ? nothing : d.tepochs,
                          mjd     = d === nothing ? nothing : d.mjd,
                          secondary = m === nothing ? false : m.secondary,
-                         field = :temperature,
+                         field = :temperature, ldmap = stars,
                          chi2 = im === nothing ? NaN : im.chi2,
                          ndata = im === nothing ? 0 : im.ndata,
                          comment = im === nothing ? "parametric map" : im.name)
-        log!(sh.session, "save_surface_map($(repr(p)), x, params; nside_exp = $(nexp))";
+        log!(sh.session, "save_surface_map($(repr(p)), x, params; nside_exp = $(nexp)" *
+                         (stars === nothing ? ")" : ", ldmap = stars)");
              note = "save map")
         sh.status = "wrote $(p) — $(length(x)) tessels at level $(nexp)"
     catch err

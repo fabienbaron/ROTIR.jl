@@ -711,6 +711,54 @@ function plot_rv_makie(bparams; K1::Real, K2::Real, γ::Real = 0.0,
     return fig, ax
 end
 
+"""
+    plot_rv_makie(bparams, rv::RVData; K1, K2, γ = 0.0, offsets = Dict(),
+                  jitter = (a = 0, b = 0), residuals = true, xaxis = :phase, tref = nothing,
+                  figtitle, figsize) -> (fig, axes)
+
+A table of radial velocities against the orbit, with the residuals `rv − model` below when
+`residuals`. Each instrument has its own marker and is shifted by its offset; error bars are
+√(σ² + s²) with `s` the star's jitter. `xaxis = :phase` or `:time`; see [`rv_curves`](@ref) for
+what a folded curve means with apsidal motion. `axes` is `(ax,)` or `(ax, resax)`.
+"""
+function plot_rv_makie(bparams, rv::RVData; K1::Real, K2::Real, γ::Real = 0.0,
+                       offsets = Dict{String,Float64}(), jitter = (a = 0.0, b = 0.0),
+                       residuals::Bool = true, xaxis::Symbol = :phase, tref = nothing,
+                       figtitle = "Radial Velocities", figsize = (900, 640))
+    c = rv_curves(bparams, rv; K1 = K1, K2 = K2, gamma = γ, offsets = offsets,
+                  jitter = jitter, xaxis = xaxis, tref = tref)
+    fig = Makie.Figure(size = figsize, backgroundcolor = :white)
+    ax  = _axis(fig[1, 1]; title = figtitle, ylabel = "Radial Velocity (km/s)",
+                xlabel = residuals ? "" : c.xlabel)
+    Makie.hlines!(ax, [γ]; color = (:grey60, 0.9), linestyle = :dash, linewidth = 1)
+    Makie.lines!(ax, c.xc, c.va; color = :blue, linewidth = 2, label = "Primary model")
+    Makie.lines!(ax, c.xc, c.vb; color = :red,  linewidth = 2, label = "Secondary model")
+    ins = rv_instruments(rv)
+    marks = (:circle, :rect, :utriangle, :diamond, :dtriangle, :star5)
+    axes = residuals ? (ax, _axis(fig[2, 1]; xlabel = c.xlabel, ylabel = "O − C (km/s)")) : (ax,)
+    for (s, col, name) in ((:a, :blue, "Primary"), (:b, :red, "Secondary")),
+        (j, inst) in enumerate(ins)
+        i = findall(k -> c.star[k] === s && c.instrument[k] == inst, eachindex(c.x))
+        isempty(i) && continue
+        mk = marks[mod1(j, length(marks))]
+        lab = name * " data" * (isempty(inst) ? "" : " ($(inst))")
+        Makie.errorbars!(ax, c.x[i], c.y[i], c.sigma[i]; color = col)
+        Makie.scatter!(ax, c.x[i], c.y[i]; color = col, marker = mk, markersize = 9, label = lab)
+        if residuals
+            Makie.errorbars!(axes[2], c.x[i], c.resid[i], c.sigma[i]; color = col)
+            Makie.scatter!(axes[2], c.x[i], c.resid[i]; color = col, marker = mk, markersize = 9)
+        end
+    end
+    if residuals
+        Makie.hlines!(axes[2], [0.0]; color = (:grey60, 0.9), linestyle = :dash, linewidth = 1)
+        Makie.linkxaxes!(ax, axes[2])
+        Makie.rowsize!(fig.layout, 2, Makie.Relative(0.28))
+        ax.xticklabelsvisible = false
+    end
+    Makie.axislegend(ax; position = :rt, labelsize = PLOT_LEGENDSIZE)
+    return fig, axes
+end
+
 # ---------------------------------------------------------------------------------------
 # Mollweide
 # ---------------------------------------------------------------------------------------

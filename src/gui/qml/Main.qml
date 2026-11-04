@@ -275,11 +275,35 @@ ApplicationWindow {
         repaintAll()
     }
 
+    // The window's Dataset box, as in OITOOLS: `name — N epoch(s), V², T3` per dataset, and
+    // the current one as Julia has it (`shell_open` can create OR extend a dataset).
+    property string datasetName: ""
+    function refreshDatasets() {
+        var rows = Julia.shell_datasets()
+        var labels = [], names = []
+        if (rows.length > 0) {
+            var ls = rows.split("\n")
+            for (var i = 0; i < ls.length; ++i) {
+                var g = ls[i].split("\t")
+                if (g.length < 4) continue
+                names.push(g[0])
+                labels.push(g[0] + "  —  " + g[1] + " epoch(s), " + g[2] + " V², " + g[3] + " T3")
+            }
+        }
+        datasetBox.model = labels
+        var cur = parseInt(Julia.shell_current_dataset())
+        datasetBox.currentIndex = (cur >= 1 && cur <= names.length) ? cur - 1 : -1
+        win.datasetName = (cur >= 1 && cur <= names.length) ? names[cur - 1] : ""
+        win.hasDataset = names.length > 0
+    }
+
     function repaintAll() {
+        refreshDatasets()
         dataTab.refresh();  dataTab.redraw()
         modelTab.refresh(); modelTab.redraw()
         imageTab.refresh(); imageTab.redraw()
         orbitTab.refresh(); orbitTab.redraw()
+        rvTab.refresh();    rvTab.redraw()
     }
 
     // One tab, for a TAB SWITCH. `repaintAll()` was doing this four times over, and the three
@@ -318,10 +342,11 @@ ApplicationWindow {
     }
 
     function repaintTab(i) {
-        if      (i === 0) { dataTab.refresh();  dataTab.redraw()  }
+        if      (i === 0) { refreshDatasets(); dataTab.refresh();  dataTab.redraw()  }
         else if (i === 1) { modelTab.refresh(); modelTab.redraw() }
         else if (i === 2) { imageTab.refresh(); imageTab.redraw() }
         else if (i === 3) { orbitTab.refresh(); orbitTab.redraw() }
+        else if (i === 4) { rvTab.refresh();    rvTab.redraw()    }
     }
 
     // Saved appearance defaults, applied BEFORE the first plot is drawn: the plot layer sizes
@@ -768,6 +793,11 @@ ApplicationWindow {
                 win.refreshAll()
                 return
             }
+            if (mode === "rv") {
+                win.status = Julia.shell_rv_open(paths.split("\n")[0])
+                win.refreshAll()
+                return
+            }
             if (mode === "savefig" && win.saveWhich === "oifits") {
                 win.status = Julia.shell_export_oifits(paths.split("\n")[0])
                 return
@@ -829,6 +859,22 @@ ApplicationWindow {
                     uiFontSizeSpin.value = Math.round(win.baseFontPt)
                     readPlotSettings()
                     settingsPanel.open()
+                }
+            }
+            // The dataset on screen, as OITOOLS has it, beside the button that opens one.
+            Label { text: "Dataset:"; font.bold: true; font.pointSize: pt(10) }
+            ComboBox {
+                id: datasetBox
+                objectName: "datasetBox"
+                Layout.preferredWidth: dp(300)
+                Layout.minimumWidth: dp(140)
+                model: []
+                enabled: model.length > 0
+                font.pointSize: pt(10)
+                displayText: currentIndex < 0 ? "no dataset" : currentText
+                onActivated: {
+                    win.status = Julia.shell_select_dataset(currentIndex + 1)
+                    win.refreshAll()
                 }
             }
             // ONE open button. What happens to the file — new dataset, new dataset taken
@@ -930,7 +976,14 @@ ApplicationWindow {
                       ? win.jobProgress + "   (" + win.jobElapsed.toFixed(0) + " s)"
                       : win.status
                 elide: Text.ElideMiddle
+                // A MINIMUM and a preferred width of its own: left to its text, a long status
+                // (a dataset's name) set the bar's minimum width, and the whole window's
+                // content grew past the window — the plot ran off the right edge.
+                Layout.fillWidth: true
+                Layout.minimumWidth: dp(80)
+                Layout.preferredWidth: dp(240)
                 Layout.maximumWidth: win.width * 0.5
+                horizontalAlignment: Text.AlignRight
                 font.pointSize: pt(10)
             }
         }
@@ -943,6 +996,7 @@ ApplicationWindow {
             TabButton { text: "Model";   font.pointSize: pt(10) }
             TabButton { text: "Imaging"; font.pointSize: pt(10) }
             TabButton { text: "Orbit";   font.pointSize: pt(10) }
+            TabButton { text: "RV";      font.pointSize: pt(10) }
         }
 
         StackLayout {
@@ -955,6 +1009,7 @@ ApplicationWindow {
             onCurrentIndexChanged: win.repaintTab(currentIndex)
 
             DataTab  { id: dataTab; fontFamily: win.uiFontFamily;  uiScale: win.uiScale; fontPt: pt(10)
+                       datasetName: win.datasetName
                        onStatusChanged: function (s) { if (s.length > 0) win.status = s }
                        onSaveRequested: function (which, w, h) { win.askSaveFigure(which, w, h) }
                        onRefreshAllRequested: win.refreshAll() }
@@ -986,6 +1041,17 @@ ApplicationWindow {
                            // the picker also lists "Shipped orbits" as a place of its own.
                            picker.openAt(mode === "orbit" ? Julia.orbit_dir() : initialFolder)
                        } }
+            // Radial velocities, drawn against the Orbit tab's orbit; fitted there.
+            RVTab { id: rvTab; fontFamily: win.uiFontFamily
+                    uiScale: win.uiScale; fontPt: pt(10)
+                    onStatusChanged: function (s) { if (s.length > 0) win.status = s }
+                    onSaveRequested: function (which, w, h) { win.askSaveFigure(which, w, h) }
+                    onPickFile: function (mode) {
+                        picker.purpose = mode
+                        picker.canAdd = false
+                        picker.saveMode = false
+                        picker.openAt(initialFolder)
+                    } }
         }
 
         OutputConsole {

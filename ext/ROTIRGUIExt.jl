@@ -82,6 +82,7 @@ include(joinpath(pkgdir(ROTIR), "src", "gui", "filepicker.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "shell.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "filter.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "orbit.jl"))
+include(joinpath(pkgdir(ROTIR), "src", "gui", "rv.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "snapshot.jl"))
 include(joinpath(pkgdir(ROTIR), "src", "gui", "window.jl"))
 

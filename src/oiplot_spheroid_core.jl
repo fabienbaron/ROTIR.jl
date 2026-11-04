@@ -415,6 +415,10 @@ few bad tessels should keep the range its good tessels set, and the Mollweide al
 the bad ones with `bad_color`. An explicit `vmin`/`vmax` that is itself non-finite falls back
 to the data, and an inverted pair is swapped rather than returned inside out.
 
+A range narrower than 1 is widened to a width of at least 1 about its centre. A finite
+`vmin`/`vmax` pair with `vmin != vmax` is returned as given, however narrow, so a map in
+relative units (e.g. normalised to its mean) can be shown on a fixed scale such as 0.8–1.2.
+
 `values` must be an array — `eltype` is what keeps the result in the map's own precision.
 """
 function _map_range(projmap; vmin = nothing, vmax = nothing)
@@ -432,7 +436,9 @@ function _map_range(projmap; vmin = nothing, vmax = nothing)
     isfinite(pmin) || (pmin = lo)
     isfinite(pmax) || (pmax = hi)
     pmax >= pmin || ((pmin, pmax) = (pmax, pmin))
-    if pmax - pmin < 1.0
+    explicit = vmin !== nothing && vmax !== nothing && isfinite(vmin) && isfinite(vmax) &&
+               vmin != vmax
+    if !explicit && pmax - pmin < 1.0
         # SYMMETRIC about the value, not open-ended upwards. Widening only the top puts every
         # value on the floor of the colormap, so a uniform-temperature star — a legitimate
         # model, and what a non-rotating rapid rotator IS — renders solid black and reads as a

@@ -40,6 +40,9 @@ function __init__()
                      shell_step_time,
                      shell_set_orbit_render_param, shell_fit_orbit,
                      shell_orbit_result, shell_save_orbit, shell_load_orbit,
+                     shell_rv_open, shell_rv_close, shell_rv_summary, shell_rv_params,
+                     shell_rv_jitter, shell_rv_rows, shell_rv_stats, shell_rv_view,
+                     shell_rv_set_view, shell_orbit_rv_params, shell_dataset_summary,
                      shell_surface_types, shell_add_model, shell_models, shell_select_model,
                      shell_params, shell_set_param, shell_set_param_state,
                      shell_set_bound, shell_set_tie, shell_validate_model,
@@ -115,7 +118,7 @@ function _session_status(s::Session)
 end
 
 "Tab names, in the order Main.qml lists them."
-const TAB_NAMES = ("explore", "model", "imaging", "orbit")
+const TAB_NAMES = ("explore", "model", "imaging", "orbit", "rv")
 
 """
 Which perspective the window opens on, from `\$ROTIRGUI_TAB` (default Explore; `data`
@@ -315,6 +318,7 @@ function ROTIR.gui(session::Session = Session();
     # OITOOLS' font set, because it IS an OITOOLS canvas.
     obsfig  = Makie.Figure(size = (860, 640), backgroundcolor = :white)
     orbfig  = Makie.Figure(size = (820, 760), backgroundcolor = :white)
+    rvfig   = Makie.Figure(size = (860, 700), backgroundcolor = :white)
 
     star   = build_star_canvas(starfig)
     moll   = build_moll_canvas(mollfig)
@@ -323,6 +327,7 @@ function ROTIR.gui(session::Session = Session();
     msky   = build_sky_canvas(mskyfig)
     obs           = build_obs_canvas(obsfig)
     orbitcanvas   = build_orbit_canvas(orbfig)
+    rvcanvas      = build_rv_canvas(rvfig)
     postfig = Makie.Figure(size = (900, 520), backgroundcolor = :white)
     post    = build_post_canvas(postfig)
     # The Imaging tab's own 3-D scene: a Figure belongs to ONE MakieArea, so the Model tab's
@@ -338,7 +343,7 @@ function ROTIR.gui(session::Session = Session();
     # one of those defaults: the map is a temperature, but what the interferometer measures is
     # the emergent intensity, so that is the picture a χ² can be reasoned about from.)
     sh = ShellState(; session, star, moll, imsky, immoll, msky,
-                    obs, orbitcanvas, post, imstar,
+                    obs, orbitcanvas, rvcanvas, post, imstar,
                     status = _session_status(session))
     SHELL[] = sh
     # Right-click to reset the zoom, and the zoom bound itself. Both read Makie's event
@@ -372,6 +377,7 @@ function ROTIR.gui(session::Session = Session();
                 modelSkyPlot    = mskyfig,
                 obsPlot         = obsfig,
                 orbitPlot       = orbfig,
+                rvPlot          = rvfig,
                 postPlot        = postfig,
                 imStarPlot      = imstarfig,
                 autoQuitMs      = Int(autoquit_ms),

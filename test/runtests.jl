@@ -199,6 +199,12 @@ try
         include(joinpath(TESTDIR, "test_orbit_fit.jl"))
     end
 
+    # Radial velocities: OITOOLS' CSV format, binary_RV against OITOOLS' orbit_rv, the RV
+    # term of fit_orbit (offsets, jitter), HD 210763 and Spica.
+    section("rv", "forward") do
+        include(joinpath(TESTDIR, "test_rv.jl"))
+    end
+
     # RADFLAT / RADIALVAR / orthoLD: hand-written gradients against FiniteDifferences, plus
     # the ANOVA identity that makes RADFLAT and RADIALVAR complementary.
     section("radial_regularizers", "forward") do

@@ -47,6 +47,7 @@ Pane {
     ListModel { id: kindModel }
     ListModel { id: optionModel }
     ListModel { id: starModelModel }
+    property string rvSummary: ""
 
     property string starModel: "analytic"
     // The synthetic time axis. VISUALIZATION ONLY: these are not epochs, the numbered marks on
@@ -95,7 +96,7 @@ Pane {
                 var f = ls[i].split("\t")
                 if (f.length < 8) continue
                 paramModel.append({ pname: f[0], punit: f[1], pvalue: f[2], pstate: f[3],
-                                    plo: f[4], phi: f[5], ptie: f[6], pdoc: f[7] })
+                                    plo: f[4], phi: f[5], ptie: f[6], pdoc: f[7], psect: "" })
             }
         }
         var crows = Julia.shell_orbit_component_params()
@@ -148,6 +149,22 @@ Pane {
             root.frameTime = tm[6]
         }
         resultTable.text = Julia.shell_orbit_result()
+        // The velocity parameters an open RV table brings in, in the SAME list as the
+        // elements under a section of their own: a second list with a height of its own
+        // squeezed the elements to one visible row on an ordinary screen.
+        root.rvSummary = Julia.shell_rv_summary()
+        var rr = Julia.shell_orbit_rv_params()
+        if (rr.length > 0) {
+            var rl = rr.split("\n")
+            for (var ri = 0; ri < rl.length; ++ri) {
+                var rf = rl[ri].split("\t")
+                if (rf.length < 8) continue
+                paramModel.append({ pname: rf[0], punit: rf[1], pvalue: rf[2], pstate: rf[3],
+                                    plo: rf[4], phi: rf[5], ptie: rf[6], pdoc: rf[7],
+                                    psect: "Radial velocities (RV tab)" })
+            }
+        }
+        if (root.rvSummary.length === 0) useRV.checked = false
     }
 
     function kindIndex(k) {
@@ -467,6 +484,17 @@ Pane {
                     // swaps its CONTENTS between bounds and a tie expression, so nothing to
                     // its left ever moves.
                     delegate: orbitParamRow
+                    section.property: "psect"
+                    section.delegate: Label {
+                        required property string section
+                        width: ListView.view.width
+                        height: section.length > 0 ? implicitHeight + dp(10) : 0
+                        visible: section.length > 0
+                        topPadding: dp(8)
+                        text: section
+                        font.bold: true
+                        font.pointSize: root.fontPt
+                    }
                 }
             }
 
@@ -603,12 +631,24 @@ Pane {
                     font.pointSize: root.fontPt - 1
                 }
                 Item { Layout.fillWidth: true }
+                CheckBox {
+                    id: useRV
+                    objectName: "useRV"
+                    text: "Use RV from RV tab"
+                    enabled: root.rvSummary.length > 0
+                    font.pointSize: root.fontPt - 1
+                    ToolTip.text: root.rvSummary.length > 0
+                                  ? "fit the velocities too: " + root.rvSummary
+                                  : "open an RV table in the RV tab first"
+                    ToolTip.visible: hovered
+                }
                 Button {
                     text: "Fit orbit"
                     enabled: !root.jobRunning
                     font.pointSize: root.fontPt
                     onClicked: root.statusChanged(
-                        Julia.shell_fit_orbit(orbitMethod.currentText, orbitEval.value))
+                        Julia.shell_fit_orbit(orbitMethod.currentText, orbitEval.value,
+                                              useRV.checked ? "1" : "0"))
                 }
                 Button {
                     text: "Stop"
