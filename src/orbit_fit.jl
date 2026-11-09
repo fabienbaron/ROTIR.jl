@@ -237,7 +237,7 @@ function orbit_fit_data(data; T::Type = Float64)
     for (k, d) in enumerate(blocks)
         uv[k]  = T.(d.uv)
         rho[k] = sqrt.(uv[k][1, :].^2 .+ uv[k][2, :].^2)
-        t      = _uv_times(d)
+        t      = uv_times(d)
         u      = unique(t)
         sort!(u)
         pos    = Dict(v => j for (j, v) in enumerate(u))
@@ -248,23 +248,6 @@ function orbit_fit_data(data; T::Type = Float64)
                     sum(d.nv2 for d in blocks), sum(d.nt3amp for d in blocks),
                     sum(d.nt3phi for d in blocks),
                     sum(d.nv2 + d.nt3amp + d.nt3phi for d in blocks))
-end
-
-"""
-Observation time (JD) for every uv point of an `OIdata` block.
-
-The uv table is NOT a plain [V2; T3_1; T3_2; T3_3] concatenation — `OIdata` carries index
-arrays that scatter each observable into a shared `nuv`-length uv list, and a single uv
-point can be shared between observables. Times must be scattered the same way, or they are
-silently assigned to the wrong baselines.
-"""
-function _uv_times(d)
-    t = zeros(Float64, d.nuv)
-    t[d.indx_v2]   .= d.v2_mjd
-    t[d.indx_t3_1] .= d.t3_mjd
-    t[d.indx_t3_2] .= d.t3_mjd
-    t[d.indx_t3_3] .= d.t3_mjd
-    return t .+ 2400000.5
 end
 
 # ---------------------------------------------------------------------------------------

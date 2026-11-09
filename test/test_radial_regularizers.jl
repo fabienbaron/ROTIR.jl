@@ -337,6 +337,30 @@ end
     # COTANGENT LAPLACE–BELTRAMI: the P1 finite-element Dirichlet energy on the triangulation
     # of the tessel centres. Unlike the Sobel fit it is consistent, so the checks are tight:
     # O(h²) convergence to the exact energies, isotropy, and the ℓ(ℓ+1) spectrum.
+    @testset "gaussian prior" begin
+        rng = MersenneTwister(11)
+        n = 48
+        x0 = 20000.0 .+ 1000.0 .* randn(rng, n)
+        x  = x0 .+ 2000.0 .* randn(rng, n)
+        for σ in (2500.0, 2000.0 .+ 1000.0 .* rand(rng, n))
+            g = similar(x)
+            f = spheroid_prior_fg(x, g, x0, σ)
+            @test f ≈ sum(abs2, (x .- x0) ./ σ)
+            gfd = grad(FDM, y -> spheroid_prior_fg(y, similar(y), x0, σ), x)[1]
+            @test g ≈ gfd rtol = 1e-6
+            @test spheroid_prior_fg(x0, similar(x), x0, σ) == 0
+        end
+        # Through the regularizer list: the pixel range selects from x0 and σ as from x.
+        σv = 2000.0 .+ 1000.0 .* rand(rng, n)
+        sub = 5:30
+        regs = [["prior", 0.5, (x0 = x0, σ = σv), sub]]
+        g = zeros(n)
+        f = ROTIR.spheroid_regularization(x, g; regularizers = regs)
+        @test f ≈ 0.5 * sum(abs2, (x[sub] .- x0[sub]) ./ σv[sub])
+        @test g[sub] ≈ 0.5 .* 2 .* (x[sub] .- x0[sub]) ./ σv[sub].^2
+        @test all(iszero, g[setdiff(1:n, sub)])
+    end
+
     @testset "laplace-beltrami" begin
         Pl(l, z) = l == 1 ? z : l == 2 ? (3z^2 - 1)/2 : l == 3 ? (5z^3 - 3z)/2 :
                    l == 4 ? (35z^4 - 30z^2 + 3)/8 : (63z^5 - 70z^3 + 15z)/8

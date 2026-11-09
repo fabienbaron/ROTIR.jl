@@ -85,13 +85,45 @@ this factor, and for two unresolved components it must reduce to the textbook
 `exp(-2πi(u·Δα + v·δ))` with Δα = -offset_x (West = -East) in radians.
 """
 function binary_phase_shift(uv, offset_x, offset_y;
-                            T = float(real(promote_type(eltype(uv), typeof(offset_x),
-                                                        typeof(offset_y)))))
+                            T = float(real(promote_type(eltype(uv), eltype(offset_x),
+                                                        eltype(offset_y)))))
     C = T(180 * 3600000)
     kx = uv[1,:] .* T(-pi / C)
     ky = uv[2,:] .* T( pi / C)
     return cis.(-2 * T(pi) .* (kx .* offset_x .+ ky .* offset_y))
 end
+
+"""
+    uv_times(data::OIdata) -> Vector{Float64}
+
+Observation time (JD) of every uv point of `data`.
+
+`OIdata` scatters each observable into a shared `nuv`-length uv list through its index
+arrays (`indx_v2`, `indx_t3_1`, `indx_t3_2`, `indx_t3_3`), and one uv point can be shared
+between observables. The times are scattered the same way, from `v2_mjd` and `t3_mjd`.
+"""
+function uv_times(d)
+    t = zeros(Float64, d.nuv)
+    t[d.indx_v2]   .= d.v2_mjd
+    t[d.indx_t3_1] .= d.t3_mjd
+    t[d.indx_t3_2] .= d.t3_mjd
+    t[d.indx_t3_3] .= d.t3_mjd
+    return t .+ 2400000.5
+end
+
+"""
+    binary_phase_shift(data::OIdata, bparams) -> Vector{Complex}
+
+Per-baseline phase factor with the secondary at its orbital position at each uv point's
+own observation time ([`uv_times`](@ref)), from [`orbit_to_rotir_offset`](@ref).
+
+A close binary moves within one night: Spica's secondary covers 0.24–0.52 mas in a 2015
+night, which shifts the closure phases at long baselines by tens of degrees. Placing it at
+one mean time per epoch, `binary_phase_shift(data.uv, orbit_to_rotir_offset(bparams, t)...)`,
+is only valid when that motion is small against the resolution.
+"""
+binary_phase_shift(data::OIdata, bparams) =
+    binary_phase_shift(data.uv, orbit_to_rotir_offset(bparams, uv_times(data))...)
 
 """
     binary_cvis(x1, star1, x2, star2, phase_shift; intensity_model=:linear, band=nothing,

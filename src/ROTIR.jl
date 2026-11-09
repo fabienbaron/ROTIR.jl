@@ -356,14 +356,14 @@ export spheroid_chi2_f, spheroid_chi2_fg
 export spheroid_chi2_allepochs_f
 export spheroid_radflat_fg, spheroid_radialvar_fg, radflat_bins,
        spheroid_orthold_fg, orthold_direction
-export spheroid_sobel_fg, spheroid_sobel2_fg, max_entropy_fg
+export spheroid_sobel_fg, spheroid_sobel2_fg, max_entropy_fg, spheroid_prior_fg
 export spheroid_harmon_bias_fg, spheroid_regularization
 export image_reconstruct_oi, image_reconstruct_oi_crit, image_reconstruct_oi_chi2, image_reconstruct_oi_chi2_fg
 export multires_reconstruct_oi
 export cvis_to_v2, poly_to_cvis, poly_to_flux, cvis_to_t3
 
 # Binary forward model
-export binary_phase_shift, binary_cvis, binary_observables, binary_chi2_f, orbit_to_rotir_offset
+export binary_phase_shift, binary_cvis, binary_observables, binary_chi2_f, orbit_to_rotir_offset, uv_times
 export binary_chi2_fg, binary_crit_allepochs_fg, binary_reconstruct_oi, split_binary_map
 
 # Soft visibility

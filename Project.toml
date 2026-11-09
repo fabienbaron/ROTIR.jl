@@ -6,7 +6,6 @@ desc = "Regularized imaging of stellar surfaces from optical interferometry, Dop
 version = "0.9.0"
 authors = ["Fabien Baron <fbaron@gsu.edu>"]
 
-
 [deps]
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -19,15 +18,13 @@ OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
 OptimPackNextGen = "080ffe24-4a27-4ab0-ad71-7b624e73ef8d"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 RuntimeGeneratedFunctions = "7e49a35a-f44a-4d26-94aa-eba1b4ca6b47"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
-# CAUTION: Pkg.add/update/resolve rewrite this file and STRIP every comment. Check
-# `git diff Project.toml` afterwards. (LoopVectorization is weak for its LOAD cost, not its
-# size — see src/turbo_polyft.jl.)
 [weakdeps]
 ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
@@ -41,25 +38,22 @@ LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
 Pigeons = "0eb8d820-af6a-4919-95ae-11206f830c31"
-PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
 PythonPlot = "274fc56d-3b97-40fa-a1cd-1b4a50311bf9"
 QML = "2db162a6-7e43-52c3-8d84-290c1c42d82a"
 QMLMakie = "08f9cac3-3b11-4f1c-9d88-d0e81c500f64"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
-# Unregistered deps, tracked on their default branch (no `rev` on purpose). For a local
-# checkout use `Pkg.develop(path=...)`, which wins in the Manifest.
 [sources]
 Nautilus = {url = "https://github.com/fabienbaron/Nautilus.jl.git"}
-OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
+OITOOLS = {rev = "main", url = "https://github.com/fabienbaron/OITOOLS.jl"}
 
 [extensions]
 ROTIRFINUFFTExt = "FINUFFT"
 ROTIRGUIExt = ["GLMakie", "Makie", "QML", "QMLMakie"]
 ROTIRHMCExt = ["AdvancedHMC", "LogDensityProblems", "Zygote"]
 ROTIRKorgExt = "Korg"
-ROTIRMakieExt = "Makie"
 ROTIRLoopVectorizationExt = "LoopVectorization"
+ROTIRMakieExt = "Makie"
 ROTIRNautilusExt = "Nautilus"
 ROTIRPigeonsExt = ["Pigeons", "Distributions", "LogDensityProblems", "ADTypes", "Zygote"]
 ROTIRPythonPlotExt = ["PythonPlot", "LaTeXStrings", "PythonCall"]
@@ -81,8 +75,6 @@ LoopVectorization = "0.12.174"
 Makie = "0.24"
 NLopt = "1"
 Nautilus = "0.1"
-# Unbounded: `[sources]` tracks main, so there is only ever one candidate and an upper bound
-# just breaks CI on each upstream bump. Pin a `rev` in `[sources]` if that is ever needed.
 OITOOLS = ">= 0.17"
 Pigeons = "0.4"
 PrecompileTools = "1.2"
@@ -106,5 +98,4 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [targets]
-test = ["Test", "FiniteDifferences", "Zygote", "PythonPlot", "LaTeXStrings", "Nautilus",
-        "PythonCall", "LoopVectorization", "FINUFFT"]
+test = ["Test", "FiniteDifferences", "Zygote", "PythonPlot", "LaTeXStrings", "Nautilus", "PythonCall", "LoopVectorization", "FINUFFT"]

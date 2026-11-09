@@ -57,6 +57,13 @@ regulariser applies to `x[pixel_range]`.
 | `"mem"` | `["mem", mu, nothing, pixel_range]` | maximum entropy of `x/mean(x)` (no spatial coupling) | — |
 | `"mean"` | `["mean", mu, nothing, pixel_range]` | `Σ\|x − mean(x)\|` | — |
 | `"bias"` | `["bias", mu, B, pixel_range]` | `(x − mean(x))²`, weighted by `B` above the mean | — |
+| `"prior"` | `["prior", mu, (x0 = x0, σ = σ), pixel_range]` | `Σ((x − x0)/σ)²`, a Gaussian prior toward the map `x0` | — |
+
+`"prior"` pulls the map toward a reference map `x0`, such as a gravity-darkened model, with
+standard deviation `σ` (a scalar or one value per tessel) in the map's units. `x0` and a vector
+`σ` are as long as the whole map, and `pixel_range` selects from them as from `x`. The term is
+in χ² units: `mu = 1` is the Gaussian prior `x ~ N(x0, σ²)`, the same at every epoch, so
+epochs with more data move further from `x0`. Unlike `"sobel2"`, it is not scale-invariant.
 
 Radial regularizers for the single-epoch, non-rotating case (`"radflat"`, `"radialvar"`,
 `"orthold"`) are described in [Radial regularizers](../api/radial_regularizers.md).

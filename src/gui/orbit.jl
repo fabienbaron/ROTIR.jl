@@ -1002,7 +1002,7 @@ function refresh_orbit!(sh::ShellState)
     d = current_dataset(sh.session)
     # JULIAN DATE, not MJD. The elements are quoted in JD — Spica's `T0` is 2454189.4 — and
     # every other consumer of an epoch time converts: `companion_offsets` adds 2400000.5, and
-    # `fit_orbit` does it for the whole uv table in `_uv_times`. This did not, so the epoch
+    # `fit_orbit` does it for the whole uv table in `uv_times`. This did not, so the epoch
     # marks were evaluated 2.4 million days before the elements describe.
     #
     # The visible symptom was the marks not falling on the drawn track, and that is worth

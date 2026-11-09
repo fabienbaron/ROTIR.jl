@@ -145,11 +145,16 @@ The binary complex visibility combines both components, the secondary shifted by
 orbital separation:
 
 ```julia
-offset_x, offset_y = orbit_to_rotir_offset(bparams, tepoch_jd)   # (West, North), mas
-phase = binary_phase_shift(data.uv, offset_x, offset_y)
+phase = binary_phase_shift(data, bparams)       # secondary at each uv point's own time
 v2, t3amp, t3phi = binary_observables(tmap1, star1, tmap2, star2, data, phase)
 chi2 = binary_chi2_f(tmap1, star1, tmap2, star2, data, phase)
 ```
+
+`binary_phase_shift(data, bparams)` places the secondary at the observation time of every
+uv point (`uv_times(data)`). A close binary moves during one night (Spica's secondary by
+0.24–0.52 mas in 2015), and one position per epoch smears the closure phases at long
+baselines. For a fixed offset, `binary_phase_shift(data.uv, offset_x, offset_y)` takes the
+(West, North) offset in mas, e.g. from `orbit_to_rotir_offset(bparams, tepoch_jd)`.
 
 Mutual occultation is off by default; `occultation = true` (or `:exact`, `:soft`) turns it
 on in `binary_cvis`, `binary_observables` and the χ² functions.

@@ -2537,7 +2537,7 @@ end
 @testset "the epoch marks fall on the orbit" begin
     # They did not, on Spica, and the cause was a UNIT: `refresh_orbit!` handed the dataset's
     # MJDs straight to `orbit_to_rotir_offset`, which reads an epoch in the same JD the
-    # elements are quoted in — `companion_offsets` and `fit_orbit`'s `_uv_times` both add
+    # elements are quoted in — `companion_offsets` and `fit_orbit`'s `uv_times` both add
     # 2400000.5 for exactly that reason.
     #
     # A wrong time alone would only put a mark at the wrong PHASE of the right ellipse, still

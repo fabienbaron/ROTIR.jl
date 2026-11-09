@@ -3,7 +3,8 @@
 #   julia -t 8 --project=demos demos/spica_tessellated_joint_fit.jl
 #
 #   PFREE=1 ...      # also fit the anomalistic period (no prior)
-#   NIT=200 ...      # quick smoke test
+#   MAXITER=3 ...    # quick smoke test (Levenberg-Marquardt iterations, default 100)
+#   FDSTEP=1e-4 ...  # finite-difference step, as a fraction of each parameter's box width
 #
 # ---------------------------------------------------------------------------------------
 # Model
@@ -11,7 +12,9 @@
 # Interferometry: both stars as Roche surfaces (HEALPix 3072 + 768 tessels), von Zeipel
 # gravity darkening (beta = 0.25), mutual irradiation (albedo 0.6), Planck intensity at each
 # epoch's mean wavelength, no mutual occultation. Data: 2007_2012_2015.Spica.oifits, split
-# into 11 epochs at gaps longer than half a day.
+# into 11 epochs at gaps longer than half a day. The surfaces and maps are computed at each
+# epoch's mean time; the secondary's position is computed at each uv point's own time, since
+# it moves 0.24-0.52 mas during a 2015 night.
 #
 # Radial velocities: Keplerian curves from the same orbit, fitted to data/spica_rv.csv. They
 # are linear in (K1, K2, gamma), which are solved by weighted least squares at every step;
@@ -36,8 +39,17 @@
 # ---------------------------------------------------------------------------------------
 # The interferometric chi2 is divided by its reduced value at the start (OI_SCALE), which is
 # the same as inflating the OIFITS errors until chi2r = 1. Without it 6871 interferometric
-# points at chi2r ~ 4 outweigh 66 velocities by two orders of magnitude; with or without it
-# the solution moves by less than its own scatter.
+# points at chi2r ~ 2.4 outweigh 66 velocities by two orders of magnitude.
+#
+# ---------------------------------------------------------------------------------------
+# Fit
+# ---------------------------------------------------------------------------------------
+# Levenberg-Marquardt (OITOOLS._lm_bounded) on the residual vector: the OI residuals over
+# sqrt(OI_SCALE), then the RV residuals. Parameters on a bound of the search box are held
+# rather than clipped. The Jacobian is a forward difference, one model evaluation per free
+# parameter, with steps of FDSTEP times each box width. The uncertainties are
+# sqrt(diag((J'J)^-1)) times sqrt(chi2 / (n - nfree)) of that weighted objective; they take
+# the residuals as independent, which night-to-night calibration errors are not.
 #
 # ---------------------------------------------------------------------------------------
 # Result (P fixed)
@@ -51,14 +63,15 @@
 # 105-139 yr) and the RV chi2 rises from 107 to 263. The velocities cover a single season,
 # so they cannot anchor that trade; the century-long RV record behind the published P can.
 
-using ROTIR, Printf, Statistics, Optim
-using OITOOLS: split_by_time
+using ROTIR, Printf, Statistics, LinearAlgebra
+using OITOOLS: OITOOLS, split_by_time
 
 const HERE = @__DIR__
 include(joinpath(HERE, "spica_params.jl"))
 
 const PFREE = get(ENV, "PFREE", "0") == "1"
-const NIT   = parse(Int, get(ENV, "NIT", "4000"))
+const MAXITER = parse(Int, get(ENV, "MAXITER", "100"))
+const FDSTEP  = parse(Float64, get(ENV, "FDSTEP", "1e-4"))
 const P_ANOM = 4.01454
 
 # --- interferometry -----------------------------------------------------------------------
@@ -103,34 +116,36 @@ function spica_system(r1, r2, i, Ω, ω, a, e, T0, dω, P, q)
     return p1, p2, bp
 end
 
-"chi2 of V2, T3amp, T3phi summed over epochs; number of points; per-epoch chi2r."
-function oi_chi2(p1, p2, bp)
+"Normalised residuals of V2, T3amp, T3phi over all epochs; their chi2 per observable; number of points; per-epoch chi2r."
+function oi_resid(p1, p2, bp)
     o1 = roche_omega_table(TESS1, p1, bp; secondary = false, npoints = 9)
     o2 = roche_omega_table(TESS2, p2, bp; secondary = true,  npoints = 9)
-    c = zeros(3); n = 0; per = zeros(NEP)
+    res = Float64[]; c = zeros(3); n = 0; per = zeros(NEP)
     for k in 1:NEP
         D = compute_separation(bp, TEP[k])
         g1, g2 = create_binary_geometry(TESS1, p1, TESS2, p2, bp, TEP[k]; omega1 = o1(D), omega2 = o2(D))
         m1 = temperature_map_vonZeipel_roche_single(p1, g1, TEP[k])
         m2 = temperature_map_vonZeipel_roche_single(p2, g2, TEP[k]; secondary = true)
         h1, h2 = handle_reflection(g1, m1, g2, m2; albedo1 = ALBEDO_DEFAULT, albedo2 = ALBEDO_DEFAULT)
-        ph = binary_phase_shift(data[k].uv, orbit_to_rotir_offset(bp, TEP[k])...)
+        ph = binary_phase_shift(data[k], bp)      # secondary at each uv point's own time
         v2, t3a, t3p = binary_observables(h1, g1, h2, g2, data[k], ph; intensity_model = :planck, band = BANDS[k])
-        ck = [sum(abs2, (v2 .- data[k].v2) ./ data[k].v2_err),
-              sum(abs2, (t3a .- data[k].t3amp) ./ data[k].t3amp_err),
-              sum(abs2, mod360(t3p .- data[k].t3phi) ./ data[k].t3phi_err)]
+        rk = ((v2 .- data[k].v2) ./ data[k].v2_err,
+              (t3a .- data[k].t3amp) ./ data[k].t3amp_err,
+              mod360(t3p .- data[k].t3phi) ./ data[k].t3phi_err)
+        ck = [sum(abs2, x) for x in rk]
         nk = data[k].nv2 + data[k].nt3amp + data[k].nt3phi
-        c .+= ck; n += nk; per[k] = sum(ck) / nk
+        append!(res, rk...); c .+= ck; n += nk; per[k] = sum(ck) / nk
     end
-    return c, n, per
+    return res, c, n, per
 end
 
-"(K1, K2, gamma) by weighted least squares, and the RV chi2."
+"(K1, K2, gamma) by weighted least squares, the normalised RV residuals and their chi2."
 function rv_solve(ω, e, T0, dω, P)
     b1, b2 = binary_RV((ω = ω, e = e, P = P, T0 = T0, dP = 0.0, dω = dω), rv.jd; K1 = 1.0, K2 = 1.0, γ = 0.0)
     A = hcat(ifelse.(RV_PRIMARY, b1, 0.0), ifelse.(RV_PRIMARY, 0.0, b2), ones(length(rv.jd))) ./ RV_SIG
     K = A \ (rv.rv ./ RV_SIG)
-    return K, sum(abs2, A * K .- rv.rv ./ RV_SIG)
+    res = A * K .- rv.rv ./ RV_SIG
+    return K, res, sum(abs2, res)
 end
 
 # --- parameters -----------------------------------------------------------------------------
@@ -146,45 +161,69 @@ const HALF = [0.1, 0.06, 4, 4, 20, 0.08, 0.06, 0.3, 0.008, 1.5e-3]
 const LO, HI = x0 .- HALF, x0 .+ HALF .+ [0, 0, 0, 0, 0, 0, 0, 0, 0.004, 0]
 const FREE = PFREE ? collect(1:10) : collect(1:9)
 full(x) = (y = copy(x0); y[FREE] .= x; y)
-# logistic map from R to the box, so Nelder-Mead never leaves it
-tox(z) = full(LO[FREE] .+ (HI[FREE] .- LO[FREE]) ./ (1 .+ exp.(-z)))
-toz(y) = log.((y[FREE] .- LO[FREE]) ./ (HI[FREE] .- y[FREE]))
 
 function evaluate(y)
     r1, r2, i, Ω, ω, a, e, T0, dω, P = y
-    K, crv = rv_solve(ω, e, T0, dω, P)
+    K, rrv, crv = rv_solve(ω, e, T0, dω, P)
     q = clamp(K[1] / K[2], 0.4, 0.9)
-    c, n, per = oi_chi2(spica_system(r1, r2, i, Ω, ω, a, e, T0, dω, P, q)...)
-    return (; c, n, per, crv, K, q)
+    roi, c, n, per = oi_resid(spica_system(r1, r2, i, Ω, ω, a, e, T0, dω, P, q)...)
+    return (; roi, rrv, c, n, per, crv, K, q)
 end
 
 r0 = evaluate(x0)
 const OI_SCALE = sum(r0.c) / r0.n
 @printf("start: OI chi2r %.3f, RV chi2 %.1f over %d velocities\n", OI_SCALE, r0.crv, length(rv.jd))
 
+# Residuals of the free parameters x. The last evaluation is kept, since _lm_bounded asks for
+# the Jacobian at the point whose residuals it has just accepted.
 const NEVAL = Ref(0)
-function objective(z)
-    r = evaluate(tox(z))
+const LAST = Ref{Any}(nothing)
+function resid(x)
+    LAST[] !== nothing && LAST[][1] == x && return LAST[][2]
+    r = evaluate(full(x))
     NEVAL[] += 1
-    NEVAL[] % 200 == 0 && @printf("%5d  OI chi2r %.4f  RV chi2 %.1f\n", NEVAL[], sum(r.c) / r.n, r.crv)
-    return sum(r.c) / OI_SCALE + r.crv
+    v = vcat(r.roi ./ sqrt(OI_SCALE), r.rrv)
+    LAST[] = (copy(x), v)
+    return v
 end
 
-opts = Optim.Options(iterations = NIT, f_reltol = 1e-8)
-res = optimize(objective, toz(x0), NelderMead(), opts)
-res = optimize(objective, Optim.minimizer(res), NelderMead(), opts)    # restart a collapsed simplex
-y = tox(Optim.minimizer(res))
+const LOF, HIF = LO[FREE], HI[FREE]
+const H = FDSTEP .* (HIF .- LOF)
+const NJAC = Ref(0)
+"Forward-difference Jacobian, stepping back from an upper bound."
+function jac(x)
+    r = resid(x)
+    Jm = zeros(length(r), length(x))
+    for j in eachindex(x)
+        h = x[j] + H[j] <= HIF[j] ? H[j] : -H[j]
+        xp = copy(x); xp[j] += h
+        Jm[:, j] = (resid(xp) .- r) ./ h
+    end
+    LAST[] = (copy(x), r)
+    NJAC[] += 1
+    @printf("  Jacobian %d (%d evaluations): OI chi2r %.4f  RV chi2 %.1f\n", NJAC[], NEVAL[],
+            sum(abs2, r[1:r0.n]) * OI_SCALE / r0.n, sum(abs2, r[r0.n+1:end]))
+    return Jm
+end
+
+res = OITOOLS._lm_bounded(resid, jac, x0[FREE], LOF, HIF; maxIter = MAXITER)
+y = full(res.x)
 r = evaluate(y)
+nres = length(res.resid)
+cov = inv(Symmetric(res.jacobian' * res.jacobian)) .* (sum(abs2, res.resid) / (nres - length(FREE)))
+σ = zeros(length(y)); σ[FREE] .= sqrt.(diag(cov))
 
 # --- report ---------------------------------------------------------------------------------
 plx, q = rv_physical(y[6], y[3], y[10], y[7], r.K[1], r.K[2])
 m = dynamical_masses(y[6], y[10], plx, q)
-println("\n", PFREE ? "P free" : "P fixed at $P_ANOM d", "; converged: ", Optim.converged(res))
+println("\n", PFREE ? "P free" : "P fixed at $P_ANOM d", "; ", res.reason, " after ", res.iterations,
+        " iterations, ", NEVAL[], " evaluations")
 @printf("OI   V2 %.0f  T3amp %.0f  T3phi %.0f   chi2r %.3f over %d points\n", r.c..., sum(r.c) / r.n, r.n)
 @printf("RV   chi2 %.1f   chi2r %.2f over %d velocities\n", r.crv, r.crv / length(rv.jd), length(rv.jd))
-for (k, v) in zip(NAMES, y)
-    @printf("  %-7s %.8g%s\n", k, v, (k == "P" && !PFREE) ? "  (fixed)" :
-            min(v - LO[findfirst(==(k), NAMES)], HI[findfirst(==(k), NAMES)] - v) < 1e-3 * 2HALF[findfirst(==(k), NAMES)] ? "  AT BOUND" : "")
+for (j, (k, v)) in enumerate(zip(NAMES, y))
+    jf = findfirst(==(j), FREE)
+    @printf("  %-7s %.8g%s\n", k, v, jf === nothing ? "  (fixed)" :
+            @sprintf("  +- %.2g%s", σ[j], jf in res.held ? "  HELD ON BOUND" : ""))
 end
 @printf("  K1 %.2f  K2 %.2f  gamma %.2f km/s   q %.4f\n", r.K..., q)
 @printf("  parallax %.3f mas (%.1f pc)   M1 %.2f  M2 %.2f Msun   U %.1f yr\n",
@@ -200,7 +239,8 @@ open(out, "w") do io
     println(io, "# 2007_2012_2015.Spica.oifits + Keplerian RVs (spica_rv.csv, sigma = 7 + 30 exp(-|V2-V1|/100) km/s).")
     @printf(io, "# OI chi2r %.3f over %d points; RV chi2 %.1f over %d. LD (power law) %.4f / %.4f.\n",
             sum(r.c) / r.n, r.n, r.crv, length(rv.jd), LD1, LD2)
-    for (k, v) in zip(NAMES, y); println(io, k, '\t', v); end
+    println(io, "# name\tvalue\tsigma (0 = fixed)")
+    for (k, v, e) in zip(NAMES, y, σ); println(io, k, '\t', v, '\t', e); end
     for (k, v) in (("K1", r.K[1]), ("K2", r.K[2]), ("gamma", r.K[3]), ("q", q), ("plx", plx),
                    ("M1", m.M1), ("M2", m.M2), ("ld1_1", LD1), ("ld1_2", LD2))
         println(io, k, '\t', v)

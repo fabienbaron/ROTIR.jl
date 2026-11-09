@@ -165,3 +165,30 @@ end
         @test maximum(abs.(got .- want)) < 2e-3
     end
 end
+
+# =======================================================================================
+# Per-uv-point observation times.
+# =======================================================================================
+@testset "binary_phase_shift(data, bparams): one position per uv point" begin
+    D = joinpath(pkgdir(ROTIR), "demos", "data")
+    d = readoifits(joinpath(D, "2007_2012_2015.Spica.oifits"); verbose = false)[1, 1]
+    t = uv_times(d)
+    @test length(t) == d.nuv
+    # Each observable's uv points carry that observable's own MJD. A uv point shared between
+    # observables holds one of their times, which in this file differ by under a second.
+    for (i, m) in ((d.indx_v2, d.v2_mjd), (d.indx_t3_1, d.t3_mjd), (d.indx_t3_3, d.t3_mjd))
+        @test maximum(abs.(t[i] .- (m .+ 2400000.5))) < 1e-5
+    end
+
+    bp = (a = 1.55, i = 116.0, Ω = 310.0, ω = 255.0, e = 0.125, P = 4.01454,
+          T0 = 2454189.4, dP = 0.0, dω = 0.0, q = 0.62)
+    ph = binary_phase_shift(d, bp)
+    @test length(ph) == d.nuv
+    # Identical, point by point, to the scalar method at that point's own time.
+    for k in (1, d.nuv ÷ 2, d.nuv)
+        @test ph[k] ≈ binary_phase_shift(d.uv[:, k:k], orbit_to_rotir_offset(bp, t[k])...)[1]
+    end
+    # One mean time for the whole table is a different model.
+    tm = sum(t) / length(t)
+    @test maximum(abs.(ph .- binary_phase_shift(d.uv, orbit_to_rotir_offset(bp, tm)...))) > 0.1
+end

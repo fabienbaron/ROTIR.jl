@@ -572,6 +572,31 @@ function spheroid_total_variation_fg(x, tv_g, tvinfo; verbose = true)
   return tv_f
 end
 
+"""
+    spheroid_prior_fg(x, g, x0, σ; verbose=false) -> f
+
+Gaussian prior toward a reference map (`"prior"`):
+
+```
+f = Σⱼ ((xⱼ − x0ⱼ) / σⱼ)²         ∂f/∂xⱼ = 2 (xⱼ − x0ⱼ) / σⱼ²
+```
+
+`x0` is in the map's units (kelvin for a temperature map); `σ` is a scalar or one value per
+tessel, in the same units. The penalty is in χ² units, so a weight of 1 is the Gaussian prior
+`x ~ N(x0, σ²)`, and it is the same at every epoch: an epoch with more data moves further from
+`x0` because its χ² is larger, not because the weight changed.
+
+In a regularizer list the entry is `["prior", mu, (x0 = x0, σ = σ), pixel_range]`, with `x0`
+(and a vector `σ`) as long as the whole component map; `pixel_range` selects from all three.
+"""
+function spheroid_prior_fg(x, g, x0, σ; verbose = false)
+    r = (x .- x0) ./ σ
+    f = sum(abs2, r)
+    g[:] = 2 .* r ./ σ
+    verbose && println(" PRIOR: ", f)
+    return f
+end
+
 function spheroid_mean_fg(x, g; verbose = true)
 f = sum(abs.(x.-sum(x)/length(x)))
 g[:] = sign.(x.-sum(x)/length(x))
@@ -981,6 +1006,11 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
           reg_f += regularizers[ireg][2]*spheroid_total_variation2_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
       elseif regularizers[ireg][1] == "tv"
           reg_f += regularizers[ireg][2]*spheroid_total_variation_fg(x_sub, temp_g, regularizers[ireg][3], verbose = verbose);
+      elseif regularizers[ireg][1] == "prior"
+          P = regularizers[ireg][3]
+          rng = regularizers[ireg][4]
+          σs = P.σ isa AbstractVector ? P.σ[rng] : P.σ
+          reg_f += regularizers[ireg][2]*spheroid_prior_fg(x_sub, temp_g, P.x0[rng], σs, verbose = verbose);
       elseif regularizers[ireg][1] == "mean"
           reg_f += regularizers[ireg][2]*spheroid_mean_fg(x_sub, temp_g, verbose = verbose);
       elseif regularizers[ireg][1] == "bias"
@@ -1001,7 +1031,7 @@ function spheroid_regularization(x,g; printcolor = :black, regularizers=[], verb
           # An unrecognised name must RAISE. Falling through would contribute exactly
           # zero, so a typo would look like a regularizer that simply does nothing.
           error("spheroid_regularization: unknown regularizer \"$(regularizers[ireg][1])\"; " *
-                "known: mem, tv, tv2, mean, bias, radflat, radialvar, orthold, sobel, sobel2, " *
+                "known: mem, tv, tv2, prior, mean, bias, radflat, radialvar, orthold, sobel, sobel2, " *
                 "laplace_beltrami")
       end
       g[regularizers[ireg][4]] += regularizers[ireg][2]*temp_g

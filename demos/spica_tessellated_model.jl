@@ -82,8 +82,9 @@ function build(p1, p2, t1::tessellation, t2::tessellation, ts; vcons=true, npoin
 end
 s1, s2 = build(p1, p2, t1, t2, tepochs)
 
-phases = [binary_phase_shift(data[i].uv, orbit_to_rotir_offset(bp, tepochs[i])...)
-          for i in 1:nepochs]
+# The secondary at each uv point's own observation time: it moves 0.24-0.52 mas during a
+# 2015 night, which one position per epoch would smear out of the closure phases.
+phases = [binary_phase_shift(data[i], bp) for i in 1:nepochs]
 
 # Epochs where the stars overlap on the sky (flagged with a warning).
 overlap = check_binary_overlap(s1, s2, bp, tepochs)
@@ -132,13 +133,11 @@ model_obs = Vector{NamedTuple}(undef, nepochs)
 for i in 1:nepochs
     # Use precise mean MJD from the data (not the rounded filter value)
     tepoch = epoch_mean_mjd[i] + 2400000.5
-    # one geometry per star, for this epoch only: not indexed by i
-    star1, star2 = create_binary_geometry(t1, p1, t2, p2, bp, tepoch)
-    m1 = temperature_map_vonZeipel_roche_single(p1, star1, tepoch)
-    m2 = temperature_map_vonZeipel_roche_single(p2, star2, tepoch; secondary = true)
-
-    offset_x, offset_y = orbit_to_rotir_offset(bp, tepoch)
-    phase = binary_phase_shift(data[i].uv, offset_x, offset_y)
+    # the geometries, irradiated maps and phase ramps built above
+    star1, star2 = s1[i], s2[i]
+    m1, m2 = heat(i, ALBEDO_DEFAULT)
+    offset_x, offset_y = orbit_to_rotir_offset(bp, tepoch)    # for the separation printed below
+    phase = phases[i]
 
     v2_model, t3amp_model, t3phi_model = binary_observables(m1, star1, m2, star2, data[i], phase;
                                                             intensity_model=:planck, band=bands[i],

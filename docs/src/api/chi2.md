@@ -163,7 +163,9 @@ spheroid_laplace_beltrami_fg
 | Function | Description |
 |----------|-------------|
 | `orbit_to_rotir_offset(bparams, tepoch_jd)` | orbital position as ROTIR's `(West, North)` offset, mas |
-| `binary_phase_shift(uv, offset_x, offset_y)` | per-baseline phase factor for that offset |
+| `binary_phase_shift(uv, offset_x, offset_y)` | per-baseline phase factor for that offset; scalars, or one offset per uv point |
+| `uv_times(data)` | observation time (JD) of every uv point |
+| `binary_phase_shift(data, bparams)` | phase factor with the secondary at each uv point's own time |
 | `binary_cvis(x1, star1, x2, star2, phase_shift)` | combined, flux-normalised complex visibilities |
 | `binary_observables(x1, star1, x2, star2, data, phase_shift)` | `(v2, t3amp, t3phi)` |
 | `binary_chi2_f(x1, star1, x2, star2, data, phase_shift)` | χ², value |
@@ -184,7 +186,7 @@ offset). The unknown is the two maps concatenated, `[x1; x2]`, split at `stars1[
 stars1 = create_star_multiepochs(tess, p1, tepochs; secondary = false)
 stars2 = create_star_multiepochs(tess, p2, tepochs; secondary = true)
 setup_oi!(data, stars1); setup_oi!(data, stars2)      # matrix path
-shifts = [binary_phase_shift(data[i].uv, offs[i]...) for i in eachindex(data)]  # fixed
+shifts = [binary_phase_shift(d, bparams) for d in data]   # fixed during the reconstruction
 x0 = vcat(parametric_temperature_map(p1, stars1[1]),
           parametric_temperature_map(p2, stars2[1]; secondary = true))
 x  = binary_reconstruct_oi(x0, data, stars1, stars2, shifts;
