@@ -22,9 +22,12 @@
 #
 # Fixed:
 #   P       4.01454 d, ANOMALISTIC (Shobbrook et al. 1972; Aufdenberg et al. 2015).
-#   c2_ld1  0.15. The secondary is about one resolution element across at the longest
-#           baseline (0.45 mas against 0.49 mas) and carries 15 % of the flux, so its limb
-#           darkening is not measurable.
+#   LD      c1_ld1, c2_ld1: H-band power-law exponents fitted to Kurucz ATLAS9 intensities at
+#           each star's polar Teff and logg (spica_kurucz_ld() in spica_params.jl), the values
+#           demos/spica_refine_orbit_fit.jl uses. The data do not constrain them: free, the
+#           primary's runs to the edge of its box, and the secondary, about one resolution
+#           element across at the longest baseline and 15 % of the flux, has no measurable
+#           limb darkening.
 #
 # Free, with boxes set by physics and not by earlier fits:
 #   a            0.8-2.5 mas
@@ -35,7 +38,7 @@
 #   T0           one period
 #   domega       0-0.02 deg/day (apsidal period from 49 yr to infinity; apsidal motion from
 #                tides, rotation and general relativity is prograde)
-#   c1_diameter  0.2-1.6 mas, c1_ld1 0-1, c2_diameter 0.1-1.0 mas
+#   c1_diameter  0.2-1.6 mas, c2_diameter 0.1-1.0 mas
 #   f            0.02-0.8 (flux ratio secondary/primary; below 1, so the brighter star is
 #                component 1)
 #   plx          5-25 mas, q 0.2-1.5, gamma -50 to 50 km/s
@@ -59,14 +62,16 @@ rv = spica_rv()
 # draws from the boxes.
 elements = (a = 1.54, i = 116.0, Omega = 310.0, omega = 255.0, e = 0.12, P = P_ORB,
             T0 = T0_ORB, dP = 0.0, domega = DOMEGA)
-star1 = LimbDarkenedDisk(diameter = 2RPOLE1, law = :power, ld1 = 0.15)
-star2 = LimbDarkenedDisk(diameter = 2RPOLE2, law = :power, ld1 = 0.15)
+LD1, LD2 = spica_kurucz_ld()
+@printf("Kurucz H-band power-law limb darkening: primary %.4f, secondary %.4f\n", LD1, LD2)
+star1 = LimbDarkenedDisk(diameter = 2RPOLE1, law = :power, ld1 = LD1)
+star2 = LimbDarkenedDisk(diameter = 2RPOLE2, law = :power, ld1 = LD2)
 
-free = [:a, :i, :Omega, :omega, :e, :T0, :domega, :c1_diameter, :c1_ld1, :c2_diameter, :f,
+free = [:a, :i, :Omega, :omega, :e, :T0, :domega, :c1_diameter, :c2_diameter, :f,
         :plx, :q, :gamma]
 bounds = Dict(:a => (0.8, 2.5), :i => (0.0, 180.0), :Omega => (0.0, 360.0),
               :omega => (0.0, 360.0), :e => (0.0, 0.4), :domega => (0.0, 0.02),
-              :c1_diameter => (0.2, 1.6), :c1_ld1 => (0.0, 1.0), :c2_diameter => (0.1, 1.0),
+              :c1_diameter => (0.2, 1.6), :c2_diameter => (0.1, 1.0),
               :f => (0.02, 0.8), :plx => (5.0, 25.0), :q => (0.2, 1.5), :gamma => (-50.0, 50.0))
 
 res = fit_orbit(data, star1, star2; elements = elements, flux_ratio = 0.2, free = free,

@@ -32,8 +32,9 @@
 #          the mean anomaly on P and advances omega separately through domega.
 #   Teff   25300 / 20585 K (Tkachenko et al. 2016), from spica_params.jl.
 #   LD     H-band power-law exponents fitted to Kurucz ATLAS9 intensities
-#          (data/spica_H_kurucz.fits) at each star's polar Teff and logg. The data do not
-#          constrain limb darkening: left free, the exponents run to 0 and 1.
+#          (data/spica_H_kurucz.fits) at each star's polar Teff and logg (spica_kurucz_ld()
+#          in spica_params.jl), as in the global search. The data do not constrain limb
+#          darkening: left free, the exponents run to 0 and 1.
 #   F1, F2 rotation rates that reproduce v sin i = 161 / 70 km/s at the fitted radii.
 #
 # Free: the two polar radii, i, Omega, omega, a, e, T0 and domega (no prior on the apsidal
@@ -86,18 +87,7 @@ const RV_SIG = rv.sigma
 const RV_PRIMARY = rv.star .== :a
 
 # --- limb darkening predicted by the Kurucz grid ------------------------------------------
-"Power-law exponent alpha of I(mu)/I(1) = mu^alpha, fitted (projected-area weighted) to the grid over H."
-function kurucz_power_law(prov, Teff, logg)
-    μ = collect(range(0.005, 1, length = 400))
-    I = mean(hcat([ROTIR.provider_intensity(prov, fill(Teff, 400), fill(logg, 400), μ, λ)
-                   for λ in range(1.5e-6, 1.75e-6, length = 11)]...), dims = 2)[:]
-    I ./= I[end]
-    αs = 0:0.0005:1
-    return αs[argmin([sum(μ .* (I .- μ .^ α) .^ 2) for α in αs])]
-end
-prov = TabulatedProvider(load_intensity_grid(joinpath(HERE, "data", "spica_H_kurucz.fits")))
-const LD1 = kurucz_power_law(prov, TPOLE1, 3.7)
-const LD2 = kurucz_power_law(prov, TPOLE2, 4.0)
+const LD1, LD2 = spica_kurucz_ld()
 @printf("Kurucz H-band power-law limb darkening: primary %.4f, secondary %.4f\n", LD1, LD2)
 
 # --- model ----------------------------------------------------------------------------------

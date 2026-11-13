@@ -158,6 +158,29 @@ const SPICA_S2 = starparameters(RPOLE2, TPOLE2, 0.0, LDTYPE, LD1_H, LD2_H, BETA,
 const SPICA_BP = binaryparameters(SPICA_S1, SPICA_S2, D_PC, I_ORB, OMEGA_NODE, OMEGA_PERI,
                                   P_ORB, A_ORB, E_ORB, T0_ORB, Q_BIN, [1.0, 1.0], 0.0, DOMEGA)
 
+# --- limb darkening ------------------------------------------------------------------
+"""
+    spica_kurucz_ld(path = data/spica_H_kurucz.fits) -> (ld1, ld2)
+
+H-band power-law limb-darkening exponents α, I(μ)/I(1) = μ^α, of the primary and the
+secondary, fitted (projected-area weighted, over 1.50-1.75 μm) to Kurucz ATLAS9 intensities
+at each star's polar Teff (TPOLE1, TPOLE2) and logg 3.7 / 4.0. The interferometry does not
+constrain limb darkening: left free, the exponents run to the edges of their boxes.
+"""
+function spica_kurucz_ld(path = joinpath(@__DIR__, "data", "spica_H_kurucz.fits"))
+    prov = TabulatedProvider(load_intensity_grid(path))
+    μ = collect(range(0.005, 1, length = 400))
+    λs = range(1.5e-6, 1.75e-6, length = 11)
+    function power_law(Teff, logg)
+        I = sum(ROTIR.provider_intensity(prov, fill(Teff, 400), fill(logg, 400), μ, λ)
+                for λ in λs) ./ length(λs)
+        I ./= I[end]
+        αs = 0:0.0005:1
+        return αs[argmin([sum(μ .* (I .- μ .^ α) .^ 2) for α in αs])]
+    end
+    return power_law(TPOLE1, 3.7), power_law(TPOLE2, 4.0)
+end
+
 # --- radial velocities -------------------------------------------------------------
 """
     spica_rv(path = data/spica_rv.csv) -> RVData
