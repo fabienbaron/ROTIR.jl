@@ -605,6 +605,25 @@ end
 # The fitter
 # ---------------------------------------------------------------------------------------
 """
+    orbit_periodic(spec::OrbitFitSpec) -> Vector{Int}
+
+The free parameters whose box is one full period of an angle, as indices into `spec.free`:
+`Omega` and `omega` over 360°, and a component's `pa` over 180°, the half turn under which
+an elliptical profile is unchanged. `Omega` is periodic only with radial velocities, whose
+box is [0, 360); without them it spans [0, 180), one half of the astrometric mirror, and is
+not.
+"""
+function orbit_periodic(spec::OrbitFitSpec)
+    out = Int[]
+    for (j, k) in enumerate(spec.free)
+        n = spec.names[k]
+        period = n in (:Omega, :omega) ? 360.0 : endswith(String(n), "_pa") ? 180.0 : 0.0
+        period > 0 && isapprox(spec.hi[k] - spec.lo[k], period; atol = 1e-9) && push!(out, j)
+    end
+    return out
+end
+
+"""
     fit_orbit(data, comp1, comp2; elements, kwargs...) -> NamedTuple
 
 Fit the relative orbit of a two-component system to interferometric data.
@@ -623,15 +642,18 @@ origin, component 2 is displaced by the orbit.
   `Dict(:c2_pa => "-Omega")`. See [`compile_ties`](@ref). A parameter cannot be both free
   and tied.
 * `bounds` — `Dict(:name => (lo, hi))` overriding individual boxes.
-* `method` — `:neldermead` (NLopt, fast, returns a point estimate) or `:ultranest`
-  (nested sampling, returns a posterior and log Z).
+* `method` — `:neldermead` (NLopt, fast, returns a point estimate), or `:ultranest` or
+  `:nautilus` (nested sampling, returns a posterior and log Z). The samplers treat a free
+  angle whose box is one full period as periodic ([`orbit_periodic`](@ref)), so a mode
+  across the box edge is not split, and quote its median and interval around the circle.
 * `model` — `:analytic` (default) or `:tessellated`.
 * `weights` — observable weights, default `OI_DEFAULT_WEIGHTS` (V², T3amp, T3φ on).
 * `rv` — radial velocities ([`RVData`](@ref)), fitted together with the interferometry; see
   [`orbit_fit_spec`](@ref) for the parameters this adds (K1, K2, gamma, per-instrument
   offsets, jitters). `rv_params` sets their starting values; `rv_parametrization` chooses
   `plx, q` (default) or `K1, K2`.
-* `maxeval`, `min_num_live_points`, `use_stepsampler` — passed to the chosen fitter.
+* `maxeval` (`:neldermead`), `min_num_live_points`, `use_stepsampler` (`:ultranest`),
+  `n_live`, `n_eff` (`:nautilus`) — passed to the chosen fitter.
 
 # Returns
 A NamedTuple with `params` (full vector), `elements`, `chi2`, `chi2_split`, `chi2_red`,
@@ -675,6 +697,7 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
                    weights = OI_DEFAULT_WEIGHTS, maxeval::Int = 20_000,
                    threaded::Bool = true,
                    min_num_live_points::Int = 400, use_stepsampler::Bool = true,
+                   n_live::Int = 1000, n_eff::Real = 10_000,
                    verbose::Bool = true)
     model === :analytic || model === :tessellated ||
         error("fit_orbit: model must be :analytic or :tessellated (got $model)")
@@ -729,9 +752,13 @@ function fit_orbit(data, comp1::OrbitComponent, comp2::OrbitComponent;
         # objective mostly does not reach `:t3` at all — `model = :analytic` goes through
         # OITOOLS' `dict_to_model`/`model_to_vis` — so that path was checked separately:
         # 800 concurrent `component_vis` calls, all bit-identical to the serial answer.
+        per = orbit_periodic(spec)
+        verbose && !isempty(per) &&
+            println("           periodic: ", join(string.(spec.names[idx[per]]), ", "))
         r = _fit_nested(method, chi2_of, string.(spec.names[idx]), spec.lo[idx], spec.hi[idx];
                         min_num_live_points = min_num_live_points, threaded = threaded,
-                        use_stepsampler = use_stepsampler, verb = verbose)
+                        use_stepsampler = use_stepsampler, n_live = n_live, n_eff = n_eff,
+                        periodic = per, verb = verbose)
         best  = r.median
         extra = (posterior = r.samples, logz = r.logz, logzerr = r.logzerr,
                  q16 = r.q16, q84 = r.q84)

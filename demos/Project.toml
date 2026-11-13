@@ -9,6 +9,7 @@ JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+Nautilus = "0c5b9d3e-7a41-4d2f-9e6c-8b1f4a2d5c73"
 OITOOLS = "3fc04337-ac9e-422b-9e4b-9feddb92e93f"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 Pathfinder = "b1d3bc72-d0e7-4279-b92f-7fa5d6d2d454"
@@ -24,11 +25,9 @@ TerminalLoggers = "5d786b92-1e48-4d6f-9151-6b4477ca9bed"
 Transducers = "28d57a85-8fef-5791-bfe6-a80928e7c999"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
-# `[sources]` does NOT propagate from a dependency, so ROTIR's entry for the unregistered
-# OITOOLS does not cover this environment — it needs its own, or a fresh `Pkg.instantiate()`
-# here cannot find it. No `rev`: track the default branch.
 [sources]
-OITOOLS = {url = "https://github.com/fabienbaron/OITOOLS.jl"}
+Nautilus = {rev = "main", url = "https://github.com/fabienbaron/Nautilus.jl.git"}
+OITOOLS = {rev = "main", url = "https://github.com/fabienbaron/OITOOLS.jl"}
 ROTIR = {path = ".."}
 
 [compat]
@@ -37,4 +36,4 @@ FiniteDifferences = "0.12.34"
 LogDensityProblems = "2.2.0"
 Pathfinder = "0.10"
 Zygote = "0.7.11"
-julia = "1.13"   # same floor as ROTIR
+julia = "1.13"

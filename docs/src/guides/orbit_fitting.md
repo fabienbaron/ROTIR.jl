@@ -274,10 +274,12 @@ implemented and raises an error. For a tessellated binary, use `create_binary_ge
 | Script | System | Shows |
 |---|---|---|
 | `demos/betlyr/betlyr_orbit_fit_tied.jl` | β Lyrae — donor + accretion disc | a tie (`c2_pa = -Omega`) on a circular orbit |
-| `demos/spica_orbit_fit_tied.jl` | Spica — two limb-darkened discs | eccentric orbit, `e`/`omega` free, apsidal motion with `APSIDAL=1` |
+| `demos/spica_global_orbit_fit.jl` | Spica — two limb-darkened discs, with radial velocities | Nautilus over the whole prior box, apsidal motion, periodic `Omega` and `omega` |
 
-Both default to UltraNest; `METHOD=neldermead` runs a quick Nelder–Mead fit. Neither models
-occultation or mutual irradiation.
+The β Lyrae script defaults to UltraNest; `METHOD=neldermead` runs a quick Nelder–Mead fit.
+Neither script models occultation or mutual irradiation. The Spica result is the starting
+point of `demos/spica_refine_orbit_fit.jl`, which refines it with Roche surfaces outside
+`fit_orbit`.
 
 ## API
 
@@ -294,6 +296,7 @@ OrbitFitSpec
 orbit_fit_spec
 orbit_model_cvis
 orbit_chi2
+orbit_periodic
 orbit_residuals
 resolve_params
 compile_ties

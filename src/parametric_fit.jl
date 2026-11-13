@@ -108,6 +108,59 @@ function _box_transform(lo::AbstractVector, hi::AbstractVector)
     return to_θ, to_z, logabsjac
 end
 
+# Summaries of equal-weight posterior samples `S` (n_samples × n_params) over the box
+# [lo, hi]. A column listed in `periodic` is an angle whose box is one full period; a mode
+# across the lo/hi seam must not be split in two.
+
+"""
+    _sample_quantiles(S, p, periodic, lo, hi) -> Matrix
+
+Quantiles `p` of each column of `S`, `length(p) × n_params`. A periodic column is ranked
+around the circle starting from its emptiest 1/360 arc, so a mode across the seam stays in one
+piece. Its values stay within `[lo, hi)`, so an interval can wrap: for a mode at 0° the 16 %
+level may come out as 350 and the 84 % level as 10.
+"""
+function _sample_quantiles(S::AbstractMatrix, p::AbstractVector, periodic, lo, hi;
+                           nbins::Int = 360)
+    out = zeros(length(p), size(S, 2))
+    for j in axes(S, 2)
+        x = S[:, j]
+        if j in periodic
+            u = mod.((x .- lo[j]) ./ (hi[j] - lo[j]), 1.0)
+            counts = zeros(Int, nbins)
+            for v in u
+                counts[clamp(1 + floor(Int, v * nbins), 1, nbins)] += 1
+            end
+            cut = (argmin(counts) - 0.5) / nbins
+            xs = x[sortperm(mod.(u .- cut, 1.0))]
+            n = length(xs)
+            out[:, j] = [xs[clamp(ceil(Int, q * n), 1, n)] for q in p]
+        else
+            out[:, j] = quantile(x, p)
+        end
+    end
+    return out
+end
+
+"""
+    _sample_moments(S, periodic, lo, hi) -> (mean, std)
+
+Mean and standard deviation of each column of `S`. A periodic column gets the circular mean,
+mapped into `[lo, hi)`, and the circular standard deviation `w/2π · √(−2 ln R)`, with `w` the
+period and `R` the mean resultant length.
+"""
+function _sample_moments(S::AbstractMatrix, periodic, lo, hi)
+    m = vec(mean(S, dims = 1)); sd = vec(std(S, dims = 1))
+    for j in periodic
+        w = hi[j] - lo[j]
+        ϕ = 2π .* (S[:, j] .- lo[j]) ./ w
+        C, Sn = mean(cos.(ϕ)), mean(sin.(ϕ))
+        m[j] = lo[j] + mod(w / 2π * atan(Sn, C), w)
+        sd[j] = w / 2π * sqrt(-2 * log(clamp(hypot(C, Sn), eps(), 1.0)))
+    end
+    return m, sd
+end
+
 """
     _fit_nested(method, chi2_of, names, lo, hi; kwargs...) -> NamedTuple
 
@@ -119,6 +172,11 @@ which is what lets every caller treat them interchangeably. UltraNest-only keywo
 (`use_stepsampler`, `min_num_live_points`) and Nautilus-only ones (`n_live`, `n_eff`,
 `threaded`) are filtered here rather than at each call site, so a caller can pass whatever it
 has.
+
+`periodic` lists the parameters (indices into `names`) whose box is one full period of an
+angle. Both samplers then treat `lo` and `hi` as the same point (Nautilus' `periodic`,
+UltraNest's `wrapped_params`), and the quantiles and means are taken around the circle
+([`_sample_quantiles`](@ref), [`_sample_moments`](@ref)).
 
 `threaded` IS FORWARDED, and it was not: the keyword existed on `_fit_nautilus` and this
 function dropped it on the floor along with the rest of `kwargs`, so a caller that asked for a
@@ -132,7 +190,7 @@ supplied by a caller is the case `threaded = false` exists for.
 function _fit_nested(method::Symbol, chi2_of, names, lo, hi; verb::Bool = false,
                      min_num_live_points::Int = 400, use_stepsampler::Bool = false,
                      n_live::Int = 1000, n_eff::Real = 10_000, threaded::Bool = true,
-                     kwargs...)
+                     periodic::AbstractVector{<:Integer} = Int[], kwargs...)
     if method === :ultranest
         ultranest_available() || error(
             "method = :ultranest needs PythonCall loaded: add `using PythonCall` to this " *
@@ -141,13 +199,13 @@ function _fit_nested(method::Symbol, chi2_of, names, lo, hi; verb::Bool = false,
             "is the pure-Julia sampler and needs no Python at all.")
         return _fit_ultranest(chi2_of, names, lo, hi; verb = verb,
                               min_num_live_points = min_num_live_points,
-                              use_stepsampler = use_stepsampler)
+                              use_stepsampler = use_stepsampler, periodic = periodic)
     elseif method === :nautilus
         nautilus_available() || error(
             "method = :nautilus needs Nautilus.jl loaded: add `using Nautilus` to this " *
             "session. It is a weak dependency, so ROTIR does not pull it in on its own.")
         return _fit_nautilus(chi2_of, names, lo, hi; verb = verb, n_live = n_live,
-                             n_eff = n_eff, threaded = threaded)
+                             n_eff = n_eff, threaded = threaded, periodic = periodic)
     end
     error("unknown nested sampler :$method (expected :ultranest or :nautilus)")
 end

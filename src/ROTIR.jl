@@ -432,7 +432,7 @@ export parametric_chi2, fit_sphere_ld, fit_ellipsoid_ld
 export OrbitComponent, PointSource, UniformDisk, LimbDarkenedDisk, GaussianDisk,
        EllipticalGaussian
 export OrbitFitData, OrbitFitSpec, orbit_fit_data, orbit_fit_spec
-export orbit_model_cvis, orbit_chi2, fit_orbit
+export orbit_model_cvis, orbit_chi2, fit_orbit, orbit_periodic
 export orbit_residuals
 # Radial velocities (radial_velocity.jl)
 export RVData, read_rv, write_rv, rv_instruments, rv_model, rv_residuals, rv_chi2, rv_nll2,

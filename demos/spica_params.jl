@@ -158,6 +158,55 @@ const SPICA_S2 = starparameters(RPOLE2, TPOLE2, 0.0, LDTYPE, LD1_H, LD2_H, BETA,
 const SPICA_BP = binaryparameters(SPICA_S1, SPICA_S2, D_PC, I_ORB, OMEGA_NODE, OMEGA_PERI,
                                   P_ORB, A_ORB, E_ORB, T0_ORB, Q_BIN, [1.0, 1.0], 0.0, DOMEGA)
 
+# --- radial velocities -------------------------------------------------------------
+"""
+    spica_rv(path = data/spica_rv.csv) -> RVData
+
+The velocities with σ = 7 + 30 exp(−|V2 − V1|/100) km/s in place of the file's placeholder
+σ = 1 km/s. Line blending makes the velocities least certain near conjunction, where the
+line separation |V2 − V1| is small. The separation is evaluated once, at the literature
+orbit (K1 = 123.9, K2 = 198.8 km/s, ω = 255°, e = 0.123 at T0 = 2454189.40), so the errors
+do not change during a fit.
+"""
+function spica_rv(path = joinpath(@__DIR__, "data", "spica_rv.csv"))
+    rv = read_rv(path)
+    v1, v2 = binary_RV((ω = 255.0, e = 0.123, P = P_ORB, T0 = 2454189.40, dP = 0.0, dω = DOMEGA),
+                       rv.jd; K1 = 123.9, K2 = 198.8, γ = 0.0)
+    return RVData(rv.jd, rv.rv, 7.0 .+ 30.0 .* exp.(-abs.(v2 .- v1) ./ 100.0), rv.star,
+                  rv.instrument, rv.path)
+end
+
+# --- the tessellated joint fit ------------------------------------------------------
+"""
+    spica_tessellated_system(path = results/spica_orbitfit_joint_rv_best_levenberg.txt) -> (; fit, p1, p2, bp)
+
+The system at the best fit of `demos/spica_refine_orbit_fit.jl`, read from its result
+file: `fit` holds the file's values by name (`rpole1`, `i`, `Omega`, `omega`, `a`, `e`, `T0`,
+`domega`, `P`, `q`, `ld1_1`, `ld1_2`, ...), `p1`/`p2` are the Roche parameter sets and `bp`
+the binary parameters. As in the fit, the rotation rates reproduce v sin i = 161 / 70 km/s
+at the fitted radii, and the secondary's potential uses 1/q.
+"""
+function spica_tessellated_system(path = joinpath(@__DIR__, "results", "spica_orbitfit_joint_rv_best_levenberg.txt"))
+    fit = Dict{String,Float64}()
+    for l in eachline(path)
+        (startswith(l, '#') || !occursin('\t', l)) && continue
+        f = split(l, '\t')
+        fit[f[1]] = parse(Float64, f[2])
+    end
+    r1, r2, i, Ω, P, q = fit["rpole1"], fit["rpole2"], fit["i"], fit["Omega"], fit["P"], fit["q"]
+    ld1, ld2 = fit["ld1_1"], fit["ld1_2"]
+    f1, f2 = F1_SYNC * RPOLE1 / r1, F2_SYNC * RPOLE2 / r2
+    orb = (inclination = 180.0 - i, position_angle = Ω - 180.0, i = i, Ω = Ω, ω = fit["omega"],
+           a = fit["a"], e = fit["e"], T0 = fit["T0"], P = P, dω = fit["domega"])
+    p1 = merge(SPICA_P1, orb, (rpole = r1, q = q,     ld1 = ld1, rotation_period = P / f1))
+    p2 = merge(SPICA_P2, orb, (rpole = r2, q = 1 / q, ld1 = ld2, rotation_period = P / f2))
+    s1 = starparameters(r1, TPOLE1, 0.0, LDTYPE, ld1, 0.0, BETA, 0.0, 180.0 - i, Ω - 180.0, 0.0, P / f1)
+    s2 = starparameters(r2, TPOLE2, 0.0, LDTYPE, ld2, 0.0, BETA, 0.0, 180.0 - i, Ω - 180.0, 0.0, P / f2)
+    bp = binaryparameters(s1, s2, D_PC, i, Ω, fit["omega"], P, fit["a"], fit["e"], fit["T0"], q,
+                          [1.0, 1.0], 0.0, fit["domega"])
+    return (; fit, p1, p2, bp)
+end
+
 """
     spica_audit()
 

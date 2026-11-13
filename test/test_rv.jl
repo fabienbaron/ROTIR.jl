@@ -275,7 +275,7 @@ const BLYR = joinpath(dirname(@__DIR__), "demos", "betlyr", "older_data")
         @test cm[4] > 10 * c[4]
 
         # The files' σ = 1 km/s is a placeholder; the blended-line error model of
-        # demos/spica_orbit_fit_ultranest.jl, σ = 7 + 30 exp(−|V2 − V1|/100) km/s, evaluated
+        # spica_rv() in demos/spica_params.jl, σ = 7 + 30 exp(−|V2 − V1|/100) km/s, evaluated
         # once at the literature orbit, makes it usable. RVs alone then give e = 0.11 —
         # Robinette & Aufdenberg 2015 find 0.116 ± 0.004 from RVs spanning 1889–2000. The
         # same minimum is reached from several starts; ω is boxed on [180°, 540°) because

@@ -1,10 +1,16 @@
-# Spica (alpha Vir) — joint interferometry + radial-velocity fit with the tessellated model
+    # Spica (alpha Vir) — refinement of the orbit with the tessellated model, interferometry + RVs
 #
-#   julia -t 8 --project=demos demos/spica_tessellated_joint_fit.jl
+#   julia -t 8 --project=demos demos/spica_refine_orbit_fit.jl
 #
 #   PFREE=1 ...      # also fit the anomalistic period (no prior)
 #   MAXITER=3 ...    # quick smoke test (Levenberg-Marquardt iterations, default 100)
 #   FDSTEP=1e-4 ...  # finite-difference step, as a fraction of each parameter's box width
+#
+# The second of two steps: demos/spica_global_orbit_fit.jl finds the orbit by a global search
+# with limb-darkened discs (results/spica_orbitfit_joint_rv_best_nautilus.txt), and this
+# script refines it locally with Roche surfaces, writing
+# results/spica_orbitfit_joint_rv_best_levenberg.txt, which spica_tessellated_system() in
+# spica_params.jl reads.
 #
 # ---------------------------------------------------------------------------------------
 # Model
@@ -18,9 +24,8 @@
 #
 # Radial velocities: Keplerian curves from the same orbit, fitted to data/spica_rv.csv. They
 # are linear in (K1, K2, gamma), which are solved by weighted least squares at every step;
-# the mass ratio of the Roche surfaces is q = K1/K2. The file's sigma = 1 km/s is a
-# placeholder, so sigma = 7 + 30 exp(-|V2 - V1|/100) km/s is used instead: line blending
-# makes the velocities least certain near conjunction.
+# the mass ratio of the Roche surfaces is q = K1/K2. The errors are those of spica_rv() in
+# spica_params.jl, sigma = 7 + 30 exp(-|V2 - V1|/100) km/s, as in the global search.
 #
 # Fixed from the literature or from atmosphere models:
 #   P      4.01454 d, ANOMALISTIC (Shobbrook et al. 1972; Aufdenberg et al. 2015). ROTIR runs
@@ -39,7 +44,7 @@
 # ---------------------------------------------------------------------------------------
 # The interferometric chi2 is divided by its reduced value at the start (OI_SCALE), which is
 # the same as inflating the OIFITS errors until chi2r = 1. Without it 6871 interferometric
-# points at chi2r ~ 2.4 outweigh 66 velocities by two orders of magnitude.
+# points at chi2r ~ 2 outweigh 66 velocities by two orders of magnitude.
 #
 # ---------------------------------------------------------------------------------------
 # Fit
@@ -52,16 +57,10 @@
 # the residuals as independent, which night-to-night calibration errors are not.
 #
 # ---------------------------------------------------------------------------------------
-# Result (P fixed)
+# Result
 # ---------------------------------------------------------------------------------------
-# OI chi2r 4.14, RV chi2r 1.63; U = 136 yr, e = 0.126, K1/K2 = 123.6/193.5 km/s, q = 0.638,
-# parallax 12.07 mas, M1 = 11.0, M2 = 7.05 Msun. The apsidal period, eccentricity, masses and
-# parallax all agree with the literature without being constrained to it.
-#
-# With PFREE=1 the interferometric chi2r falls to 3.62, but only by trading P against
-# domega: P = 4.01489 d (12 sigma from 4.01454 +- 0.00003), U = 72 yr (published values
-# 105-139 yr) and the RV chi2 rises from 107 to 263. The velocities cover a single season,
-# so they cannot anchor that trade; the century-long RV record behind the published P can.
+# The header of results/spica_orbitfit_joint_rv_best_levenberg.txt gives the chi2 of the run
+# that wrote it; the script also prints the masses, parallax and apsidal period.
 
 using ROTIR, Printf, Statistics, LinearAlgebra
 using OITOOLS: OITOOLS, split_by_time
@@ -79,13 +78,11 @@ data, mjd = split_by_time(readoifits(joinpath(HERE, "data", "2007_2012_2015.Spic
 const NEP   = length(data)
 const TEP   = mjd .+ 2400000.5
 const BANDS = band_of.(data)
-const TESS1, TESS2 = tessellation_healpix(4), tessellation_healpix(3)
+const TESS1, TESS2 = tessellation_healpix(3), tessellation_healpix(3)
 
 # --- radial velocities ----------------------------------------------------------------------
-rv = read_rv(joinpath(HERE, "data", "spica_rv.csv"))
-v1lit, v2lit = binary_RV((ω = 255.0, e = 0.123, P = P_ANOM, T0 = 2454189.40, dP = 0.0, dω = DOMEGA),
-                         rv.jd; K1 = 123.9, K2 = 198.8, γ = 0.0)
-const RV_SIG = 7.0 .+ 30.0 .* exp.(-abs.(v2lit .- v1lit) ./ 100.0)
+rv = spica_rv()
+const RV_SIG = rv.sigma
 const RV_PRIMARY = rv.star .== :a
 
 # --- limb darkening predicted by the Kurucz grid ------------------------------------------
@@ -149,16 +146,19 @@ function rv_solve(ω, e, T0, dω, P)
 end
 
 # --- parameters -----------------------------------------------------------------------------
-# Start: omega, e, T0 and domega from the disc-model joint fit
-# (results/spica_orbitfit_joint_rv_best.txt); radii, i, Omega and a from a tessellated fit of
-# those four alone with that orbit held fixed.
+# Start: the orbit (i, Omega, omega, a, e, T0, domega) from the global search
+# (results/spica_orbitfit_joint_rv_best_nautilus.txt, posterior medians), and the polar
+# radii from the published 7.40 / 3.74 Rsun at 77 pc (RPOLE1, RPOLE2): the disc diameters
+# are not polar radii of Roche surfaces. The box is HALF either side of the start, with e and
+# domega kept non-negative.
 J = Dict(split(l, '\t')[1] => parse(Float64, split(l, '\t')[2])
-         for l in eachline(joinpath(HERE, "results", "spica_orbitfit_joint_rv_best.txt"))
+         for l in eachline(joinpath(HERE, "results", "spica_orbitfit_joint_rv_best_nautilus.txt"))
          if !startswith(l, '#') && occursin('\t', l))
 const NAMES = ["rpole1", "rpole2", "i", "Omega", "omega", "a", "e", "T0", "domega", "P"]
-x0 = [0.400305, 0.199639, 117.03359, 310.78553, mod(J["omega"], 360), 1.549748, J["e"], J["T0"], J["domega"], P_ANOM]
+x0 = [RPOLE1, RPOLE2, J["i"], J["Omega"], mod(J["omega"], 360), J["a"], J["e"], J["T0"], J["domega"], P_ANOM]
 const HALF = [0.1, 0.06, 4, 4, 20, 0.08, 0.06, 0.3, 0.008, 1.5e-3]
-const LO, HI = x0 .- HALF, x0 .+ HALF .+ [0, 0, 0, 0, 0, 0, 0, 0, 0.004, 0]
+const LO = max.(x0 .- HALF, [-Inf, -Inf, -Inf, -Inf, -Inf, -Inf, 0.0, -Inf, 0.0, -Inf])
+const HI = x0 .+ HALF
 const FREE = PFREE ? collect(1:10) : collect(1:9)
 full(x) = (y = copy(x0); y[FREE] .= x; y)
 
@@ -233,9 +233,10 @@ end
         F1_SYNC * RPOLE1 / y[1], F2_SYNC * RPOLE2 / y[2])
 println("  chi2r per epoch: ", round.(r.per, digits = 2))
 
-out = joinpath(HERE, "results", PFREE ? "spica_tessellated_joint_pfree_best.txt" : "spica_tessellated_joint_best.txt")
+out = joinpath(HERE, "results", PFREE ? "spica_orbitfit_joint_rv_best_levenberg_pfree.txt" :
+                                       "spica_orbitfit_joint_rv_best_levenberg.txt")
 open(out, "w") do io
-    println(io, "# demos/spica_tessellated_joint_fit.jl", PFREE ? " (PFREE=1)" : "", ": tessellated Roche model on")
+    println(io, "# demos/spica_refine_orbit_fit.jl", PFREE ? " (PFREE=1)" : "", ": tessellated Roche model on")
     println(io, "# 2007_2012_2015.Spica.oifits + Keplerian RVs (spica_rv.csv, sigma = 7 + 30 exp(-|V2-V1|/100) km/s).")
     @printf(io, "# OI chi2r %.3f over %d points; RV chi2 %.1f over %d. LD (power law) %.4f / %.4f.\n",
             sum(r.c) / r.n, r.n, r.crv, length(rv.jd), LD1, LD2)

@@ -21,7 +21,8 @@
 
 function _fit_ultranest(chi2_of, names, lo, hi;
                         min_num_live_points::Int = 400, frac_remain = 1e-3,
-                        use_stepsampler::Bool = false, nsteps::Int = 400, verb::Bool = false)
+                        use_stepsampler::Bool = false, nsteps::Int = 400,
+                        periodic::AbstractVector{<:Integer} = Int[], verb::Bool = false)
     # Safe in a multithreaded session: PythonCall's finalizer enqueues the pointer
     # (`GC.enqueue`) and the queue is drained only by a thread holding the GIL
     # (`PyGILState_Check`, PythonCall/src/GC/GC.jl), so Py objects may be finalized on any
@@ -58,7 +59,8 @@ function _fit_ultranest(chi2_of, names, lo, hi;
     loglike_v = (X::AbstractMatrix{<:Real}) -> Py(loglike_1.(eachrow(X))).to_numpy()
 
     sampler = ultranest.ReactiveNestedSampler(pylist(names), loglike_v;
-                                              transform = transform_v, vectorized = true)
+                                              transform = transform_v, vectorized = true,
+                                              wrapped_params = pylist([j in periodic for j in eachindex(names)]))
     if use_stepsampler
         ss = pyimport("ultranest.stepsampler")
         sampler.stepsampler = ss.SliceSampler(nsteps = nsteps,
@@ -69,9 +71,9 @@ function _fit_ultranest(chi2_of, names, lo, hi;
     verb && sampler.print_results()
     # `res[...]` entries are `Py`; convert on the way out rather than leaking them to callers.
     S = pyconvert(Matrix{Float64}, res["samples"])
-    q(pr) = [quantile(view(S, :, j), pr) for j in eachindex(names)]
-    return (median = q(0.5), q16 = q(0.16), q84 = q(0.84),
-            mean = vec(mean(S, dims = 1)), std = vec(std(S, dims = 1)),
+    Q = ROTIR._sample_quantiles(S, [0.16, 0.5, 0.84], periodic, lo, hi)
+    m, sd = ROTIR._sample_moments(S, periodic, lo, hi)
+    return (median = Q[2, :], q16 = Q[1, :], q84 = Q[3, :], mean = m, std = sd,
             logz = pyconvert(Float64, res["logz"]),
             logzerr = pyconvert(Float64, res["logzerr"]), samples = S, result = res)
 end

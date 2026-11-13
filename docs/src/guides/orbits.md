@@ -197,7 +197,7 @@ Example scripts:
 
 | Script | System | Sampler |
 |---|---|---|
-| `demos/spica_orbit_fit_ultranest.jl` | Spica: two uniform discs, eccentric orbit | UltraNest |
+| `demos/spica_global_orbit_fit.jl` | Spica: two limb-darkened discs, eccentric orbit, radial velocities | Nautilus |
 | `demos/betlyr/betlyr_orbit_fit_ultranest.jl` | β Lyrae: donor + accretion disc, circular orbit | UltraNest |
 | `demos/betlyr/betlyr_orbit_fit_pigeons.jl` | β Lyrae, same model | Pigeons |
 | `demos/betlyr/betlyr_orbit_figure.jl` | β Lyrae: redraws the orbit from a stored fit | none |
@@ -459,12 +459,12 @@ julia --project=demos demos/betlyr/betlyr_orbit_figure.jl
 - K₁ and K₂ give `a·sin i` and `q`; with the angular `a` from interferometry they give
   dynamical masses and an orbital parallax.
 
-`demos/spica_orbit_fit_ultranest.jl` with `USERV=1` adds K₁, K₂ and γ to the free parameters
-and `chi2_rv` to the χ². The RV model is `binary_RV`, which includes apsidal motion through
-`omega_at`.
+`fit_orbit(...; rv = rv)` adds the parallax, the mass ratio and γ to the free parameters and
+the RV χ² to the objective. The RV model is `binary_RV`, which includes apsidal motion through
+`omega_at`. `demos/spica_global_orbit_fit.jl` fits Spica this way:
 
 ```bash
-USERV=1 LIVE=400 julia --project=demos demos/spica_orbit_fit_ultranest.jl
+julia -t 8 --project=demos demos/spica_global_orbit_fit.jl
 ```
 
 An RV depends on ω alone, so `(Ω,ω) → (Ω±180°, ω±180°)` inverts the RV curve. For Spica at

@@ -40,6 +40,10 @@ Returns the same fields as [`_fit_ultranest`](@ref): `median`, `q16`, `q84`, `me
 `logz`, `logzerr`, `samples`, plus `result` (the sampler itself, for anyone who wants
 `Nautilus.eta` or the raw weights).
 
+With `verb`, the run shows Nautilus' live display, a bar per parameter showing the live set
+narrowing inside its box; without a terminal it prints the one-line status instead
+(`live_display = false` asks for that directly).
+
 `n_live` is the live-point count and `n_eff` the effective sample size the run targets — the
 two knobs worth turning. `n_eff` sets how thick the posterior is: equal-weight resampling
 cannot produce more distinct points than the effective sample size, so a thin corner plot means
@@ -63,7 +67,9 @@ function _fit_nautilus(chi2_of, names, lo, hi;
                        n_networks::Int = 4, discard_exploration::Bool = false,
                        n_like_max::Int = typemax(Int), timeout::Real = Inf,
                        equal_weight_boost::Real = 1, threaded::Bool = true,
-                       seed::Union{Nothing,Integer} = nothing, verb::Bool = false)
+                       periodic::AbstractVector{<:Integer} = Int[],
+                       seed::Union{Nothing,Integer} = nothing, verb::Bool = false,
+                       live_display::Bool = verb)
     ndims = length(names)
     ndims == length(lo) == length(hi) ||
         throw(ArgumentError("names, lo and hi must have the same length"))
@@ -72,11 +78,14 @@ function _fit_nautilus(chi2_of, names, lo, hi;
                             "volume to sample. Narrow it, or use :neldermead."))
 
     L, U = collect(Float64, lo), collect(Float64, hi)
-    # The unit cube to physical parameters. Nautilus hands the transform a unit vector and the
-    # likelihood the PHYSICAL parameters that come out of it — the same convention UltraNest
-    # uses, and applying the transform a second time inside the likelihood is the mistake that
-    # makes a sampler converge confidently on nonsense.
-    prior_transform(u) = L .+ (U .- L) .* u
+    # A named prior, uniform over each box: the unit cube maps to L + (U - L)·u, and the names
+    # label the live display's bars. Nautilus applies the transform and hands the likelihood
+    # the PHYSICAL parameters, as a vector with `pass_dict = false`; applying it a second time
+    # inside the likelihood makes a sampler converge confidently on nonsense.
+    prior = Nautilus.Prior()
+    for (n, l, u) in zip(names, L, U)
+        Nautilus.add_parameter!(prior, String(n), (l, u))
+    end
 
     # Track the best point seen. Nautilus reports the posterior, not the maximum, and a fit
     # wants both: the median for the parameter estimate, the argmax for the χ² that goes in a
@@ -97,13 +106,13 @@ function _fit_nautilus(chi2_of, names, lo, hi;
         return ll
     end
 
-    smplr = Nautilus.Sampler(prior_transform, loglikelihood;
-                             n_dim = ndims, n_live = n_live, n_networks = n_networks,
-                             threaded = threaded,
+    smplr = Nautilus.Sampler(prior, loglikelihood; pass_dict = false,
+                             n_live = n_live, n_networks = n_networks,
+                             threaded = threaded, periodic = collect(Int, periodic),
                              seed = seed === nothing ? rand(UInt32) : seed)
     finished = Nautilus.run!(smplr; f_live = f_live, n_eff = n_eff, n_like_max = n_like_max,
                              timeout = timeout, discard_exploration = discard_exploration,
-                             verbose = verb)
+                             verbose = verb, live_display = live_display)
     finished || @warn "nautilus stopped on n_like_max or timeout before converging; the " *
                       "evidence and posterior are usable but less accurate than requested."
 
@@ -119,14 +128,13 @@ function _fit_nautilus(chi2_of, names, lo, hi;
                                  equal_weight_boost = equal_weight_boost)
     isempty(S) && error("nautilus returned no posterior samples; the run failed")
 
-    q(pr) = [Statistics.quantile(view(S, :, j), pr) for j in 1:ndims]
+    Q = ROTIR._sample_quantiles(S, [0.16, 0.5, 0.84], periodic, L, U)
+    m, sd = ROTIR._sample_moments(S, periodic, L, U)
     if verb
         Printf.@printf("logZ = %.4f ± %.4f   (%d samples, %d calls, N_eff = %.0f)\n",
                        logz, logzerr, size(S, 1), smplr.n_like, neff)
     end
-    return (median = q(0.5), q16 = q(0.16), q84 = q(0.84),
-            mean = vec(Statistics.mean(S, dims = 1)),
-            std = vec(Statistics.std(S, dims = 1)),
+    return (median = Q[2, :], q16 = Q[1, :], q84 = Q[3, :], mean = m, std = sd,
             logz = logz, logzerr = logzerr, samples = S,
             best = best[][2], best_chi2 = -2 * best[][1], result = smplr)
 end

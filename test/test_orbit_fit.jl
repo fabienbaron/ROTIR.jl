@@ -256,3 +256,29 @@ end
     v = ROTIR.component_vis(ROTIR.UniformDisk(3.0), (3.0,), uv, ρ)
     @test eltype(v) <: Real
 end
+
+@testset "periodic angles in the nested samplers" begin
+    # A mode across the 0/360 seam: the circular median is near 0, not 180.
+    x = mod.([collect(range(350, 370, length = 2001));], 360.0)
+    S = hcat(x, collect(range(0.0, 1.0, length = 2001)))
+    Q = ROTIR._sample_quantiles(S, [0.16, 0.5, 0.84], [1], [0.0, 0.0], [360.0, 1.0])
+    @test min(Q[2, 1], 360 - Q[2, 1]) < 0.1          # median at the seam
+    @test Q[1, 1] > 350 && Q[3, 1] < 10               # the interval wraps: 353.2 → 6.8
+    @test Q[:, 2] ≈ [0.16, 0.5, 0.84] atol = 1e-3     # an ordinary column is unchanged
+    m, sd = ROTIR._sample_moments(S, [1], [0.0, 0.0], [360.0, 1.0])
+    @test min(m[1], 360 - m[1]) < 1e-6
+    r = collect(range(-10, 10, length = 2001))
+    @test sd[1] ≈ sqrt(sum(abs2, r) / (length(r) - 1)) rtol = 1e-3   # circular ≈ linear at 20°
+
+    # Which free parameters are periodic: omega over 360°; Omega only when its box is 360°.
+    c = UniformDisk(diameter = 0.5)
+    s = orbit_fit_spec(c, c; elements = (P = 4.0, e = 0.1), free = [:a, :Omega, :omega, :e])
+    @test s.names[s.free[orbit_periodic(s)]] == [:omega]
+    s = orbit_fit_spec(c, c; elements = (P = 4.0, e = 0.1, omega = 250.0),
+                       free = [:a, :Omega, :omega, :e],
+                       bounds = Dict(:Omega => (0.0, 360.0), :omega => (180.0, 300.0)))
+    @test s.names[s.free[orbit_periodic(s)]] == [:Omega]
+    g = EllipticalGaussian(fwhm = 1.0, ratio = 0.5, pa = 30.0)
+    s = orbit_fit_spec(c, g; elements = (P = 4.0,), free = [:a, :c2_pa])
+    @test s.names[s.free[orbit_periodic(s)]] == [:c2_pa]
+end
